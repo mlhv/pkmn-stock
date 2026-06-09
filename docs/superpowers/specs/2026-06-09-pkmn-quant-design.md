@@ -10,9 +10,11 @@ A backtesting and signal-generation system for Pokemon card prices (singles and
 sealed products), built with the rigor of an equities algo-trading project but
 modeling the real economics of the TCG market. Two purposes, in priority order:
 
-1. **Resume value** for SWE roles at fintech/trading firms (FAANG secondary):
-   a custom event-driven backtest engine with realistic execution modeling,
-   walk-forward validation, and strong engineering hygiene.
+1. **Resume value** for SWE roles at both FAANG/big tech and fintech/trading
+   firms: a custom event-driven backtest engine with realistic execution
+   modeling and walk-forward validation (the fintech story), built as a
+   cleanly layered, strictly typed, heavily tested package with CI (the
+   big-tech engineering story). Both audiences are primary.
 2. **Personal investing signals**: the same strategies run in live mode against
    fresh daily data and emit buy/sell/hold recommendations the user may act on
    manually.
