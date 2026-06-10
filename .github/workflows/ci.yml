@@ -13,8 +13,8 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           python-version: "3.12"
-      - run: uv sync
-      - run: uv run ruff check .
+      - run: uv sync --frozen #install exactly the committed lockfile; fail if it's stale vs pyproject
+      - run: uv run ruff check . #linting
       - run: uv run ruff format --check .
-      - run: uv run mypy
+      - run: uv run mypy #type checking
       - run: uv run pytest --cov=pkmn_quant --cov-report=term-missing
