@@ -72,9 +72,9 @@ select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
 strict = true
 files = ["src"]
 
-[[tool.mypy.overrides]]
-module = ["py7zr.*", "duckdb.*"]
-ignore_missing_imports = true
+# NOTE: no ignore_missing_imports overrides — py7zr, duckdb, and polars all
+# ship py.typed. If mypy errors on an import in a later task, add a targeted
+# override for that one module then.
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -96,12 +96,15 @@ from pkmn_quant.config import EARLIEST_ARCHIVE_DATE, POKEMON_CATEGORY_ID, Paths
 
 def test_constants() -> None:
     assert POKEMON_CATEGORY_ID == 3
-    assert EARLIEST_ARCHIVE_DATE == date(2024, 2, 8)
+    # Literal on the left: ruff SIM300 treats ALL_CAPS names as constants and
+    # flags constant == call() as a Yoda condition otherwise.
+    assert date(2024, 2, 8) == EARLIEST_ARCHIVE_DATE
 
 
 def test_paths_layout() -> None:
     paths = Paths(root=Path("/tmp/proj"))
     assert paths.raw_archives == Path("/tmp/proj/data/raw/archives")
+    assert paths.warehouse == Path("/tmp/proj/data/warehouse")
     assert paths.prices == Path("/tmp/proj/data/warehouse/prices")
     assert paths.quarantine == Path("/tmp/proj/data/warehouse/quarantine")
     assert paths.products == Path("/tmp/proj/data/warehouse/products.parquet")
@@ -1385,7 +1388,7 @@ Expected: 4 PASSED
 - [ ] **Step 6: Full suite, lint, typecheck**
 
 Run: `uv run pytest && uv run ruff check . && uv run ruff format . && uv run mypy`
-Expected: all pass (note: `tests/test_ingest.py` imports from `tests/test_tcgcsv.py`; if pytest can't resolve `tests.test_tcgcsv`, add an empty `tests/__init__.py`)
+Expected: all pass (`tests/__init__.py` already exists from Task 1, so the `from tests.test_tcgcsv import make_archive` import resolves)
 
 - [ ] **Step 7: Commit**
 
