@@ -312,6 +312,9 @@ class Portfolio:
     def _buy(self, f: Fill) -> None:
         cost = f.quantity * f.price
         self.cash -= cost + f.fees
+        # Buy-side fees hit realized_pnl immediately so the invariant
+        # "when flat, cash - initial == realized_pnl" holds exactly.
+        self.realized_pnl -= f.fees
         pos = self.positions.get(f.asset)
         if pos is None:
             self.positions[f.asset] = Position(quantity=f.quantity, avg_cost=f.price)
@@ -339,7 +342,7 @@ class Portfolio:
         return self.cash + value
 ```
 
-Design notes: `fees` are excluded from avg_cost (kept simple and symmetric; realized P&L subtracts them explicitly). `equity()` raises KeyError if a held asset has no mark — deliberate: the engine must always supply carry-forward marks, and silence there would corrupt every number downstream. Oversell raises here as a final invariant; the execution simulator (Task 4) clips before this point, so this raise firing means an engine bug.
+Design notes: `fees` are excluded from avg_cost; ALL fees (both sides) hit realized_pnl when incurred, so realized_pnl is the cumulative net cash impact of trading — the property test's identity depends on this. `equity()` raises KeyError if a held asset has no mark — deliberate: the engine must always supply carry-forward marks, and silence there would corrupt every number downstream. Oversell raises here as a final invariant; the execution simulator (Task 4) clips before this point, so this raise firing means an engine bug.
 
 - [ ] **Step 5: Run tests to verify they pass**
 
@@ -1050,7 +1053,7 @@ Expected: FAIL with `ModuleNotFoundError`
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date
 from typing import Any
 
@@ -1101,11 +1104,13 @@ class Backtest:
             self._pending = []
 
             # 2. Strategy sees history <= today and emits orders for tomorrow.
+            # positions is DEEP-COPIED: Portfolio.positions is mutable and
+            # aliased; a buggy strategy must not be able to edit real holdings.
             ctx = Context(
                 today=day,
                 history=market.history_until(day),
                 products=products,
-                positions=portfolio.positions,
+                positions={a: replace(p) for a, p in portfolio.positions.items()},
                 cash=portfolio.cash,
                 marks=market.marks_on(day),
             )
