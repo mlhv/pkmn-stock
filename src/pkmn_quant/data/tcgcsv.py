@@ -12,7 +12,20 @@ from typing import Any
 import httpx
 import py7zr
 
+from pkmn_quant import __version__
 from pkmn_quant.config import POKEMON_CATEGORY_ID, TCGCSV_BASE_URL
+
+# tcgcsv.com rejects httpx's default User-Agent (401); identify ourselves.
+USER_AGENT = f"pkmn-quant/{__version__} (personal research tool)"
+
+
+def make_client() -> httpx.Client:
+    """An httpx client configured for tcgcsv.com."""
+    return httpx.Client(
+        timeout=60.0,
+        follow_redirects=True,
+        headers={"User-Agent": USER_AGENT},
+    )
 
 
 @dataclass(frozen=True)

@@ -96,3 +96,9 @@ def test_download_archive_caches(tmp_path: Path) -> None:
     assert first == second
     assert first.read_bytes() == b"archive-bytes"
     assert calls == 1
+
+
+def test_make_client_sets_user_agent() -> None:
+    # tcgcsv.com returns 401 for httpx's default User-Agent.
+    with tcgcsv.make_client() as client:
+        assert client.headers["User-Agent"].startswith("pkmn-quant/")

@@ -73,7 +73,7 @@ def ingest_range(
     """Ingest all missing days in [start, end]. Already-stored days are skipped."""
     owns_client = client is None
     if client is None:
-        client = httpx.Client(timeout=60.0, follow_redirects=True)
+        client = tcgcsv.make_client()
     warehouse = Warehouse(paths)
     stats: list[IngestStats] = []
     try:
