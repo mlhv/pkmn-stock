@@ -160,3 +160,31 @@ def test_cli_help() -> None:
     result = CliRunner().invoke(app, ["--help"])
     assert result.exit_code == 0
     assert "ingest" in result.output
+
+
+def test_backfill_earlier_day_does_not_use_future_baseline(tmp_path: Path) -> None:
+    d_early, d_late = date(2025, 6, 1), date(2025, 6, 5)
+    archives = {
+        d_early: make_archive(tmp_path / "fe", d_early, GROUP_ID, [price_row(500.0)]),
+        d_late: make_archive(tmp_path / "fl", d_late, GROUP_ID, [price_row(10.0)]),
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path.endswith("/groups"):
+            return httpx.Response(200, json=GROUPS_JSON)
+        if path.endswith("/products"):
+            return httpx.Response(200, json=PRODUCTS_JSON)
+        for day, archive in archives.items():
+            if path.endswith(f"prices-{day.isoformat()}.ppmd.7z"):
+                return httpx.Response(200, content=archive.read_bytes())
+        return httpx.Response(404)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    root = tmp_path / "proj"
+    ingest_range(Paths(root=root), d_late, d_late, client=client)
+    # Backfilling June 1 after June 5 exists: the June 5 frame (a FUTURE day)
+    # must not serve as the jump baseline, so the 50x difference is clean.
+    stats = ingest_range(Paths(root=root), d_early, d_early, client=client)
+    assert stats[0].rows_clean == 1
+    assert stats[0].rows_quarantined == 0

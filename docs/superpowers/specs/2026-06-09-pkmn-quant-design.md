@@ -31,7 +31,7 @@ modeling the real economics of the TCG market. Two purposes, in priority order:
   etc.) and stored as a `kind` column.
 - **Storage:** Parquet dataset partitioned by date, queried via DuckDB.
   Two tables:
-  - `products(product_id, set_id, name, rarity, kind)` — dimension table
+  - `products(product_id, group_id, name, rarity, kind, released_on)` — dimension table (group_id = TCGplayer set id)
   - `prices(date, product_id, sub_type, low, mid, high, market)` — fact table
 - **Ingestion:** `pkmn ingest` downloads archives for missing dates, extracts
   tracked sets, appends to Parquet.

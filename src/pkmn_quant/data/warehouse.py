@@ -81,14 +81,14 @@ class Warehouse:
             raise FileNotFoundError(
                 f"No ingested prices under {self.paths.prices}; run `pkmn ingest` first."
             )
-        con = duckdb.connect()
         prices_glob = str(self.paths.prices / "**" / "*.parquet")
-        con.execute(f"CREATE VIEW prices AS SELECT * FROM read_parquet('{prices_glob}')")
-        if self.paths.products.exists():
-            con.execute(
-                f"CREATE VIEW products AS SELECT * FROM read_parquet('{self.paths.products}')"
-            )
-        result = pl.from_arrow(con.sql(sql))
-        if not isinstance(result, pl.DataFrame):
+        with duckdb.connect() as con:
+            con.execute(f"CREATE VIEW prices AS SELECT * FROM read_parquet('{prices_glob}')")
+            if self.paths.products.exists():
+                con.execute(
+                    f"CREATE VIEW products AS SELECT * FROM read_parquet('{self.paths.products}')"
+                )
+            result = pl.from_arrow(con.sql(sql))
+        if not isinstance(result, pl.DataFrame):  # narrows DataFrame | Series for mypy
             raise TypeError("Expected a DataFrame from DuckDB query")
         return result

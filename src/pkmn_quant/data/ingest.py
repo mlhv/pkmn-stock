@@ -34,7 +34,12 @@ def tracked_groups(groups: list[Group], today: date) -> list[Group]:
 
 
 def refresh_products(client: httpx.Client, warehouse: Warehouse, groups: list[Group]) -> int:
-    """Fetch and store the product catalog. One failing set does not abort the rest."""
+    """Fetch and store the product catalog. One failing set does not abort the rest.
+
+    Called by ingest_range only when products.parquet is missing — new sets
+    released after the first run are not picked up until the file is deleted
+    (known Plan 1 limitation; a `pkmn refresh-products` command is future work).
+    """
     if not groups:
         return 0
     frames = []
@@ -86,8 +91,11 @@ def ingest_range(
 
         stored = warehouse.stored_days()
         previous: pl.DataFrame | None = None
-        if stored and (start - stored[-1]).days <= GAP_RESET_DAYS:
-            previous = warehouse.load_day(stored[-1])
+        # Seed from the latest stored day strictly BEFORE start (backfilling
+        # must never compare against a future baseline), if within the window.
+        prior_days = [d for d in stored if d < start]
+        if prior_days and (start - prior_days[-1]).days <= GAP_RESET_DAYS:
+            previous = warehouse.load_day(prior_days[-1])
         day = start
         while day <= end:
             if warehouse.has_day(day):

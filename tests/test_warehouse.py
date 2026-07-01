@@ -99,3 +99,10 @@ def test_duckdb_query_over_prices_and_products(warehouse: Warehouse) -> None:
     )
     assert out["kind"].to_list() == ["sealed", "single"]
     assert out["n"].to_list() == [1, 1]
+
+
+def test_stored_days_ignores_non_date_dirs(warehouse: Warehouse) -> None:
+    day = date(2025, 6, 1)
+    warehouse.write_prices(day, pl.DataFrame([price_row(day, 1, 10.0)], schema=PRICE_SCHEMA))
+    (warehouse.paths.prices / "not-a-partition").mkdir()
+    assert warehouse.stored_days() == [day]
