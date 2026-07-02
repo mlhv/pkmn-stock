@@ -560,7 +560,7 @@ def test_buy_fills_at_market_plus_shipping() -> None:
 
 def test_sell_fills_net_of_fees() -> None:
     sim = ExecutionSimulator(CM)
-    p = Portfolio(cash=0.0)
+    p = Portfolio(cash=100.0)  # enough to fund the setup buy (cash-clip applies)
     sim.execute([Order(asset=A, quantity=3)], prices={A: 10.0}, portfolio=p, day=DAY)
     fills = sim.execute([Order(asset=A, quantity=-2)], prices={A: 10.0}, portfolio=p, day=DAY)
     f = fills[0]
@@ -597,7 +597,7 @@ def test_buy_clipped_by_cash() -> None:
 
 def test_sell_clipped_to_held_never_short() -> None:
     sim = ExecutionSimulator(CM)
-    p = Portfolio(cash=0.0)
+    p = Portfolio(cash=100.0)  # enough to fund the setup buy (cash-clip applies)
     sim.execute([Order(asset=A, quantity=1)], prices={A: 10.0}, portfolio=p, day=DAY)
     fills = sim.execute([Order(asset=A, quantity=-5)], prices={A: 10.0}, portfolio=p, day=DAY)
     assert fills[0].quantity == -1
@@ -706,6 +706,8 @@ class ExecutionSimulator:
 ```
 
 Design note: on the buy side the spread cost is expressed as `fees=shipping` with `price=market` (we model buying at market); on the sell side fees carry the marketplace fee + shipping while `price` stays at market. This keeps `Fill.price` always the observable market print, and every cost explicit in `fees` — easy to audit in the ledger.
+
+**Post-review amendments (applied in the implementation — authoritative over the code above):** the liquidity cap is tracked per asset per DAY across all orders in one `execute()` call (a `filled_today` accumulator), so splitting orders cannot evade market-depth limits; and `market <= 0` is skipped defensively (quality gates should make it impossible, but a zero price would divide by zero). Two extra tests pin these: `test_split_orders_share_daily_liquidity_cap`, `test_zero_price_never_fills`.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
