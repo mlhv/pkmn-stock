@@ -18,6 +18,9 @@ class BuyAndHold(Strategy):
         self.name = f"buy-and-hold-{kind}"
         self._entered = False
 
+    def reset(self) -> None:
+        self._entered = False
+
     def on_bar(self, ctx: Context) -> list[Order]:
         if self._entered:
             return []

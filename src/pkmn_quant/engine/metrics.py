@@ -25,7 +25,10 @@ def summarize(equity_curve: pl.DataFrame) -> dict[str, float]:
     if n < 2:
         return {"total_return": 0.0, "cagr": 0.0, "max_drawdown": 0.0, "sharpe": 0.0}
 
-    ratio = float(eq[-1]) / float(eq[0])
+    first = float(eq[0])
+    if first == 0.0:
+        return {"total_return": 0.0, "cagr": 0.0, "max_drawdown": 0.0, "sharpe": 0.0}
+    ratio = float(eq[-1]) / first
     total_return = ratio - 1.0
     years = (n - 1) / TRADING_DAYS_PER_YEAR
     # ratio <= 0 (equity wiped out or negative) would make the fractional

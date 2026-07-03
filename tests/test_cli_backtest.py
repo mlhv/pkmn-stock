@@ -9,20 +9,11 @@ from pkmn_quant.cli import app
 from pkmn_quant.config import Paths
 from pkmn_quant.data.transforms import PRICE_SCHEMA
 from pkmn_quant.data.warehouse import Warehouse
+from tests.helpers import price_row
 
 D1, D2, D3 = date(2025, 6, 1), date(2025, 6, 2), date(2025, 6, 3)
 
-
-def row(day: date, product_id: int, market: float) -> dict[str, object]:
-    return {
-        "date": day,
-        "product_id": product_id,
-        "sub_type": "Normal",
-        "low": 1.0,
-        "mid": 2.0,
-        "high": 3.0,
-        "market": market,
-    }
+row = price_row
 
 
 def seed(root: Path) -> None:

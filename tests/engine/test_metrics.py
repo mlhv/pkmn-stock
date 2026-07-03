@@ -41,3 +41,9 @@ def test_negative_equity_does_not_crash() -> None:
     s = summarize(curve([100.0, 50.0, -10.0]))
     assert s["cagr"] == pytest.approx(-1.0)
     assert s["total_return"] == pytest.approx(-1.1)
+
+
+def test_zero_initial_equity_degrades_gracefully() -> None:
+    s = summarize(curve([0.0, 0.0, 0.0]))
+    assert s["total_return"] == 0.0
+    assert s["sharpe"] == 0.0

@@ -12,21 +12,12 @@ from pkmn_quant.engine.costs import CostModel
 from pkmn_quant.engine.execution import Order
 from pkmn_quant.engine.portfolio import Asset
 from pkmn_quant.engine.strategy import Context, Strategy
+from tests.helpers import price_row
 
 D1, D2, D3 = date(2025, 6, 1), date(2025, 6, 2), date(2025, 6, 3)
 A = Asset(product_id=1, sub_type="Normal")
 
-
-def row(day: date, product_id: int, market: float) -> dict[str, object]:
-    return {
-        "date": day,
-        "product_id": product_id,
-        "sub_type": "Normal",
-        "low": 1.0,
-        "mid": 2.0,
-        "high": 3.0,
-        "market": market,
-    }
+row = price_row
 
 
 @pytest.fixture

@@ -67,7 +67,7 @@ class MarketData:
         rows = (
             self._marks_compact.filter(pl.col("date") <= day)
             .group_by(["product_id", "sub_type"])
-            .agg(pl.col("market").last())
+            .agg(pl.col("market").sort_by(pl.col("date")).last())
         )
         return {
             Asset(product_id=int(r["product_id"]), sub_type=str(r["sub_type"])): float(r["market"])

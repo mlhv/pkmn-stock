@@ -40,3 +40,10 @@ class Strategy(ABC):
 
     @abstractmethod
     def on_bar(self, ctx: Context) -> list[Order]: ...
+
+    def reset(self) -> None:  # noqa: B027
+        """Clear any per-run state. Called by Backtest.run() before the loop.
+
+        Stateful strategies (entry flags, rolling caches) must override this
+        so one instance can be reused across runs (e.g. walk-forward windows).
+        """

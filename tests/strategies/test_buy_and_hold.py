@@ -60,3 +60,11 @@ def test_skips_assets_without_marks() -> None:
 
 def test_name_includes_kind() -> None:
     assert BuyAndHold(kind="sealed").name == "buy-and-hold-sealed"
+
+
+def test_reset_allows_reuse_across_runs() -> None:
+    strat = BuyAndHold(kind="sealed")
+    assert strat.on_bar(make_ctx(cash=300.0)) != []
+    assert strat.on_bar(make_ctx(cash=300.0)) == []
+    strat.reset()
+    assert strat.on_bar(make_ctx(cash=300.0)) != []

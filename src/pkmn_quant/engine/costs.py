@@ -25,12 +25,28 @@ class CostModel:
     fallback_max_qty: int = DEFAULT_MAX_QTY
 
     def buy_price(self, market: float) -> float:
-        """Per-unit cash outlay when buying at the market price."""
+        """Cash outlay for a SINGLE unit (market + one shipping charge).
+
+        For multi-unit totals use total_buy_cost - shipping is charged once
+        per order line, not per unit.
+        """
         return market + self.shipping_per_line
 
     def sell_proceeds(self, market: float) -> float:
-        """Per-unit cash received when selling at the market price."""
+        """Cash received for a SINGLE unit (net of fees and one shipping charge).
+
+        For multi-unit totals use total_sell_proceeds - shipping is charged
+        once per order line, not per unit. Can be negative for penny cards.
+        """
         return market * (1 - self.fee_rate) - self.shipping_per_line
+
+    def total_buy_cost(self, market: float, qty: int) -> float:
+        """Total cash outlay for one buy order line of qty units."""
+        return qty * market + self.shipping_per_line
+
+    def total_sell_proceeds(self, market: float, qty: int) -> float:
+        """Total cash received for one sell order line of qty units."""
+        return qty * market * (1 - self.fee_rate) - self.shipping_per_line
 
     def max_daily_qty(self, market: float) -> int:
         # Strict <: a price exactly at a threshold falls to the NEXT tier

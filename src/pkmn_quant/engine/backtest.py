@@ -19,6 +19,9 @@ from pkmn_quant.engine.strategy import Context, Strategy
 
 @dataclass(frozen=True)
 class Result:
+    """A completed backtest. Treat all fields as read-only: frozen only
+    protects rebinding, not the list/frame/dict contents."""
+
     strategy_name: str
     equity_curve: pl.DataFrame  # date, equity
     fills: list[Fill]
@@ -36,6 +39,7 @@ class Backtest:
     initial_cash: float
 
     def run(self) -> Result:
+        self.strategy.reset()
         market = MarketData.from_warehouse(self.warehouse, self.start, self.end)
         products = self.warehouse.load_products()
         simulator = ExecutionSimulator(self.cost_model)

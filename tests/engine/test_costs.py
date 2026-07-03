@@ -32,3 +32,15 @@ def test_serializable_for_result_reports() -> None:
     d = cm.as_dict()
     assert d["fee_rate"] == pytest.approx(0.1275)
     assert d["liquidity_tiers"] == [(5.0, 20), (50.0, 8), (200.0, 3)]
+
+
+def test_total_costs_charge_shipping_once_per_line() -> None:
+    cm = CostModel(fee_rate=0.10, shipping_per_line=1.0)
+    assert cm.total_buy_cost(10.0, 5) == pytest.approx(51.0)  # not 55
+    assert cm.total_sell_proceeds(10.0, 5) == pytest.approx(44.0)  # 50*0.9 - 1
+
+
+def test_liquidity_cap_exact_threshold_falls_to_next_tier() -> None:
+    cm = CostModel()
+    assert cm.max_daily_qty(market=5.0) == 8  # strict <: $5.00 is mid-tier
+    assert cm.max_daily_qty(market=50.0) == 3
