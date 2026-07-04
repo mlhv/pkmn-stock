@@ -28,3 +28,5 @@ def test_no_fold_when_range_too_short() -> None:
 def test_invalid_params_raise() -> None:
     with pytest.raises(ValueError):
         make_folds(date(2024, 1, 1), date(2024, 12, 31), is_days=0, oos_days=60)
+    with pytest.raises(ValueError):
+        make_folds(date(2024, 1, 1), date(2024, 12, 31), is_days=180, oos_days=0)

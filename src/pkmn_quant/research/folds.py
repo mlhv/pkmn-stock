@@ -17,7 +17,8 @@ class Fold:
 def make_folds(start: date, end: date, is_days: int, oos_days: int) -> list[Fold]:
     """Non-overlapping OOS segments; each fold's IS window precedes its OOS.
 
-    Fold k: IS = [start + k*oos_days, +is_days), OOS = the following oos_days.
+    Fold k: IS spans is_days calendar days starting at start + k*oos_days
+    (both endpoints inclusive); OOS spans the next oos_days days.
     Folds are generated while the full OOS segment fits inside [start, end].
     """
     if is_days <= 0 or oos_days <= 0:
