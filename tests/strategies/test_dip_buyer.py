@@ -156,3 +156,27 @@ def test_skips_unaffordable_candidate_for_affordable_one() -> None:
     assert len(orders) == 1
     assert orders[0].asset == SHALLOW
     assert orders[0].quantity == 2  # floor(100/50)
+
+
+def test_orphaned_position_is_resold() -> None:
+    # A fresh DipBuyer has no _entries. A held position with no entry record
+    # (orphaned after a partial sell fill) must be re-sold immediately.
+    # mark=61 < avg_cost*take_profit (60*1.2=72), so take_profit does NOT fire.
+    # The orphan guard (entered is None) should fire instead.
+    hist = history_for([(TODAY - timedelta(days=7), 100.0), (TODAY, 61.0)])
+    strat = DipBuyer(dip_threshold=0.30, hold_days=30, take_profit=1.2)
+    positions = {CARD: Position(quantity=5, avg_cost=60.0)}
+    orders = strat.on_bar(make_ctx(hist, {CARD: 61.0}, positions=positions))
+    assert [(o.asset, o.quantity) for o in orders] == [(CARD, -5)]
+
+
+def test_stale_entry_blocks_reentry() -> None:
+    # If _entries[CARD] is recent (yesterday), the asset is considered "in
+    # flight" (emitted-but-not-yet-filled buy). It must not be bought again
+    # even when its current mark shows a qualifying dip.
+    hist = history_for([(TODAY - timedelta(days=7), 100.0), (TODAY, 60.0)])  # -40%
+    strat = DipBuyer(dip_threshold=0.30, hold_days=30, budget_frac=0.5)
+    strat._entries[CARD] = TODAY - timedelta(days=1)  # white-box: simulate in-flight entry
+    orders = strat.on_bar(make_ctx(hist, {CARD: 60.0}))
+    # No position => sell loop is skipped; stale entry blocks buy loop.
+    assert orders == []

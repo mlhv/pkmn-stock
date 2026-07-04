@@ -19,7 +19,14 @@ class DipBuyer(Strategy):
 
     Known imprecision (acceptable for research): _entries records order-EMISSION
     date, not fill date. An emitted buy that never fills leaves a stale entry,
-    blocking re-entry for that asset until reset().
+    blocking re-entry for that asset until reset(). The hold_days clock
+    therefore starts at order emission, making actual holding one day shorter
+    than hold_days (T+1 fill).
+
+    Partial-fill behaviour: when a sell order is emitted the entry record is
+    removed immediately. If the executor clips the fill (liquidity cap), the
+    remaining position has no entry record and is treated as overdue — it will
+    be re-sold every bar until fully closed.
     """
 
     def __init__(
@@ -53,7 +60,7 @@ class DipBuyer(Strategy):
         for asset, pos in sorted(ctx.positions.items(), key=lambda kv: kv[0].product_id):
             mark = ctx.marks.get(asset)
             entered = self._entries.get(asset)
-            too_old = entered is not None and (ctx.today - entered).days >= self.hold_days
+            too_old = entered is None or (ctx.today - entered).days >= self.hold_days
             hit_target = mark is not None and mark >= pos.avg_cost * self.take_profit
             if too_old or hit_target:
                 orders.append(Order(asset=asset, quantity=-pos.quantity))
@@ -67,7 +74,7 @@ class DipBuyer(Strategy):
         window_start = ctx.today - timedelta(days=self.dip_window_days)
         past = (
             ctx.history.filter(
-                (pl.col("date") <= window_start) & pl.col("product_id").is_in(list(single_ids))
+                (pl.col("date") <= window_start) & pl.col("product_id").is_in(single_ids)
             )
             .group_by(["product_id", "sub_type"])
             .agg(pl.col("market").sort_by(pl.col("date")).last().alias("past"))
