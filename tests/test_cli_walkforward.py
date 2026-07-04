@@ -80,3 +80,6 @@ def test_walkforward_unknown_strategy_clean_error(tmp_path: Path) -> None:
     )
     assert result.exit_code != 0
     assert "nope" in result.output and "Traceback" not in result.output
+    # CliRunner swallows exceptions into result.exception; only SystemExit
+    # (typer's clean exit path) is acceptable.
+    assert result.exception is None or isinstance(result.exception, SystemExit)

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import datetime as dt
-from collections.abc import Callable
 from pathlib import Path
 
 import polars as pl
@@ -110,8 +109,11 @@ def walkforward(
     root: Path = typer.Option(Path("."), help="Project root holding the data/ directory."),
 ) -> None:
     """Walk-forward analysis: optimize in-sample, evaluate out-of-sample."""
+    from collections.abc import Callable
+
     from pkmn_quant.data.warehouse import Warehouse
     from pkmn_quant.engine.costs import CostModel
+    from pkmn_quant.research.folds import Fold
     from pkmn_quant.research.registry import REGISTRY
     from pkmn_quant.research.report import render_markdown
     from pkmn_quant.research.search import Params, SearchSpec, optimize_params
@@ -129,7 +131,7 @@ def walkforward(
     # Bind entry after None check to satisfy mypy
     entry_checked = entry
 
-    def optimizer(fold: object, evaluate: Callable[[Params], float]) -> Params:
+    def optimizer(fold: Fold, evaluate: Callable[[Params], float]) -> Params:
         spec = SearchSpec(space=entry_checked.space, n_trials=trials, seed=seed)
         return optimize_params(spec, evaluate)
 
