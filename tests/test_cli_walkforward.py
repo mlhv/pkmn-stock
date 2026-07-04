@@ -1,0 +1,82 @@
+from datetime import date, timedelta
+from pathlib import Path
+
+import polars as pl
+from typer.testing import CliRunner
+
+from pkmn_quant.cli import app
+from pkmn_quant.config import Paths
+from pkmn_quant.data.transforms import PRICE_SCHEMA
+from pkmn_quant.data.warehouse import Warehouse
+from tests.helpers import price_row
+
+
+def seed_forty_days(root: Path) -> None:
+    w = Warehouse(Paths(root=root))
+    start = date(2025, 1, 1)
+    for i in range(40):
+        d = start + timedelta(days=i)
+        w.write_prices(d, pl.DataFrame([price_row(d, 1, 100.0 + i)], schema=PRICE_SCHEMA))
+    w.write_products(
+        pl.DataFrame(
+            {
+                "product_id": [1],
+                "group_id": [1],
+                "name": ["Box"],
+                "rarity": [None],
+                "kind": ["sealed"],
+                "released_on": [start],
+            }
+        )
+    )
+
+
+def test_walkforward_cli_runs_and_writes_report(tmp_path: Path) -> None:
+    seed_forty_days(tmp_path)
+    result = CliRunner().invoke(
+        app,
+        [
+            "walkforward",
+            "--strategy",
+            "sealed-accumulation",
+            "--start",
+            "2025-01-01",
+            "--end",
+            "2025-02-09",
+            "--is-days",
+            "10",
+            "--oos-days",
+            "10",
+            "--trials",
+            "2",
+            "--cash",
+            "1000",
+            "--root",
+            str(tmp_path),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    out = tmp_path / "data" / "results"
+    run_dir = next(iter(out.iterdir()))
+    assert (run_dir / "report.md").exists()
+    assert (run_dir / "stitched_equity.parquet").exists()
+    assert "overfitting_gap" in (run_dir / "report.md").read_text()
+
+
+def test_walkforward_unknown_strategy_clean_error(tmp_path: Path) -> None:
+    result = CliRunner().invoke(
+        app,
+        [
+            "walkforward",
+            "--strategy",
+            "nope",
+            "--start",
+            "2025-01-01",
+            "--end",
+            "2025-02-09",
+            "--root",
+            str(tmp_path),
+        ],
+    )
+    assert result.exit_code != 0
+    assert "nope" in result.output and "Traceback" not in result.output
