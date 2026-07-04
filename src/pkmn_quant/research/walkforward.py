@@ -2,7 +2,10 @@
 
 The stitched curve is built ONLY from out-of-sample segments — it is the
 closest a backtest gets to 'how this would actually have gone'. The gap
-between mean IS and mean OOS return measures overfitting.
+between mean IS and mean OOS CAGR measures overfitting on an annualized basis
+so unequal IS/OOS window lengths (e.g. 180d vs 60d) do not fake a gap. Note
+that CAGR on short OOS windows (~60d) is noisy, so read the gap as an
+order-of-magnitude signal, not a precise number.
 
 Design note: ``Params`` is defined locally (not imported from search.py) so
 that this module does not pull in optuna at import time. Callers that use
@@ -74,6 +77,12 @@ def run_walkforward(
 
     The OOS segments are then stitched into a single compounding equity curve.
     """
+    valid = {"total_return", "cagr", "sharpe", "sortino", "calmar", "max_drawdown"}
+    if objective_metric not in valid:
+        raise ValueError(
+            f"unknown objective_metric {objective_metric!r}; choose from {sorted(valid)}"
+        )
+
     fold_results: list[FoldResult] = []
 
     for fold in make_folds(start, end, is_days=is_days, oos_days=oos_days):
@@ -132,6 +141,14 @@ def _stitch(curves: list[pl.DataFrame], initial_cash: float) -> pl.DataFrame:
 
     Empty curves list: returns a typed empty DataFrame so summarize() can handle
     it gracefully (summarize returns all-zero metrics for n < 2 rows).
+
+    Seam assumptions:
+    - Positions are effectively valued at mark at each segment boundary; sell
+      costs (fees/shipping) are never paid at seams, so the stitched curve is an
+      upper bound on realized compounding.
+    - Each segment runs from initial_cash; stitching is a display rescaling —
+      strategies never see accumulated profits (no capacity/sizing effects across
+      segments).
     """
     if not curves:
         return pl.DataFrame(schema=_CURVE_SCHEMA)
@@ -143,10 +160,15 @@ def _stitch(curves: list[pl.DataFrame], initial_cash: float) -> pl.DataFrame:
     for curve in curves:
         eq = curve.sort("date")
         if eq.height == 0:
-            continue
+            raise ValueError(
+                "OOS segment produced an empty equity curve;"
+                " check inputs (date range, warehouse data)"
+            )
         base = float(eq["equity"][0])
         if base <= 0.0:
-            continue
+            raise ValueError(
+                f"OOS segment starting {eq['date'][0]} has non-positive base equity {base}"
+            )
         for d, e in zip(eq["date"].to_list(), eq["equity"].to_list(), strict=True):
             days.append(d)
             equity.append(level * float(e) / base)
@@ -164,15 +186,20 @@ def _summarize_folds(
 ) -> dict[str, float]:
     """Aggregate IS/OOS metrics and compute the overfitting gap.
 
-    overfitting_gap = mean IS total_return - mean OOS total_return.
-    A large positive gap indicates the optimizer is fitting to noise.
+    overfitting_gap = mean IS CAGR - mean OOS CAGR (annualized).
+    Using CAGR makes IS and OOS windows horizon-comparable: a constant-edge
+    strategy with unequal IS/OOS lengths (e.g. 180d vs 60d) would show a
+    spurious gap if raw total_return were used. A large positive gap indicates
+    the optimizer is fitting to noise.
     """
 
     def _mean(values: list[float]) -> float:
         return sum(values) / len(values) if values else 0.0
 
-    is_mean = _mean([f.is_summary["total_return"] for f in folds])
-    oos_mean = _mean([f.oos_summary["total_return"] for f in folds])
+    is_tr_mean = _mean([f.is_summary["total_return"] for f in folds])
+    oos_tr_mean = _mean([f.oos_summary["total_return"] for f in folds])
+    is_cagr_mean = _mean([f.is_summary["cagr"] for f in folds])
+    oos_cagr_mean = _mean([f.oos_summary["cagr"] for f in folds])
 
     # summarize() returns all-zero dict for frames with < 2 rows, so it is
     # always safe to call here — even for an empty stitched curve.
@@ -180,7 +207,9 @@ def _summarize_folds(
 
     return {
         **stitched_metrics,
-        "is_total_return_mean": is_mean,
-        "oos_total_return_mean": oos_mean,
-        "overfitting_gap": is_mean - oos_mean,
+        "is_total_return_mean": is_tr_mean,
+        "oos_total_return_mean": oos_tr_mean,
+        "is_cagr_mean": is_cagr_mean,
+        "oos_cagr_mean": oos_cagr_mean,
+        "overfitting_gap": is_cagr_mean - oos_cagr_mean,
     }
