@@ -1,9 +1,10 @@
+import math
 from datetime import date
 
 import polars as pl
 import pytest
 
-from pkmn_quant.engine.metrics import summarize
+from pkmn_quant.engine.metrics import TRADING_DAYS_PER_YEAR, summarize
 
 
 def curve(values: list[float]) -> pl.DataFrame:
@@ -76,3 +77,13 @@ def test_sortino_negative_for_down_curve() -> None:
     # Net-losing curve: mean daily return is negative -> Sortino is negative.
     s = summarize(curve([100.0, 99.0, 98.0, 97.0]))
     assert s["sortino"] < 0
+
+
+def test_sortino_uses_full_sample_semi_deviation() -> None:
+    values = [100.0, 102.0, 101.0, 104.0, 103.0, 106.0]
+    s = summarize(curve(values))
+    rets = [values[i + 1] / values[i] - 1 for i in range(len(values) - 1)]
+    mean_ret = sum(rets) / len(rets)
+    semi_dev = (sum(min(r, 0.0) ** 2 for r in rets) / len(rets)) ** 0.5
+    expected = mean_ret / semi_dev * math.sqrt(TRADING_DAYS_PER_YEAR)
+    assert s["sortino"] == pytest.approx(expected)

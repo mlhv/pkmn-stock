@@ -18,8 +18,9 @@ def summarize(equity_curve: pl.DataFrame) -> dict[str, float]:
     """Metrics from a frame with `date` and `equity` columns (sorted by date).
 
     Sharpe assumes a zero risk-free rate. CAGR is annualized and therefore
-    unreliable for curves much shorter than ~30 days. Sortino uses downside
-    deviation vs a 0% target; Calmar = CAGR / |max drawdown|.
+    unreliable for curves much shorter than ~30 days. Sortino uses standard
+    full-sample semi-deviation (square only negative returns, average over all
+    days) vs a 0% target; Calmar = CAGR / |max drawdown|.
     """
     eq = equity_curve.sort("date")["equity"]
     n = len(eq)
@@ -65,25 +66,15 @@ def summarize(equity_curve: pl.DataFrame) -> dict[str, float]:
         else float(cast(float, mean_val)) / std * math.sqrt(TRADING_DAYS_PER_YEAR)
     )
 
-    # Sortino: downside deviation uses only negative-return days as the
-    # denominator (RMS of negative returns), which inflates the ratio vs the
-    # semi-deviation convention (all-days denominator). Comparable within this
-    # codebase, not to published Sortino figures.
-    downside = daily.filter(daily < 0)
-    if len(downside) == 0:
+    # Sortino: standard full-sample semi-deviation — square only negative
+    # returns, average over ALL days. Comparable to published Sortino figures
+    # (modulo mark-smoothing inflation, as with Sharpe).
+    semi_var = (daily.clip(upper_bound=0.0) ** 2).mean()
+    if semi_var is None or float(cast(float, semi_var)) == 0.0:
         sortino = 0.0
     else:
-        downside_mean_sq = (downside**2).mean()
-        if downside_mean_sq is None:
-            sortino = 0.0
-        else:
-            downside_dev = float(cast(float, downside_mean_sq)) ** 0.5
-            mean_ret = float(cast(float, mean_val)) if mean_val is not None else 0.0
-            sortino = (
-                mean_ret / downside_dev * math.sqrt(TRADING_DAYS_PER_YEAR)
-                if downside_dev > 0
-                else 0.0
-            )
+        mean_ret = float(cast(float, mean_val)) if mean_val is not None else 0.0
+        sortino = mean_ret / float(cast(float, semi_var)) ** 0.5 * math.sqrt(TRADING_DAYS_PER_YEAR)
 
     calmar = cagr / abs(max_drawdown) if max_drawdown < 0 else 0.0
 
