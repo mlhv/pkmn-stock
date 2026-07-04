@@ -1,0 +1,76 @@
+"""Tunable strategies: factory + optuna search space, keyed by CLI name."""
+
+from __future__ import annotations
+
+from collections.abc import Callable
+from dataclasses import dataclass
+
+import optuna
+
+from pkmn_quant.engine.strategy import Strategy
+from pkmn_quant.strategies.dip_buyer import DipBuyer
+from pkmn_quant.strategies.momentum import CrossSectionalMomentum
+from pkmn_quant.strategies.sealed_accumulation import SealedAccumulation
+
+Params = dict[str, float | int]
+
+
+@dataclass(frozen=True)
+class RegistryEntry:
+    factory: Callable[[Params], Strategy]
+    space: Callable[[optuna.Trial], Params]
+
+
+def _sealed_space(trial: optuna.Trial) -> Params:
+    return {
+        "min_drawdown": trial.suggest_float("min_drawdown", 0.10, 0.50),
+        "take_profit": trial.suggest_float("take_profit", 1.2, 2.5),
+        "min_age_days": trial.suggest_int("min_age_days", 30, 180),
+    }
+
+
+def _sealed_factory(p: Params) -> Strategy:
+    return SealedAccumulation(
+        min_drawdown=float(p["min_drawdown"]),
+        take_profit=float(p["take_profit"]),
+        min_age_days=int(p["min_age_days"]),
+    )
+
+
+def _dip_space(trial: optuna.Trial) -> Params:
+    return {
+        "dip_threshold": trial.suggest_float("dip_threshold", 0.10, 0.50),
+        "hold_days": trial.suggest_int("hold_days", 7, 90),
+        "take_profit": trial.suggest_float("take_profit", 1.05, 1.6),
+    }
+
+
+def _dip_factory(p: Params) -> Strategy:
+    return DipBuyer(
+        dip_threshold=float(p["dip_threshold"]),
+        hold_days=int(p["hold_days"]),
+        take_profit=float(p["take_profit"]),
+    )
+
+
+def _momentum_space(trial: optuna.Trial) -> Params:
+    return {
+        "lookback_days": trial.suggest_int("lookback_days", 14, 120),
+        "top_n": trial.suggest_int("top_n", 5, 25),
+        "rebalance_days": trial.suggest_int("rebalance_days", 7, 60),
+    }
+
+
+def _momentum_factory(p: Params) -> Strategy:
+    return CrossSectionalMomentum(
+        lookback_days=int(p["lookback_days"]),
+        top_n=int(p["top_n"]),
+        rebalance_days=int(p["rebalance_days"]),
+    )
+
+
+REGISTRY: dict[str, RegistryEntry] = {
+    "sealed-accumulation": RegistryEntry(factory=_sealed_factory, space=_sealed_space),
+    "dip-buyer": RegistryEntry(factory=_dip_factory, space=_dip_space),
+    "xs-momentum": RegistryEntry(factory=_momentum_factory, space=_momentum_space),
+}
