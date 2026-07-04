@@ -38,7 +38,8 @@ class SealedAccumulation(Strategy):
     def on_bar(self, ctx: Context) -> list[Order]:
         orders: list[Order] = []
 
-        # Exits first: proceeds are available to later buys in the same batch.
+        # Sells first: the executor fills this list sequentially on T+1, so
+        # sell proceeds are in portfolio.cash before any buy fill is attempted.
         for asset, pos in sorted(ctx.positions.items(), key=lambda kv: kv[0].product_id):
             mark = ctx.marks.get(asset)
             if mark is not None and mark >= pos.avg_cost * self.take_profit:
@@ -58,7 +59,7 @@ class SealedAccumulation(Strategy):
             return orders
 
         peaks = (
-            ctx.history.filter(pl.col("product_id").is_in(sorted(aged_ids)))
+            ctx.history.filter(pl.col("product_id").is_in(list(aged_ids)))
             .group_by(["product_id", "sub_type"])
             .agg(pl.col("market").max().alias("peak"))
         )
@@ -81,8 +82,11 @@ class SealedAccumulation(Strategy):
         # Deepest discounts first; deterministic tie-break by product_id.
         candidates.sort(key=lambda c: (-c[0], c[1].product_id))
         budget = ctx.cash * self.budget_frac
-        for _, asset, mark in candidates[:open_slots]:
-            qty = math.floor(budget / mark)
-            if qty > 0:
-                orders.append(Order(asset=asset, quantity=qty))
+        affordable = [
+            (asset, mark, qty)
+            for _, asset, mark in candidates
+            if (qty := math.floor(budget / mark)) > 0
+        ]
+        for asset, _, qty in affordable[:open_slots]:
+            orders.append(Order(asset=asset, quantity=qty))
         return orders
