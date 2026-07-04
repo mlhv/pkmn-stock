@@ -47,3 +47,26 @@ def test_zero_initial_equity_degrades_gracefully() -> None:
     s = summarize(curve([0.0, 0.0, 0.0]))
     assert s["total_return"] == 0.0
     assert s["sharpe"] == 0.0
+
+
+def test_sortino_positive_for_up_curve_with_dips() -> None:
+    # Net-up curve with some down days: downside deviation exists, mean > 0.
+    s = summarize(curve([100.0, 102.0, 101.0, 104.0, 103.0, 106.0]))
+    assert s["sortino"] > 0
+    assert "calmar" in s
+
+
+def test_sortino_zero_when_no_downside() -> None:
+    s = summarize(curve([100.0, 101.0, 102.0]))
+    # No negative daily returns: downside deviation is 0 -> sortino reported 0.0
+    assert s["sortino"] == 0.0
+
+
+def test_calmar_is_cagr_over_abs_drawdown() -> None:
+    s = summarize(curve([100.0, 120.0, 90.0, 108.0]))
+    assert s["calmar"] == pytest.approx(s["cagr"] / 0.25)
+
+
+def test_calmar_zero_when_no_drawdown() -> None:
+    s = summarize(curve([100.0, 101.0, 102.0]))
+    assert s["calmar"] == 0.0

@@ -18,16 +18,31 @@ def summarize(equity_curve: pl.DataFrame) -> dict[str, float]:
     """Metrics from a frame with `date` and `equity` columns (sorted by date).
 
     Sharpe assumes a zero risk-free rate. CAGR is annualized and therefore
-    unreliable for curves much shorter than ~30 days.
+    unreliable for curves much shorter than ~30 days. Sortino uses downside
+    deviation vs a 0% target; Calmar = CAGR / |max drawdown|.
     """
     eq = equity_curve.sort("date")["equity"]
     n = len(eq)
     if n < 2:
-        return {"total_return": 0.0, "cagr": 0.0, "max_drawdown": 0.0, "sharpe": 0.0}
+        return {
+            "total_return": 0.0,
+            "cagr": 0.0,
+            "max_drawdown": 0.0,
+            "sharpe": 0.0,
+            "sortino": 0.0,
+            "calmar": 0.0,
+        }
 
     first = float(eq[0])
     if first == 0.0:
-        return {"total_return": 0.0, "cagr": 0.0, "max_drawdown": 0.0, "sharpe": 0.0}
+        return {
+            "total_return": 0.0,
+            "cagr": 0.0,
+            "max_drawdown": 0.0,
+            "sharpe": 0.0,
+            "sortino": 0.0,
+            "calmar": 0.0,
+        }
     ratio = float(eq[-1]) / first
     total_return = ratio - 1.0
     years = (n - 1) / TRADING_DAYS_PER_YEAR
@@ -50,9 +65,29 @@ def summarize(equity_curve: pl.DataFrame) -> dict[str, float]:
         else float(cast(float, mean_val)) / std * math.sqrt(TRADING_DAYS_PER_YEAR)
     )
 
+    downside = daily.filter(daily < 0)
+    if len(downside) == 0:
+        sortino = 0.0
+    else:
+        downside_mean_sq = (downside**2).mean()
+        if downside_mean_sq is None:
+            sortino = 0.0
+        else:
+            downside_dev = float(cast(float, downside_mean_sq)) ** 0.5
+            mean_ret = float(cast(float, mean_val)) if mean_val is not None else 0.0
+            sortino = (
+                mean_ret / downside_dev * math.sqrt(TRADING_DAYS_PER_YEAR)
+                if downside_dev > 0
+                else 0.0
+            )
+
+    calmar = cagr / abs(max_drawdown) if max_drawdown < 0 else 0.0
+
     return {
         "total_return": float(total_return),
         "cagr": float(cagr),
         "max_drawdown": max_drawdown,
         "sharpe": sharpe,
+        "sortino": sortino,
+        "calmar": calmar,
     }
