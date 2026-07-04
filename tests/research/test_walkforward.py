@@ -75,35 +75,21 @@ def test_walkforward_stitches_oos_segments(warehouse: Warehouse) -> None:
 
     # --- Pinned seam values (exact stitching math) ---
     #
-    # Setup: 40 days of product_id=1, market price = 100 + day_index (i=0..39).
-    # BuyAndHold T+1: buy order submitted day-0 of OOS, fills on day-1.
-    # CostModel(fee_rate=0, shipping=0): no friction.
-    # initial_cash = 1000; floor(1000 / price) units bought.
+    # Setup: 40 days of product_id=1, market = 100 + day_index; no fees.
+    # Fold 0 OOS = i=10..19 (prices 110..119). BuyAndHold orders
+    # floor(1000/110) = 9 units on OOS day 0; the T+1 fill is clipped to 3
+    # units by the default liquidity tier (price in [50, 200) -> max 3/day)
+    # at day-1 price 111: cost 333, cash 667, equity = 3*111 + 667 = 1000.
+    # BuyAndHold never re-orders, so the curve gains 3/day thereafter:
+    # 1000, 1000, 1003, ..., terminal 3*119 + 667 = 1024.
     #
-    # Fold 0 OOS: 2025-01-11 (i=10) .. 2025-01-20 (i=19), prices 110..129.
-    #   Day-0 (i=10): cash=1000, price=110 -> floor(1000/110)=9 units, 9*110=990 invested.
-    #   T+1 fill day 1 (i=11): price=111, equity = 9*111 + (1000-990) = 999+10 = 1009 -> 1009.0
-    #   Wait: actually equity[0] of OOS curve=1000 (day 0 is still all-cash),
-    #         equity[1]=1000 (order not yet settled per T+1),
-    #         equity[2]=1003 (mark rises, 9 units * (112-110)=18? No...
-    #   From printed output: OOS curve equity goes 1000,1000,1003,1006,...,1021,1024.
-    #   Pattern: day 0 and day 1 both show 1000 (T+1: cash on day 0; fill at day-1 open,
-    #   mark at day-1 close). From day 2 onward: 9 units * (price_i - price_{day1}) added.
-    #   Actual: seg0 terminal equity = 1024.0 (printed: idx=9, equity=1024.0).
-    #
-    # Seam 0->1 (idx=9 -> idx=10):
-    #   level after seg0 = 1024.0
-    #   seg1 OOS raw: base=1000.0 (first equity of seg1 raw curve)
-    #   idx=10: level * raw[0] / base = 1024 * 1000 / 1000 = 1024.0
-    #
-    # Seam 1->2 (idx=19 -> idx=20):
-    #   seg1 terminal raw = 1024.0, stitched = 1024 * 1024 / 1000 = 1048.576
-    #   level after seg1 = 1048.576
-    #   idx=20: 1048.576 * 1000 / 1000 = 1048.576
-    #
-    # Final row idx=29:
-    #   seg2 terminal raw = 1024.0
-    #   stitched = 1048.576 * 1024 / 1000 = 1073.741824
+    # Every OOS segment is price-shifted but otherwise identical (same qty 3,
+    # same +$1/day drift), so each segment's raw curve ends at 1024/1000 of
+    # its base and the stitched level compounds by exactly 1.024 per seam:
+    #   idx 9  (seg0 end):   1000 * 1.024              = 1024.0
+    #   idx 19 (seg1 end):   1024 * 1.024              = 1048.576
+    #   idx 29 (seg2 end):   1048.576 * 1.024          = 1073.741824
+    # An off-by-one in the base index or seam level update breaks these.
 
     assert stitched["equity"][9] == pytest.approx(1024.0)
     # First row of segment 1 must equal last row of segment 0 (level continuity at seam).
