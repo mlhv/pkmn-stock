@@ -16,6 +16,12 @@ class CrossSectionalMomentum(Strategy):
     """Every rebalance_days: rank singles by trailing lookback return, target
     the top_n equally weighted, sell everything that dropped out (sells
     emitted first). Stateful (_last_rebalance); reset() clears it.
+
+    Names that stay in the target are never trimmed (long-only, entry-only
+    weighting): winners drift above equal weight over time. The rebalance clock
+    advances even when no candidates are found (e.g. before lookback_days of
+    history exist), so the first productive rebalance can be delayed by up to
+    rebalance_days.
     """
 
     def __init__(
@@ -74,10 +80,12 @@ class CrossSectionalMomentum(Strategy):
         if not target:
             return orders
 
-        equity = ctx.cash + sum(
-            pos.quantity * ctx.marks.get(a, pos.avg_cost) for a, pos in ctx.positions.items()
-        )
+        # Held assets always have a carry-forward mark (a fill requires a
+        # print); fail loudly rather than mis-valuing equity at avg_cost.
+        equity = ctx.cash + sum(pos.quantity * ctx.marks[a] for a, pos in ctx.positions.items())
         per_name = equity / len(target)
+        # Buys sorted by product_id for determinism; if sells under-fill
+        # (liquidity cap), lower product_ids get first claim on cash.
         for asset, mark in sorted(target.items(), key=lambda kv: kv[0].product_id):
             held = ctx.positions.get(asset)
             held_value = held.quantity * mark if held else 0.0
