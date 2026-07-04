@@ -70,3 +70,9 @@ def test_calmar_is_cagr_over_abs_drawdown() -> None:
 def test_calmar_zero_when_no_drawdown() -> None:
     s = summarize(curve([100.0, 101.0, 102.0]))
     assert s["calmar"] == 0.0
+
+
+def test_sortino_negative_for_down_curve() -> None:
+    # Net-losing curve: mean daily return is negative -> Sortino is negative.
+    s = summarize(curve([100.0, 99.0, 98.0, 97.0]))
+    assert s["sortino"] < 0

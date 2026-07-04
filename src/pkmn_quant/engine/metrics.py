@@ -65,6 +65,10 @@ def summarize(equity_curve: pl.DataFrame) -> dict[str, float]:
         else float(cast(float, mean_val)) / std * math.sqrt(TRADING_DAYS_PER_YEAR)
     )
 
+    # Sortino: downside deviation uses only negative-return days as the
+    # denominator (RMS of negative returns), which inflates the ratio vs the
+    # semi-deviation convention (all-days denominator). Comparable within this
+    # codebase, not to published Sortino figures.
     downside = daily.filter(daily < 0)
     if len(downside) == 0:
         sortino = 0.0
