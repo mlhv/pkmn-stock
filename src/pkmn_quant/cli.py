@@ -177,6 +177,44 @@ def walkforward(
 
 
 @app.command()
+def signals(
+    strategy: str = typer.Option(..., help="Strategy name: see pkmn_quant.research.registry."),
+    cash: float = typer.Option(10_000.0, help="Hypothetical cash for position sizing."),
+    warmup_days: int = typer.Option(
+        365, help="History days loaded before the latest date for signal lookbacks."
+    ),
+    root: Path = typer.Option(Path("."), help="Project root holding the data/ directory."),
+) -> None:
+    """Run a strategy in live mode against the latest ingested prices."""
+    from pkmn_quant.data.warehouse import Warehouse
+    from pkmn_quant.live.report import render_signals_markdown, signals_to_json
+    from pkmn_quant.live.signals import SignalsError, generate_signals
+
+    results_dir = root / "data" / "results"
+    try:
+        report = generate_signals(
+            warehouse=Warehouse(Paths(root=root)),
+            strategy_name=strategy,
+            cash=cash,
+            results_dir=results_dir,
+            warmup_days=warmup_days,
+        )
+    except SignalsError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+    markdown = render_signals_markdown(report)
+    out_dir = results_dir / f"signals-{strategy}-{report.as_of.isoformat()}"
+    if out_dir.exists():
+        typer.echo(f"warning: overwriting existing results in {out_dir}", err=True)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "signals.md").write_text(markdown)
+    (out_dir / "signals.json").write_text(signals_to_json(report))
+
+    typer.echo(markdown)
+    typer.echo(f"artifacts written to {out_dir}", err=True)
+
+
+@app.command()
 def version() -> None:
     """Print the pkmn-quant version."""
     from pkmn_quant import __version__

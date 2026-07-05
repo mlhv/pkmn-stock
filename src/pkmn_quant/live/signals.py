@@ -78,11 +78,12 @@ def generate_signals(
         raise SignalsError(f"walk-forward run {run_dir} has no folds")
     params = run.folds[-1].params
 
-    prices = warehouse.load_prices()
-    if prices.height == 0:
+    # Partition dir names give the latest date without scanning price data
+    # (MarketData.from_warehouse below does the one full load).
+    days = warehouse.stored_days()
+    if not days:
         raise SignalsError("warehouse has no price data; run `pkmn ingest` first")
-    latest = prices["date"].max()
-    assert isinstance(latest, date)
+    latest = days[-1]
 
     market = MarketData.from_warehouse(warehouse, latest, latest, warmup_days=warmup_days)
     try:
