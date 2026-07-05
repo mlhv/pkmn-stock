@@ -60,6 +60,7 @@ def test_walkforward_cli_runs_and_writes_report(tmp_path: Path) -> None:
     run_dir = next(iter(out.iterdir()))
     assert (run_dir / "report.md").exists()
     assert (run_dir / "stitched_equity.parquet").exists()
+    assert (run_dir / "walkforward.json").exists()
     assert "overfitting_gap" in (run_dir / "report.md").read_text()
 
 

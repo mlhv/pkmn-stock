@@ -120,6 +120,7 @@ def walkforward(
 
     from pkmn_quant.data.warehouse import Warehouse
     from pkmn_quant.engine.costs import CostModel
+    from pkmn_quant.research.artifacts import write_walkforward_json
     from pkmn_quant.research.folds import Fold
     from pkmn_quant.research.registry import REGISTRY
     from pkmn_quant.research.report import render_markdown
@@ -167,6 +168,7 @@ def walkforward(
     run_dir.mkdir(parents=True, exist_ok=True)
     result.stitched_curve.write_parquet(run_dir / "stitched_equity.parquet")
     (run_dir / "report.md").write_text(render_markdown(result, strategy_name=strategy))
+    write_walkforward_json(run_dir, result, strategy_name=strategy)
 
     typer.echo(f"strategy: {strategy}  folds: {len(result.folds)}")
     for key, value in result.summary.items():
