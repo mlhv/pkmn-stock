@@ -106,6 +106,10 @@ def walkforward(
     trials: int = typer.Option(25, help="Optuna trials per fold."),
     seed: int = typer.Option(42, help="Sampler seed for reproducibility."),
     cash: float = typer.Option(10_000.0, help="Initial cash per fold."),
+    warmup_days: int = typer.Option(
+        120,
+        help="History days loaded before each window for signal lookbacks (observe-only).",
+    ),
     root: Path = typer.Option(Path("."), help="Project root holding the data/ directory."),
 ) -> None:
     """Walk-forward analysis: optimize in-sample, evaluate out-of-sample."""
@@ -145,6 +149,7 @@ def walkforward(
         is_days=is_days,
         oos_days=oos_days,
         initial_cash=cash,
+        warmup_days=warmup_days,
     )
 
     run_dir = root / "data" / "results" / f"wf-{strategy}-{start}-{end}"

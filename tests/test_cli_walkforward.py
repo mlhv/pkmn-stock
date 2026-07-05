@@ -83,3 +83,38 @@ def test_walkforward_unknown_strategy_clean_error(tmp_path: Path) -> None:
     # CliRunner swallows exceptions into result.exception; only SystemExit
     # (typer's clean exit path) is acceptable.
     assert result.exception is None or isinstance(result.exception, SystemExit)
+
+
+def test_walkforward_cli_warmup_days_clamps_to_available_data(tmp_path: Path) -> None:
+    """--warmup-days 120 with only 40 days of data must not raise.
+
+    This exercises the warm-up clamping path: the fixture has 40 days, so a
+    120-day warm-up before the IS start finds no earlier warehouse data.  The
+    load silently returns whatever is available and the run completes normally.
+    """
+    seed_forty_days(tmp_path)
+    result = CliRunner().invoke(
+        app,
+        [
+            "walkforward",
+            "--strategy",
+            "sealed-accumulation",
+            "--start",
+            "2025-01-01",
+            "--end",
+            "2025-02-09",
+            "--is-days",
+            "10",
+            "--oos-days",
+            "10",
+            "--trials",
+            "2",
+            "--cash",
+            "1000",
+            "--warmup-days",
+            "120",
+            "--root",
+            str(tmp_path),
+        ],
+    )
+    assert result.exit_code == 0, result.output

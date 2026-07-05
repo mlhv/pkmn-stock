@@ -11,6 +11,21 @@ Design note: ``Params`` is defined locally (not imported from search.py) so
 that this module does not pull in optuna at import time. Callers that use
 ``optimize_params`` from search.py will have optuna loaded already; callers
 that inject a trivial fake optimizer (e.g. tests) pay no import cost.
+
+Warm-up semantics (``warmup_days`` parameter):
+  History is loaded from ``window_start - warmup_days`` through ``window_end``
+  for every fold (both IS and OOS).  The event loop still iterates only days
+  in [window_start, window_end] — no trades occur during the warm-up period.
+  This means look-back strategies (momentum, dip windows, peak-to-date) have
+  price history on the very first bar of each window rather than starting blind.
+
+  IS and OOS windows both receive the same warm-up so the optimizer's view of
+  signal behaviour matches what the OOS run will see.  The library default is
+  ``warmup_days=0`` (no warm-up, backwards compatible); the CLI default is 120
+  (covers the longest supported momentum lookback).
+
+  If ``warmup_days`` exceeds the available history before a fold, the load
+  silently clamps to whatever data exists — no error is raised.
 """
 
 from __future__ import annotations
@@ -67,6 +82,7 @@ def run_walkforward(
     oos_days: int,
     initial_cash: float,
     objective_metric: str = "total_return",
+    warmup_days: int = 0,
 ) -> WalkForwardResult:
     """Run walk-forward optimization and return stitched OOS equity curve.
 
@@ -76,6 +92,10 @@ def run_walkforward(
     3. Run OOS with those params to record OOS metrics and the equity curve.
 
     The OOS segments are then stitched into a single compounding equity curve.
+
+    ``warmup_days`` is passed to all three Backtest runs per fold (evaluate
+    closure, IS re-run, OOS run) so the optimizer's view of signal behaviour
+    matches the OOS deployment.  See module docstring for full warm-up semantics.
     """
     valid = {"total_return", "cagr", "sharpe", "sortino", "calmar", "max_drawdown"}
     if objective_metric not in valid:
@@ -95,6 +115,7 @@ def run_walkforward(
                 start=_fold.is_start,
                 end=_fold.is_end,
                 initial_cash=initial_cash,
+                warmup_days=warmup_days,
             ).run()
             return float(result.summary[objective_metric])
 
@@ -107,6 +128,7 @@ def run_walkforward(
             start=fold.is_start,
             end=fold.is_end,
             initial_cash=initial_cash,
+            warmup_days=warmup_days,
         ).run()
 
         oos_result = Backtest(
@@ -116,6 +138,7 @@ def run_walkforward(
             start=fold.oos_start,
             end=fold.oos_end,
             initial_cash=initial_cash,
+            warmup_days=warmup_days,
         ).run()
 
         fold_results.append(
