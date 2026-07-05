@@ -16,6 +16,9 @@ dependencies = [
 pkmn = "pkmn_quant.cli:app"
 
 [dependency-groups]
+dashboard = [
+    "streamlit>=1.40",
+]
 dev = [
     "hypothesis>=6.100",
     "mypy>=1.13",
