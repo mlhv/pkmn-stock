@@ -51,6 +51,11 @@ StrategyFactory = Callable[[Params], Strategy]
 # optimizer(fold, evaluate) -> best params; evaluate(params) -> IS metric.
 Optimizer = Callable[[Fold, Callable[[Params], float]], Params]
 
+# Metrics run_walkforward accepts as the in-sample optimization objective.
+VALID_OBJECTIVE_METRICS = frozenset(
+    {"total_return", "cagr", "sharpe", "sortino", "calmar", "max_drawdown"}
+)
+
 # Schema for an empty stitched curve so summarize() always receives typed columns.
 _CURVE_SCHEMA = pl.Schema({"date": pl.Date, "equity": pl.Float64})
 
@@ -97,10 +102,10 @@ def run_walkforward(
     closure, IS re-run, OOS run) so the optimizer's view of signal behaviour
     matches the OOS deployment.  See module docstring for full warm-up semantics.
     """
-    valid = {"total_return", "cagr", "sharpe", "sortino", "calmar", "max_drawdown"}
-    if objective_metric not in valid:
+    if objective_metric not in VALID_OBJECTIVE_METRICS:
         raise ValueError(
-            f"unknown objective_metric {objective_metric!r}; choose from {sorted(valid)}"
+            f"unknown objective_metric {objective_metric!r};"
+            f" choose from {sorted(VALID_OBJECTIVE_METRICS)}"
         )
 
     fold_results: list[FoldResult] = []

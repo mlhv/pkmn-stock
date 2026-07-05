@@ -5,6 +5,14 @@ from __future__ import annotations
 from pkmn_quant.research.walkforward import WalkForwardResult
 
 
+def format_params(params: dict[str, float | int]) -> str:
+    """Compact one-line params: floats to 4 significant digits, ints as-is."""
+    if not params:
+        return "-"
+    parts = [f"{k}={v:.4g}" if isinstance(v, float) else f"{k}={v}" for k, v in params.items()]
+    return ", ".join(parts)
+
+
 def render_markdown(result: WalkForwardResult, strategy_name: str) -> str:
     lines = [
         f"# Walk-forward report: {strategy_name}",
@@ -23,7 +31,7 @@ def render_markdown(result: WalkForwardResult, strategy_name: str) -> str:
         lines.append(
             f"| {i} | {f.fold.is_start} .. {f.fold.is_end} "
             f"| {f.fold.oos_start} .. {f.fold.oos_end} "
-            f"| {f.params} "
+            f"| {format_params(f.params)} "
             f"| {f.is_summary['total_return']:.2%} "
             f"| {f.oos_summary['total_return']:.2%} |"
         )

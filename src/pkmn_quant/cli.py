@@ -110,6 +110,9 @@ def walkforward(
         120,
         help="History days loaded before each window for signal lookbacks (observe-only).",
     ),
+    objective_metric: str = typer.Option(
+        "total_return", help="Metric optuna maximizes in-sample; see VALID_OBJECTIVE_METRICS."
+    ),
     root: Path = typer.Option(Path("."), help="Project root holding the data/ directory."),
 ) -> None:
     """Walk-forward analysis: optimize in-sample, evaluate out-of-sample."""
@@ -121,11 +124,16 @@ def walkforward(
     from pkmn_quant.research.registry import REGISTRY
     from pkmn_quant.research.report import render_markdown
     from pkmn_quant.research.search import Params, SearchSpec, optimize_params
-    from pkmn_quant.research.walkforward import run_walkforward
+    from pkmn_quant.research.walkforward import VALID_OBJECTIVE_METRICS, run_walkforward
 
     entry = REGISTRY.get(strategy)
     if entry is None:
         raise typer.BadParameter(f"unknown strategy {strategy!r}; known: {sorted(REGISTRY)}")
+    if objective_metric not in VALID_OBJECTIVE_METRICS:
+        raise typer.BadParameter(
+            f"unknown objective metric {objective_metric!r};"
+            f" choose from {sorted(VALID_OBJECTIVE_METRICS)}"
+        )
     try:
         start_date = dt.date.fromisoformat(start)
         end_date = dt.date.fromisoformat(end)
@@ -149,6 +157,7 @@ def walkforward(
         is_days=is_days,
         oos_days=oos_days,
         initial_cash=cash,
+        objective_metric=objective_metric,
         warmup_days=warmup_days,
     )
 
