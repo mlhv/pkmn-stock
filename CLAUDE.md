@@ -3,14 +3,16 @@
 Algo-trading research system for Pokemon card prices (TCGplayer data via
 tcgcsv.com). Design spec: `docs/superpowers/specs/2026-06-09-pkmn-quant-design.md`.
 
-## Status (2026-07-03)
+## Status (2026-07-04)
 
-- Plan 1 (data layer) and Plan 2 (backtest engine) are merged to main. 85 tests.
-- Plan 3 (research layer) is written, NOT yet executed:
-  `docs/superpowers/plans/2026-07-03-research-layer.md` — complete code in every
-  task step; execute with subagent-driven development on a `feat/research-layer`
-  branch.
-- Plan 4 (live signals + Streamlit dashboard + README) comes after Plan 3.
+- Plans 1-3 are merged to main. 136 tests. Plan 3 (research layer) added three
+  strategies, the optuna walk-forward harness, `pkmn walkforward`, and
+  observe-only `warmup_days` on the engine (default 0 preserves goldens).
+- Walk-forward findings for the README live in
+  `docs/research-findings-2026-07.md` — headline: nothing beat buy-and-hold
+  sealed (+151% over the OOS span); sealed-accumulation +13.6% stitched OOS
+  was the only positive strategy.
+- Next: Plan 4 (live signals + Streamlit dashboard + README).
 
 ## Commands
 
@@ -33,7 +35,10 @@ uv.lock together).
   DuckDB warehouse (`Warehouse.query()` gives SQL over `prices`/`products`).
 - `src/pkmn_quant/engine/` — event-driven backtester: costs, portfolio, data
   view, execution, strategy ABC, metrics, backtest loop. T+1 fills, long-only.
-- `src/pkmn_quant/strategies/` — Strategy implementations (buy_and_hold so far).
+- `src/pkmn_quant/strategies/` — Strategy implementations: buy_and_hold,
+  sealed_accumulation, dip_buyer, momentum.
+- `src/pkmn_quant/research/` — walk-forward layer: folds, seeded optuna search,
+  runner/stitcher, strategy registry, markdown report.
 - `data/` — gitignored. Contains 874 ingested days (2024-02-08..2026-06-30,
   ~2.9M price rows) plus raw archives. Do not delete; re-ingest is ~40 min.
 

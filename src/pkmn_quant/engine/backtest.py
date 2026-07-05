@@ -37,10 +37,21 @@ class Backtest:
     start: date
     end: date
     initial_cash: float
+    warmup_days: int = 0
+    """Observe-only history days loaded before ``start``.
+
+    When > 0, MarketData loads prices from ``start - warmup_days`` through
+    ``end`` so that strategy look-backs (momentum, dip windows, peak-to-date)
+    see history on the first trading day.  The event loop still iterates only
+    days in [start, end]; no trades are generated during the warm-up period.
+    Default 0 preserves the original behaviour bit-for-bit.
+    """
 
     def run(self) -> Result:
         self.strategy.reset()
-        market = MarketData.from_warehouse(self.warehouse, self.start, self.end)
+        market = MarketData.from_warehouse(
+            self.warehouse, self.start, self.end, warmup_days=self.warmup_days
+        )
         products = self.warehouse.load_products()
         simulator = ExecutionSimulator(self.cost_model)
         portfolio = Portfolio(cash=self.initial_cash)

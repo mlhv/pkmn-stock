@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 
 import polars as pl
 
@@ -22,10 +22,16 @@ class MarketData:
     marks (carry-forward) vs prices (actual prints): an asset missing on
     day D is MARKED at its most recent prior price, but execution must not
     FILL at stale prices, so prices_on has no carry-forward.
+
+    warm-up: when from_warehouse is called with warmup_days > 0, the loaded
+    frame and marks_compact cover [start - warmup_days, end] so that
+    history_until and marks_on see pre-start data.  However, _days (the
+    iteration index used by the event loop) contains ONLY days in [start, end],
+    so no trading occurs during the warm-up period.
     """
 
-    frame: pl.DataFrame  # actual prints in [start, end]
-    _days: tuple[date, ...]
+    frame: pl.DataFrame  # actual prints in [warmup_start, end]
+    _days: tuple[date, ...]  # trading days in [start, end] only
     _marks_compact: pl.DataFrame  # change-point rows sorted by (product_id, sub_type, date)
 
     @property
@@ -33,13 +39,35 @@ class MarketData:
         return list(self._days)
 
     @classmethod
-    def from_warehouse(cls, warehouse: Warehouse, start: date, end: date) -> MarketData:
-        frame = warehouse.load_prices().filter((pl.col("date") >= start) & (pl.col("date") <= end))
-        days = tuple(sorted(frame["date"].unique().to_list()))
+    def from_warehouse(
+        cls,
+        warehouse: Warehouse,
+        start: date,
+        end: date,
+        warmup_days: int = 0,
+    ) -> MarketData:
+        """Load prices from ``start - warmup_days`` through ``end``.
+
+        ``days`` (the event-loop iteration index) is restricted to [start, end]
+        so no trading occurs during the warm-up period.  ``history_until`` and
+        ``marks_on`` naturally see the warm-up rows because the underlying frame
+        covers the full [start - warmup_days, end] range.
+
+        ``warmup_days=0`` (the default) preserves the original behaviour exactly.
+        """
+        load_from = start - timedelta(days=warmup_days) if warmup_days > 0 else start
+        frame = warehouse.load_prices().filter(
+            (pl.col("date") >= load_from) & (pl.col("date") <= end)
+        )
+        # Trading days: only those within [start, end].  Warm-up rows are present
+        # in frame (and marks_compact) for look-back access but are NOT iterated.
+        all_dates = frame["date"].unique().to_list()
+        days = tuple(sorted(d for d in all_dates if d >= start))
         # Compact marks source: one row per (asset, price-change-point), sorted for
         # efficient forward-fill lookup. Rows where market repeats are dropped so
         # the frame stays small; group_by+last in marks_on still finds the correct
-        # most-recent price for any query date.
+        # most-recent price for any query date.  Built from the full frame so
+        # warm-up carry-forward marks are available on the first trading day.
         marks_compact = (
             frame.select("date", "product_id", "sub_type", "market")
             .lazy()

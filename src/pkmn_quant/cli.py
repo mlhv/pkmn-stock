@@ -97,6 +97,75 @@ def backtest(
 
 
 @app.command()
+def walkforward(
+    strategy: str = typer.Option(..., help="Strategy name: see pkmn_quant.research.registry."),
+    start: str = typer.Option(..., help="Range start (YYYY-MM-DD)."),
+    end: str = typer.Option(..., help="Range end (YYYY-MM-DD)."),
+    is_days: int = typer.Option(180, help="In-sample window length in days."),
+    oos_days: int = typer.Option(60, help="Out-of-sample window length in days."),
+    trials: int = typer.Option(25, help="Optuna trials per fold."),
+    seed: int = typer.Option(42, help="Sampler seed for reproducibility."),
+    cash: float = typer.Option(10_000.0, help="Initial cash per fold."),
+    warmup_days: int = typer.Option(
+        120,
+        help="History days loaded before each window for signal lookbacks (observe-only).",
+    ),
+    root: Path = typer.Option(Path("."), help="Project root holding the data/ directory."),
+) -> None:
+    """Walk-forward analysis: optimize in-sample, evaluate out-of-sample."""
+    from collections.abc import Callable
+
+    from pkmn_quant.data.warehouse import Warehouse
+    from pkmn_quant.engine.costs import CostModel
+    from pkmn_quant.research.folds import Fold
+    from pkmn_quant.research.registry import REGISTRY
+    from pkmn_quant.research.report import render_markdown
+    from pkmn_quant.research.search import Params, SearchSpec, optimize_params
+    from pkmn_quant.research.walkforward import run_walkforward
+
+    entry = REGISTRY.get(strategy)
+    if entry is None:
+        raise typer.BadParameter(f"unknown strategy {strategy!r}; known: {sorted(REGISTRY)}")
+    try:
+        start_date = dt.date.fromisoformat(start)
+        end_date = dt.date.fromisoformat(end)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+    # Bind entry after None check to satisfy mypy
+    entry_checked = entry
+
+    def optimizer(fold: Fold, evaluate: Callable[[Params], float]) -> Params:
+        spec = SearchSpec(space=entry_checked.space, n_trials=trials, seed=seed)
+        return optimize_params(spec, evaluate)
+
+    result = run_walkforward(
+        warehouse=Warehouse(Paths(root=root)),
+        strategy_factory=entry_checked.factory,
+        optimizer=optimizer,
+        cost_model=CostModel(),
+        start=start_date,
+        end=end_date,
+        is_days=is_days,
+        oos_days=oos_days,
+        initial_cash=cash,
+        warmup_days=warmup_days,
+    )
+
+    run_dir = root / "data" / "results" / f"wf-{strategy}-{start}-{end}"
+    if run_dir.exists():
+        typer.echo(f"warning: overwriting existing results in {run_dir}", err=True)
+    run_dir.mkdir(parents=True, exist_ok=True)
+    result.stitched_curve.write_parquet(run_dir / "stitched_equity.parquet")
+    (run_dir / "report.md").write_text(render_markdown(result, strategy_name=strategy))
+
+    typer.echo(f"strategy: {strategy}  folds: {len(result.folds)}")
+    for key, value in result.summary.items():
+        typer.echo(f"{key}: {value:.4f}")
+    typer.echo(f"report written to {run_dir / 'report.md'}")
+
+
+@app.command()
 def version() -> None:
     """Print the pkmn-quant version."""
     from pkmn_quant import __version__

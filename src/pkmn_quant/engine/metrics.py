@@ -18,16 +18,32 @@ def summarize(equity_curve: pl.DataFrame) -> dict[str, float]:
     """Metrics from a frame with `date` and `equity` columns (sorted by date).
 
     Sharpe assumes a zero risk-free rate. CAGR is annualized and therefore
-    unreliable for curves much shorter than ~30 days.
+    unreliable for curves much shorter than ~30 days. Sortino uses standard
+    full-sample semi-deviation (square only negative returns, average over all
+    days) vs a 0% target; Calmar = CAGR / |max drawdown|.
     """
     eq = equity_curve.sort("date")["equity"]
     n = len(eq)
     if n < 2:
-        return {"total_return": 0.0, "cagr": 0.0, "max_drawdown": 0.0, "sharpe": 0.0}
+        return {
+            "total_return": 0.0,
+            "cagr": 0.0,
+            "max_drawdown": 0.0,
+            "sharpe": 0.0,
+            "sortino": 0.0,
+            "calmar": 0.0,
+        }
 
     first = float(eq[0])
     if first == 0.0:
-        return {"total_return": 0.0, "cagr": 0.0, "max_drawdown": 0.0, "sharpe": 0.0}
+        return {
+            "total_return": 0.0,
+            "cagr": 0.0,
+            "max_drawdown": 0.0,
+            "sharpe": 0.0,
+            "sortino": 0.0,
+            "calmar": 0.0,
+        }
     ratio = float(eq[-1]) / first
     total_return = ratio - 1.0
     years = (n - 1) / TRADING_DAYS_PER_YEAR
@@ -50,9 +66,23 @@ def summarize(equity_curve: pl.DataFrame) -> dict[str, float]:
         else float(cast(float, mean_val)) / std * math.sqrt(TRADING_DAYS_PER_YEAR)
     )
 
+    # Sortino: standard full-sample semi-deviation — square only negative
+    # returns, average over ALL days. Comparable to published Sortino figures
+    # (modulo mark-smoothing inflation, as with Sharpe).
+    semi_var = (daily.clip(upper_bound=0.0) ** 2).mean()
+    if semi_var is None or float(cast(float, semi_var)) == 0.0:
+        sortino = 0.0
+    else:
+        mean_ret = float(cast(float, mean_val)) if mean_val is not None else 0.0
+        sortino = mean_ret / float(cast(float, semi_var)) ** 0.5 * math.sqrt(TRADING_DAYS_PER_YEAR)
+
+    calmar = cagr / abs(max_drawdown) if max_drawdown < 0 else 0.0
+
     return {
         "total_return": float(total_return),
         "cagr": float(cagr),
         "max_drawdown": max_drawdown,
         "sharpe": sharpe,
+        "sortino": sortino,
+        "calmar": calmar,
     }
