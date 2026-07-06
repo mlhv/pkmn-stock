@@ -18,6 +18,8 @@ if TYPE_CHECKING:
 
 app = typer.Typer(no_args_is_help=True, help="Pokemon card quant toolkit.")
 
+DEFAULT_SIGNALS_CASH = 10_000.0
+
 portfolio_app = typer.Typer(no_args_is_help=True, help="Record and inspect real positions.")
 app.add_typer(portfolio_app, name="portfolio")
 
@@ -352,23 +354,33 @@ def signals(
 ) -> None:
     """Run a strategy in live mode against the latest ingested prices."""
     from pkmn_quant.data.warehouse import Warehouse
-    from pkmn_quant.live.ledger import LedgerError, ledger_path, load_portfolio
+    from pkmn_quant.live.ledger import LedgerError, load_portfolio
     from pkmn_quant.live.report import render_signals_markdown, signals_to_json
     from pkmn_quant.live.signals import SignalsError, generate_signals
 
     if portfolio_flag and cash is not None:
         raise typer.BadParameter("--cash and --portfolio are mutually exclusive")
-    warehouse = Warehouse(Paths(root=root))
     results_dir = root / "data" / "results"
     try:
-        pf = (
-            load_portfolio(ledger_path(root), warehouse.load_products()) if portfolio_flag else None
+        if portfolio_flag:
+            # _portfolio_deps guards against a missing warehouse and returns
+            # (warehouse, products, ledger_path); use it so missing-warehouse
+            # gets a clean BadParameter instead of a raw FileNotFoundError.
+            warehouse, products, lpath = _portfolio_deps(root)
+            pf = load_portfolio(lpath, products)
+        else:
+            warehouse = Warehouse(Paths(root=root))
+            pf = None
+        # None when --portfolio so generate_signals' exactly-one check isn't tripped
+        # by the default cash value falling through; default applied only in cash mode.
+        resolved_cash = (
+            None if portfolio_flag else (cash if cash is not None else DEFAULT_SIGNALS_CASH)
         )
         report = generate_signals(
             warehouse=warehouse,
             strategy_name=strategy,
             results_dir=results_dir,
-            cash=None if portfolio_flag else (cash if cash is not None else 10_000.0),
+            cash=resolved_cash,
             portfolio=pf,
             warmup_days=warmup_days,
         )

@@ -166,4 +166,23 @@ def test_signals_portfolio_and_cash_conflict(tmp_path: Path) -> None:
         ],
     )
     assert result.exit_code != 0
+    assert "mutually exclusive" in result.output
+    assert result.exception is None or isinstance(result.exception, SystemExit)
+
+
+def test_signals_portfolio_missing_warehouse(tmp_path: Path) -> None:
+    """--portfolio with no warehouse at --root exits nonzero with a clean message."""
+    result = CliRunner().invoke(
+        app,
+        [
+            "signals",
+            "--strategy",
+            "sealed-accumulation",
+            "--portfolio",
+            "--root",
+            str(tmp_path),
+        ],
+    )
+    assert result.exit_code != 0
+    assert "no warehouse" in result.output
     assert result.exception is None or isinstance(result.exception, SystemExit)
