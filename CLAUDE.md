@@ -3,16 +3,17 @@
 Algo-trading research system for Pokemon card prices (TCGplayer data via
 tcgcsv.com). Design spec: `docs/superpowers/specs/2026-06-09-pkmn-quant-design.md`.
 
-## Status (2026-07-04)
+## Status (2026-07-05)
 
-- Plans 1-3 are merged to main. 136 tests. Plan 3 (research layer) added three
-  strategies, the optuna walk-forward harness, `pkmn walkforward`, and
-  observe-only `warmup_days` on the engine (default 0 preserves goldens).
+- Plans 1-4 are merged to main. 152 tests. Plan 4 closed out the v1 spec:
+  `walkforward.json` artifacts, `pkmn signals` (live recommendations carrying
+  the strategy's OOS record), the Streamlit dashboard, and the README.
 - Walk-forward findings for the README live in
   `docs/research-findings-2026-07.md` — headline: nothing beat buy-and-hold
   sealed (+151% over the OOS span); sealed-accumulation +13.6% stitched OOS
   was the only positive strategy.
-- Next: Plan 4 (live signals + Streamlit dashboard + README).
+- Next: future-work backlog (scheduled ingestion/signals, live position
+  tracking, more data sources) — no active plan.
 
 ## Commands
 
@@ -23,6 +24,10 @@ uv run ruff check . && uv run ruff format --check . && uv run mypy
                              # lint + format + strict typecheck (src/ only)
 uv run pkmn ingest --start 2026-07-01 --end 2026-07-31   # extend price history
 uv run pkmn backtest --start 2024-03-01 --end 2026-06-30 # benchmark backtest
+uv run pkmn walkforward --strategy sealed-accumulation \
+    --start 2024-03-01 --end 2026-06-30 --trials 15      # research run
+uv run pkmn signals --strategy sealed-accumulation       # live recommendations
+uv run --group dashboard streamlit run app/dashboard.py  # results explorer
 ```
 
 All four gates must pass before every commit. CI runs them with
@@ -38,7 +43,13 @@ uv.lock together).
 - `src/pkmn_quant/strategies/` — Strategy implementations: buy_and_hold,
   sealed_accumulation, dip_buyer, momentum.
 - `src/pkmn_quant/research/` — walk-forward layer: folds, seeded optuna search,
-  runner/stitcher, strategy registry, markdown report.
+  runner/stitcher, strategy registry, markdown report, `walkforward.json`
+  artifacts (the research → live bridge).
+- `src/pkmn_quant/live/` — `pkmn signals`: one on_bar at the latest warehouse
+  date using the last fold's params from the latest walk-forward artifact;
+  markdown + JSON reports that carry the strategy's OOS record.
+- `app/dashboard.py` — Streamlit results explorer (dependency group
+  `dashboard`; not mypy'd, not imported by src/ or tests — demo tool only).
 - `data/` — gitignored. Contains 874 ingested days (2024-02-08..2026-06-30,
   ~2.9M price rows) plus raw archives. Do not delete; re-ingest is ~40 min.
 
