@@ -400,6 +400,95 @@ def signals(
 
 
 @app.command()
+def daily(
+    strategy: str = typer.Option("sealed-accumulation", help="Strategy to run against the ledger."),
+    skip_ingest: bool = typer.Option(
+        False, "--skip-ingest", help="Skip fetching new price days (tests/offline)."
+    ),
+    root: Path = typer.Option(Path("."), help="Project root holding the data/ directory."),
+) -> None:
+    """The morning loop: ingest missing days, run signals against the ledger,
+    write artifacts, notify when actionable. Designed for launchd/cron."""
+    import json as _json
+
+    from pkmn_quant.live import notify
+    from pkmn_quant.live.ledger import LedgerError
+    from pkmn_quant.live.report import render_signals_markdown, signals_to_json
+    from pkmn_quant.live.signals import SignalsError, generate_signals
+
+    today = dt.date.today()
+    out_dir = root / "data" / "results" / f"daily-{today.isoformat()}"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    ingest_error: str | None = None
+    if not skip_ingest:
+        try:
+            from pkmn_quant.data.warehouse import Warehouse as _Warehouse
+
+            warehouse_for_days = _Warehouse(Paths(root=root))
+            days = warehouse_for_days.stored_days()
+            yesterday = today - dt.timedelta(days=1)
+            if days and days[-1] < yesterday:
+                ingest_range(Paths(root=root), days[-1] + dt.timedelta(days=1), yesterday)
+        except Exception as exc:  # scheduled run must never die silently
+            ingest_error = f"ingest failed: {exc}"
+
+    def finish(
+        status: str, error: str | None, n_buys: int, n_sells: int, as_of: str | None
+    ) -> None:
+        (out_dir / "daily.json").write_text(
+            _json.dumps(
+                {
+                    "date": today.isoformat(),
+                    "strategy": strategy,
+                    "status": status,
+                    "error": error,
+                    "n_buys": n_buys,
+                    "n_sells": n_sells,
+                    "as_of": as_of,
+                },
+                indent=2,
+            )
+            + "\n"
+        )
+
+    try:
+        warehouse, products, lpath = _portfolio_deps(root)
+        from pkmn_quant.live.ledger import load_portfolio
+
+        pf = load_portfolio(lpath, products)
+        report = generate_signals(
+            warehouse=warehouse,
+            strategy_name=strategy,
+            results_dir=root / "data" / "results",
+            portfolio=pf,
+        )
+    except (SignalsError, LedgerError, typer.BadParameter) as exc:
+        finish("error", str(exc), 0, 0, None)
+        notify.send_notification("pkmn daily FAILED", str(exc))
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(1) from exc
+
+    (out_dir / "signals.md").write_text(render_signals_markdown(report))
+    (out_dir / "signals.json").write_text(signals_to_json(report))
+    n_buys = sum(1 for r in report.recommendations if r.action == "BUY")
+    n_sells = sum(1 for r in report.recommendations if r.action == "SELL")
+    finish(
+        "error" if ingest_error else "ok", ingest_error, n_buys, n_sells, report.as_of.isoformat()
+    )
+
+    if n_buys + n_sells > 0:
+        notify.send_notification(
+            "pkmn daily", f"{strategy}: {n_buys} buys, {n_sells} sells — see dashboard"
+        )
+    if ingest_error:
+        notify.send_notification("pkmn daily: ingest problem", ingest_error)
+        typer.echo(ingest_error, err=True)
+        raise typer.Exit(1)
+    typer.echo(f"daily run written to {out_dir}")
+
+
+@app.command()
 def version() -> None:
     """Print the pkmn-quant version."""
     from pkmn_quant import __version__
