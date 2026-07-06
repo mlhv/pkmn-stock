@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime as dt
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import polars as pl
 import typer
@@ -11,7 +12,150 @@ import typer
 from pkmn_quant.config import Paths
 from pkmn_quant.data.ingest import ingest_range
 
+if TYPE_CHECKING:
+    from pkmn_quant.data.warehouse import Warehouse
+
 app = typer.Typer(no_args_is_help=True, help="Pokemon card quant toolkit.")
+
+portfolio_app = typer.Typer(no_args_is_help=True, help="Record and inspect real positions.")
+app.add_typer(portfolio_app, name="portfolio")
+
+
+def _portfolio_deps(root: Path) -> tuple[Warehouse, pl.DataFrame, Path]:
+    """(warehouse, products, ledger file) — shared by the portfolio subcommands."""
+    from pkmn_quant.data.warehouse import Warehouse
+    from pkmn_quant.live.ledger import ledger_path
+
+    warehouse = Warehouse(Paths(root=root))
+    return warehouse, warehouse.load_products(), ledger_path(root)
+
+
+def _append_or_die(path: Path, event: dict[str, object], products: pl.DataFrame) -> None:
+    from pkmn_quant.live.ledger import LedgerError, append_event
+
+    try:
+        append_event(path, event, products)
+    except LedgerError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    typer.echo(f"recorded: {event}")
+
+
+@portfolio_app.command()
+def deposit(
+    amount: float = typer.Option(..., help="Cash added to the portfolio."),
+    date: str | None = typer.Option(None, help="Event date (YYYY-MM-DD); default today."),
+    root: Path = typer.Option(Path("."), help="Project root holding the data/ directory."),
+) -> None:
+    """Record a cash deposit."""
+    _, products, path = _portfolio_deps(root)
+    day = date or dt.date.today().isoformat()
+    _append_or_die(path, {"date": day, "kind": "deposit", "amount": amount}, products)
+
+
+@portfolio_app.command()
+def withdraw(
+    amount: float = typer.Option(..., help="Cash removed from the portfolio."),
+    date: str | None = typer.Option(None, help="Event date (YYYY-MM-DD); default today."),
+    root: Path = typer.Option(Path("."), help="Project root holding the data/ directory."),
+) -> None:
+    """Record a cash withdrawal."""
+    _, products, path = _portfolio_deps(root)
+    day = date or dt.date.today().isoformat()
+    _append_or_die(path, {"date": day, "kind": "withdraw", "amount": amount}, products)
+
+
+def _trade(
+    kind: str,
+    product_id: int,
+    sub_type: str,
+    qty: int,
+    price: float,
+    fees: float,
+    date: str | None,
+    root: Path,
+) -> None:
+    _, products, path = _portfolio_deps(root)
+    day = date or dt.date.today().isoformat()
+    _append_or_die(
+        path,
+        {
+            "date": day,
+            "kind": kind,
+            "product_id": product_id,
+            "sub_type": sub_type,
+            "qty": qty,
+            "price": price,
+            "fees": fees,
+        },
+        products,
+    )
+
+
+@portfolio_app.command()
+def buy(
+    product_id: int = typer.Option(..., help="TCGplayer product id (see signals output)."),
+    sub_type: str = typer.Option("Normal", help="Printing sub-type, e.g. Normal/Holofoil."),
+    qty: int = typer.Option(..., help="Units bought."),
+    price: float = typer.Option(..., help="Per-unit price actually paid."),
+    fees: float = typer.Option(0.0, help="Total non-price cost (shipping etc.)."),
+    date: str | None = typer.Option(None, help="Trade date (YYYY-MM-DD); default today."),
+    root: Path = typer.Option(Path("."), help="Project root holding the data/ directory."),
+) -> None:
+    """Record a real purchase."""
+    _trade("buy", product_id, sub_type, qty, price, fees, date, root)
+
+
+@portfolio_app.command()
+def sell(
+    product_id: int = typer.Option(..., help="TCGplayer product id."),
+    sub_type: str = typer.Option("Normal", help="Printing sub-type."),
+    qty: int = typer.Option(..., help="Units sold."),
+    price: float = typer.Option(..., help="Per-unit sale price."),
+    fees: float = typer.Option(0.0, help="Total fees + shipping kept by the marketplace."),
+    date: str | None = typer.Option(None, help="Trade date (YYYY-MM-DD); default today."),
+    root: Path = typer.Option(Path("."), help="Project root holding the data/ directory."),
+) -> None:
+    """Record a real sale."""
+    _trade("sell", product_id, sub_type, qty, price, fees, date, root)
+
+
+@portfolio_app.command()
+def show(
+    root: Path = typer.Option(Path("."), help="Project root holding the data/ directory."),
+) -> None:
+    """Positions, cash, and P&L valued at the latest warehouse marks."""
+    from pkmn_quant.engine.data import MarketData
+    from pkmn_quant.live.ledger import LedgerError, load_portfolio, make_snapshot
+
+    warehouse, products, path = _portfolio_deps(root)
+    try:
+        pf = load_portfolio(path, products)
+        if not pf.positions and pf.cash == 0.0:
+            typer.echo("portfolio is empty — record a deposit first")
+            return
+        days = warehouse.stored_days()
+        if not days:
+            raise LedgerError("warehouse has no price data; run `pkmn ingest` first")
+        latest = days[-1]
+        market = MarketData.from_warehouse(warehouse, latest, latest, warmup_days=365)
+        names = {
+            int(r["product_id"]): str(r["name"])
+            for r in products.select("product_id", "name").iter_rows(named=True)
+        }
+        snap = make_snapshot(pf, market.marks_on(latest), names)
+    except LedgerError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+    typer.echo(f"as of {latest}")
+    for r in snap.positions:
+        typer.echo(
+            f"{r.product_id:>8}  {r.name} ({r.sub_type})  x{r.quantity}"
+            f"  avg ${r.avg_cost:.2f}  mark ${r.mark:.2f}"
+            f"  unrealized ${r.unrealized_pnl:+.2f}"
+        )
+    typer.echo(f"cash: ${snap.cash:.2f}")
+    typer.echo(f"realized P&L: ${snap.realized_pnl:+.2f}")
+    typer.echo(f"equity: ${snap.equity:.2f}")
 
 
 @app.command()
