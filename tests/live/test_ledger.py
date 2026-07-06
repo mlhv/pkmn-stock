@@ -178,24 +178,33 @@ def test_ledger_path_helper(tmp_path: Path) -> None:
 
 
 def test_withdraw_float_residue_roundtrip(tmp_path: Path) -> None:
-    """deposit 1000; buy 1@5.03 fees 0.5; sell 1@5.03 fees 0.5;
-    cash after round-trip = 1000 - 5.03 - 0.5 + 5.03 - 0.5 = 999.0 (exact),
-    but with non-round fees a float-residue scenario can arise.
-    Use fees that produce binary fraction dust: buy 1@3.10 fees 0.07, sell same.
-    net cash = 1000 - 3.10 - 0.07 + 3.10 - 0.07 = 999.86; withdraw displayed 999.86 must succeed."""
+    """Deposit 250.57; buy 5@16.97 fees 1.45; sell 5@16.97 fees 1.45.
+
+    Hand-derivation:
+      cash after buy  = 250.57 - (5*16.97 + 1.45) = 250.57 - 86.30 = 164.27
+      cash after sell = 164.27 + (5*16.97 - 1.45) = 164.27 + 83.40 = 247.67
+      IEEE 754 actual = 247.66999999999996 (float residue -2.84e-14)
+      displayed       = round(247.66999999999996, 2) = 247.67
+      cash after withdraw 247.67 = 247.66999999999996 - 247.67 = -2.84e-14
+
+    The pre-fix code tested `if pf.cash < 0` and raised; the clamp now zeroes
+    any strictly-negative residue within half a cent.  The final assertion is
+    exact (== 0.0) because the clamp guarantees it — approx would pass even
+    without the clamp.
+    """
     path = tmp_path / "ledger.jsonl"
     write_lines(
         path,
         [
-            '{"date": "2026-07-01", "kind": "deposit", "amount": 1000.0}',
+            '{"date": "2026-07-01", "kind": "deposit", "amount": 250.57}',
             '{"date": "2026-07-02", "kind": "buy", "product_id": 1, "sub_type": "Normal",'
-            ' "qty": 1, "price": 3.10, "fees": 0.07}',
+            ' "qty": 5, "price": 16.97, "fees": 1.45}',
             '{"date": "2026-07-03", "kind": "sell", "product_id": 1, "sub_type": "Normal",'
-            ' "qty": 1, "price": 3.10, "fees": 0.07}',
+            ' "qty": 5, "price": 16.97, "fees": 1.45}',
         ],
     )
     pf = load_portfolio(path, PRODUCTS)
-    displayed = round(pf.cash, 2)  # what user sees in the UI
+    displayed = round(pf.cash, 2)  # what user sees in the UI; == 247.67
     # Now append a withdraw for the displayed amount — must not raise.
     append_event(
         path,
@@ -203,8 +212,8 @@ def test_withdraw_float_residue_roundtrip(tmp_path: Path) -> None:
         PRODUCTS,
     )
     pf2 = load_portfolio(path, PRODUCTS)
-    # Cash is 0 (or clamped to 0 if float dust remains).
-    assert pf2.cash == pytest.approx(0.0, abs=0.005)
+    # The clamp guarantees exactly 0.0, not merely approximately 0.0.
+    assert pf2.cash == 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -300,4 +309,22 @@ def test_over_withdraw_raises_ledger_error(tmp_path: Path) -> None:
         ],
     )
     with pytest.raises(LedgerError, match="line 2"):
+        load_portfolio(path, PRODUCTS)
+
+
+def test_withdraw_exact_half_cent_boundary_raises(tmp_path: Path) -> None:
+    """deposit 0.005; withdraw 0.01 → cash == -0.005 exactly.
+
+    Exactly -0.005 is treated as an error (not clamped), since it is a full
+    half-cent short and is reachable by mis-entry rather than float dust.
+    """
+    path = tmp_path / "ledger.jsonl"
+    write_lines(
+        path,
+        [
+            '{"date": "2026-07-01", "kind": "deposit", "amount": 0.005}',
+            '{"date": "2026-07-02", "kind": "withdraw", "amount": 0.01}',
+        ],
+    )
+    with pytest.raises(LedgerError, match="negative"):
         load_portfolio(path, PRODUCTS)

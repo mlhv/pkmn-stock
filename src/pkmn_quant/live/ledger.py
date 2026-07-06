@@ -23,6 +23,8 @@ import polars as pl
 from pkmn_quant.engine.portfolio import Asset, Fill, Portfolio
 
 KINDS = frozenset({"deposit", "withdraw", "buy", "sell"})
+_DEPOSIT_WITHDRAW_KEYS = frozenset({"date", "kind", "amount"})
+_TRADE_KEYS = frozenset({"date", "kind", "product_id", "sub_type", "qty", "price", "fees"})
 
 
 class LedgerError(Exception):
@@ -82,9 +84,6 @@ def _parse_line(line_no: int, raw: str) -> LedgerEvent:
         raise fail(f"missing/invalid date or kind ({exc!r})") from exc
     if kind not in KINDS:
         raise fail(f"unknown kind {kind!r}; choose from {sorted(KINDS)}")
-
-    _DEPOSIT_WITHDRAW_KEYS = frozenset({"date", "kind", "amount"})
-    _TRADE_KEYS = frozenset({"date", "kind", "product_id", "sub_type", "qty", "price", "fees"})
 
     if kind in ("deposit", "withdraw"):
         extra = set(obj.keys()) - _DEPOSIT_WITHDRAW_KEYS
@@ -155,10 +154,10 @@ def _replay(events: list[LedgerEvent], products: pl.DataFrame) -> Portfolio:
                 pf.apply(fill)
             except ValueError as exc:  # oversell from Portfolio._sell
                 raise fail(str(exc)) from exc
-        # Clamp float dust (within half-cent) to zero so displayed balances round-trip cleanly.
+        # Clamp float dust (strictly within half-cent) to zero for clean round-trips.
         if -0.005 < pf.cash < 0.0:
             pf.cash = 0.0
-        if pf.cash < -0.005:
+        if pf.cash <= -0.005:
             raise fail(f"cash goes negative ({pf.cash:.2f}) — mis-entered ledger?")
     return pf
 
