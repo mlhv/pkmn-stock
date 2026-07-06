@@ -48,6 +48,26 @@ def render_signals_markdown(report: SignalReport) -> str:
             f" | ${r.market_price:.2f} | ${r.notional:.2f} |"
             for r in report.recommendations
         ]
+    if report.portfolio_snapshot is not None:
+        snap = report.portfolio_snapshot
+        lines += ["", "## Portfolio", ""]
+        exits = [r for r in report.recommendations if r.action == "SELL"]
+        for r in exits:
+            assert r.avg_cost is not None and r.gain_pct is not None
+            lines.append(
+                f"- EXIT {r.name}: {r.quantity} @ mark ${r.market_price:.2f},"
+                f" basis ${r.avg_cost:.2f}, gain {r.gain_pct:+.1%}"
+            )
+        for p in snap.positions:
+            lines.append(
+                f"- HOLD {p.name} ({p.sub_type}) x{p.quantity}: avg ${p.avg_cost:.2f},"
+                f" mark ${p.mark:.2f}, unrealized ${p.unrealized_pnl:+.2f}"
+            )
+        lines += [
+            f"- cash: ${snap.cash:.2f}",
+            f"- realized P&L: ${snap.realized_pnl:+.2f}",
+            f"- equity: ${snap.equity:.2f}",
+        ]
     lines += [
         "",
         "Not financial advice; thin-market marks, ~12-15% round-trip costs.",

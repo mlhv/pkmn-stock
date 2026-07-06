@@ -56,3 +56,39 @@ def test_json_round_trips() -> None:
     assert raw["recommendations"][0]["name"] == "Crashed Box"
     assert raw["recommendations"][0]["notional"] == 200.0
     assert raw["wf_summary"]["overfitting_gap"] == 0.0476
+
+
+def test_markdown_renders_portfolio_section_and_exits() -> None:
+    from pkmn_quant.live.ledger import PositionView, Snapshot
+
+    sell = Recommendation(
+        action="SELL",
+        product_id=1,
+        sub_type="Normal",
+        name="Crashed Box",
+        quantity=2,
+        market_price=100.0,
+        notional=200.0,
+        avg_cost=60.0,
+        gain_pct=100.0 / 60.0 - 1.0,
+    )
+    snap = Snapshot(
+        cash=500.0,
+        realized_pnl=25.0,
+        equity=700.0,
+        positions=[PositionView(1, "Normal", "Crashed Box", 2, 60.0, 100.0, 80.0)],
+    )
+    report = _report([sell])
+    report = SignalReport(
+        as_of=report.as_of,
+        strategy=report.strategy,
+        params=report.params,
+        wf_summary=report.wf_summary,
+        wf_run_dir=report.wf_run_dir,
+        recommendations=[sell],
+        portfolio_snapshot=snap,
+    )
+    md = render_signals_markdown(report)
+    assert "## Portfolio" in md
+    assert "$500.00" in md  # cash
+    assert "+66.7%" in md  # exit gain line

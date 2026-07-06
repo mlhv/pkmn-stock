@@ -6,6 +6,10 @@ latest walk-forward run (the most recently optimized regime); every report
 carries that run's OOS summary so a recommendation is never separated from
 its honest track record. Positions are empty and cash is hypothetical:
 recommendations answer "what would this strategy enter today".
+
+Portfolio mode: pass a real Portfolio (from the ledger) so the strategy's
+own exit rule emits SELL recommendations for real holdings. Cash mode (the
+default, pass cash=) and portfolio mode are mutually exclusive.
 """
 
 from __future__ import annotations
@@ -16,13 +20,21 @@ from pathlib import Path
 
 from pkmn_quant.data.warehouse import Warehouse
 from pkmn_quant.engine.data import MarketData
+from pkmn_quant.engine.portfolio import Portfolio, Position
 from pkmn_quant.engine.strategy import Context
+from pkmn_quant.live.ledger import Snapshot, make_snapshot
 from pkmn_quant.research.artifacts import find_latest_wf_run, load_walkforward_json
 from pkmn_quant.research.registry import REGISTRY
 
 Params = dict[str, float | int]
 
 DEFAULT_WARMUP_DAYS = 365
+
+# Strategies whose exit rules read only Context (positions.avg_cost + marks).
+# dip-buyer / xs-momentum keep hold-day clocks in strategy-internal state a
+# single live bar cannot reconstruct (dip-buyer treats unknown entries as
+# overdue and would dump every holding). Research plan adds Position.opened_on.
+PORTFOLIO_SAFE_STRATEGIES = frozenset({"sealed-accumulation"})
 
 
 class SignalsError(Exception):
@@ -38,6 +50,8 @@ class Recommendation:
     quantity: int
     market_price: float
     notional: float
+    avg_cost: float | None = None  # SELLs in portfolio mode
+    gain_pct: float | None = None
 
 
 @dataclass(frozen=True)
@@ -48,18 +62,29 @@ class SignalReport:
     wf_summary: dict[str, float]
     wf_run_dir: str
     recommendations: list[Recommendation]
+    portfolio_snapshot: Snapshot | None = None
 
 
 def generate_signals(
     warehouse: Warehouse,
     strategy_name: str,
-    cash: float,
     results_dir: Path,
+    cash: float | None = None,
+    portfolio: Portfolio | None = None,
     warmup_days: int = DEFAULT_WARMUP_DAYS,
 ) -> SignalReport:
     entry = REGISTRY.get(strategy_name)
     if entry is None:
         raise SignalsError(f"unknown strategy {strategy_name!r}; known: {sorted(REGISTRY)}")
+
+    if (cash is None) == (portfolio is None):
+        raise SignalsError("provide either cash (hypothetical) or portfolio (ledger), not both")
+    if portfolio is not None and strategy_name not in PORTFOLIO_SAFE_STRATEGIES:
+        raise SignalsError(
+            f"{strategy_name!r} cannot run against real positions: its exit rule"
+            f" needs entry dates the live Context does not carry yet"
+            f" (supported: {sorted(PORTFOLIO_SAFE_STRATEGIES)})"
+        )
 
     run_dir = find_latest_wf_run(results_dir, strategy_name)
     if run_dir is None:
@@ -94,12 +119,24 @@ def generate_signals(
             f" re-run `pkmn walkforward --strategy {strategy_name} ...`"
         ) from exc
     strategy.reset()
+
+    if portfolio is not None:
+        ctx_cash = portfolio.cash
+        ctx_positions = {
+            a: Position(quantity=p.quantity, avg_cost=p.avg_cost)
+            for a, p in portfolio.positions.items()
+        }
+    else:
+        assert cash is not None
+        ctx_cash = cash
+        ctx_positions = {}
+
     ctx = Context(
         today=latest,
         history=market.history_until(latest),
         products=warehouse.load_products(),
-        positions={},
-        cash=cash,
+        positions=ctx_positions,
+        cash=ctx_cash,
         marks=market.marks_on(latest),
     )
     orders = strategy.on_bar(ctx)
@@ -115,6 +152,8 @@ def generate_signals(
         if mark is None:  # unreachable: strategies only order marked assets
             continue
         qty = abs(order.quantity)
+        held = portfolio.positions.get(order.asset) if portfolio is not None else None
+        avg_cost = held.avg_cost if held is not None and order.quantity < 0 else None
         recommendations.append(
             Recommendation(
                 action="BUY" if order.quantity > 0 else "SELL",
@@ -124,8 +163,12 @@ def generate_signals(
                 quantity=qty,
                 market_price=mark,
                 notional=round(qty * mark, 2),
+                avg_cost=avg_cost,
+                gain_pct=(mark / avg_cost - 1.0) if avg_cost is not None else None,
             )
         )
+
+    snapshot = make_snapshot(portfolio, marks, names) if portfolio is not None else None
 
     return SignalReport(
         as_of=latest,
@@ -134,4 +177,5 @@ def generate_signals(
         wf_summary=run.summary,
         wf_run_dir=str(run_dir),
         recommendations=recommendations,
+        portfolio_snapshot=snapshot,
     )
