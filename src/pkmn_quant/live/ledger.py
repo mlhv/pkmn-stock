@@ -83,7 +83,13 @@ def _parse_line(line_no: int, raw: str) -> LedgerEvent:
     if kind not in KINDS:
         raise fail(f"unknown kind {kind!r}; choose from {sorted(KINDS)}")
 
+    _DEPOSIT_WITHDRAW_KEYS = frozenset({"date", "kind", "amount"})
+    _TRADE_KEYS = frozenset({"date", "kind", "product_id", "sub_type", "qty", "price", "fees"})
+
     if kind in ("deposit", "withdraw"):
+        extra = set(obj.keys()) - _DEPOSIT_WITHDRAW_KEYS
+        if extra:
+            raise fail(f"unexpected key(s) for {kind!r}: {', '.join(sorted(extra))}")
         try:
             amount = float(obj["amount"])
         except (KeyError, TypeError, ValueError) as exc:
@@ -92,9 +98,15 @@ def _parse_line(line_no: int, raw: str) -> LedgerEvent:
             raise fail(f"amount must be positive, got {amount}")
         return LedgerEvent(line_no=line_no, day=day, kind=kind, amount=amount)
 
+    extra = set(obj.keys()) - _TRADE_KEYS
+    if extra:
+        raise fail(f"unexpected key(s) for {kind!r}: {', '.join(sorted(extra))}")
     try:
         asset = Asset(product_id=int(obj["product_id"]), sub_type=str(obj["sub_type"]))
-        qty = int(obj["qty"])
+        raw_qty = obj["qty"]
+        if isinstance(raw_qty, float) and not raw_qty.is_integer():
+            raise fail(f"qty must be a whole number, got {raw_qty}")
+        qty = int(raw_qty)
         price = float(obj["price"])
         fees = float(obj.get("fees", 0.0))
     except (KeyError, TypeError, ValueError) as exc:
@@ -143,7 +155,10 @@ def _replay(events: list[LedgerEvent], products: pl.DataFrame) -> Portfolio:
                 pf.apply(fill)
             except ValueError as exc:  # oversell from Portfolio._sell
                 raise fail(str(exc)) from exc
-        if pf.cash < 0:
+        # Clamp float dust (within half-cent) to zero so displayed balances round-trip cleanly.
+        if -0.005 < pf.cash < 0.0:
+            pf.cash = 0.0
+        if pf.cash < -0.005:
             raise fail(f"cash goes negative ({pf.cash:.2f}) — mis-entered ledger?")
     return pf
 
@@ -187,7 +202,7 @@ def make_snapshot(pf: Portfolio, marks: dict[Asset, float], names: dict[int, str
     if missing:
         raise LedgerError(
             f"no warehouse mark for held asset(s): "
-            f"{[f'{a.product_id}/{a.sub_type}' for a in missing]}"
+            f"{', '.join(f'{a.product_id}/{a.sub_type}' for a in missing)}"
         )
     value = sum(r.mark * r.quantity for r in rows)
     return Snapshot(
