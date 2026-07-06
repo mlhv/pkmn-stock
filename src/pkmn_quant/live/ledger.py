@@ -14,6 +14,7 @@ more than it holds or spends cash it does not have is mis-entered.
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -93,6 +94,8 @@ def _parse_line(line_no: int, raw: str) -> LedgerEvent:
             amount = float(obj["amount"])
         except (KeyError, TypeError, ValueError) as exc:
             raise fail(f"missing/invalid amount ({exc!r})") from exc
+        if not math.isfinite(amount):
+            raise fail(f"amount must be finite, got {amount}")
         if amount <= 0:
             raise fail(f"amount must be positive, got {amount}")
         return LedgerEvent(line_no=line_no, day=day, kind=kind, amount=amount)
@@ -112,8 +115,12 @@ def _parse_line(line_no: int, raw: str) -> LedgerEvent:
         raise fail(f"missing/invalid trade field ({exc!r})") from exc
     if qty <= 0:
         raise fail(f"qty must be positive, got {qty}")
+    if not math.isfinite(price):
+        raise fail(f"price must be finite, got {price}")
     if price <= 0:
         raise fail(f"price must be positive, got {price}")
+    if not math.isfinite(fees):
+        raise fail(f"fees must be finite, got {fees}")
     if fees < 0:
         raise fail(f"fees must be non-negative, got {fees}")
     return LedgerEvent(

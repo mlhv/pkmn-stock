@@ -312,6 +312,50 @@ def test_over_withdraw_raises_ledger_error(tmp_path: Path) -> None:
         load_portfolio(path, PRODUCTS)
 
 
+# ---------------------------------------------------------------------------
+# Fix 5: NaN/inf values are rejected before they can poison cash or positions
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("line", "match"),
+    [
+        (
+            '{"date": "2026-07-01", "kind": "deposit", "amount": NaN}',
+            "finite",
+        ),
+        (
+            '{"date": "2026-07-01", "kind": "deposit", "amount": Infinity}',
+            "finite",
+        ),
+        (
+            '{"date": "2026-07-01", "kind": "deposit", "amount": 1000.0}\n'
+            '{"date": "2026-07-02", "kind": "buy", "product_id": 1, "sub_type": "Normal",'
+            ' "qty": 1, "price": NaN, "fees": 0.0}',
+            "finite",
+        ),
+        (
+            '{"date": "2026-07-01", "kind": "deposit", "amount": 1000.0}\n'
+            '{"date": "2026-07-02", "kind": "buy", "product_id": 1, "sub_type": "Normal",'
+            ' "qty": 1, "price": 1.0, "fees": NaN}',
+            "finite",
+        ),
+    ],
+    ids=["nan_amount", "inf_amount", "nan_price", "nan_fees"],
+)
+def test_nonfinite_values_rejected(tmp_path: Path, line: str, match: str) -> None:
+    """NaN and Inf values must be caught by math.isfinite before they silently corrupt state.
+
+    Python's json.loads accepts NaN/Infinity as non-standard JSON extensions (JSON5-ish),
+    so the line reaches _parse_line and must be rejected by the isfinite guard.
+    """
+    path = tmp_path / "ledger.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(line + "\n")
+    with pytest.raises(LedgerError, match=match):
+        load_portfolio(path, PRODUCTS)
+
+
 def test_withdraw_exact_half_cent_boundary_raises(tmp_path: Path) -> None:
     """deposit 0.005; withdraw 0.01 → cash == -0.005 exactly.
 

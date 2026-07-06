@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import json
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -26,7 +27,10 @@ def _portfolio_deps(root: Path) -> tuple[Warehouse, pl.DataFrame, Path]:
     from pkmn_quant.data.warehouse import Warehouse
     from pkmn_quant.live.ledger import ledger_path
 
-    warehouse = Warehouse(Paths(root=root))
+    paths = Paths(root=root)
+    warehouse = Warehouse(paths)
+    if not paths.products.exists():
+        raise typer.BadParameter(f"no warehouse at {root}; run 'pkmn ingest' first")
     return warehouse, warehouse.load_products(), ledger_path(root)
 
 
@@ -37,7 +41,7 @@ def _append_or_die(path: Path, event: dict[str, object], products: pl.DataFrame)
         append_event(path, event, products)
     except LedgerError as exc:
         raise typer.BadParameter(str(exc)) from exc
-    typer.echo(f"recorded: {event}")
+    typer.echo(f"recorded: {json.dumps(event)}")
 
 
 @portfolio_app.command()
@@ -48,7 +52,10 @@ def deposit(
 ) -> None:
     """Record a cash deposit."""
     _, products, path = _portfolio_deps(root)
-    day = date or dt.date.today().isoformat()
+    try:
+        day = dt.date.fromisoformat(date).isoformat() if date else dt.date.today().isoformat()
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
     _append_or_die(path, {"date": day, "kind": "deposit", "amount": amount}, products)
 
 
@@ -60,7 +67,10 @@ def withdraw(
 ) -> None:
     """Record a cash withdrawal."""
     _, products, path = _portfolio_deps(root)
-    day = date or dt.date.today().isoformat()
+    try:
+        day = dt.date.fromisoformat(date).isoformat() if date else dt.date.today().isoformat()
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
     _append_or_die(path, {"date": day, "kind": "withdraw", "amount": amount}, products)
 
 
@@ -75,7 +85,10 @@ def _trade(
     root: Path,
 ) -> None:
     _, products, path = _portfolio_deps(root)
-    day = date or dt.date.today().isoformat()
+    try:
+        day = dt.date.fromisoformat(date).isoformat() if date else dt.date.today().isoformat()
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
     _append_or_die(
         path,
         {
@@ -126,18 +139,21 @@ def show(
     """Positions, cash, and P&L valued at the latest warehouse marks."""
     from pkmn_quant.engine.data import MarketData
     from pkmn_quant.live.ledger import LedgerError, load_portfolio, make_snapshot
+    from pkmn_quant.live.signals import DEFAULT_WARMUP_DAYS
 
     warehouse, products, path = _portfolio_deps(root)
     try:
         pf = load_portfolio(path, products)
-        if not pf.positions and pf.cash == 0.0:
+        if not pf.positions and pf.cash == 0.0 and pf.realized_pnl == 0.0:
             typer.echo("portfolio is empty — record a deposit first")
             return
         days = warehouse.stored_days()
         if not days:
             raise LedgerError("warehouse has no price data; run `pkmn ingest` first")
         latest = days[-1]
-        market = MarketData.from_warehouse(warehouse, latest, latest, warmup_days=365)
+        market = MarketData.from_warehouse(
+            warehouse, latest, latest, warmup_days=DEFAULT_WARMUP_DAYS
+        )
         names = {
             int(r["product_id"]): str(r["name"])
             for r in products.select("product_id", "name").iter_rows(named=True)
