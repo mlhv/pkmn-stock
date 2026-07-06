@@ -31,3 +31,12 @@ def test_render_markdown_contains_fold_table_and_summary() -> None:
     assert "2024-06-29" in md  # fold OOS start appears in table
     assert "overfitting_gap" in md
     assert "0.4" in md
+
+
+def test_params_formatted_compactly() -> None:
+    from pkmn_quant.research.report import format_params
+
+    assert format_params({"min_drawdown": 0.3287900192959751, "min_age_days": 33}) == (
+        "min_drawdown=0.3288, min_age_days=33"
+    )
+    assert format_params({}) == "-"

@@ -110,6 +110,9 @@ def walkforward(
         120,
         help="History days loaded before each window for signal lookbacks (observe-only).",
     ),
+    objective_metric: str = typer.Option(
+        "total_return", help="Metric optuna maximizes in-sample; see VALID_OBJECTIVE_METRICS."
+    ),
     root: Path = typer.Option(Path("."), help="Project root holding the data/ directory."),
 ) -> None:
     """Walk-forward analysis: optimize in-sample, evaluate out-of-sample."""
@@ -117,15 +120,21 @@ def walkforward(
 
     from pkmn_quant.data.warehouse import Warehouse
     from pkmn_quant.engine.costs import CostModel
+    from pkmn_quant.research.artifacts import write_walkforward_json
     from pkmn_quant.research.folds import Fold
     from pkmn_quant.research.registry import REGISTRY
     from pkmn_quant.research.report import render_markdown
     from pkmn_quant.research.search import Params, SearchSpec, optimize_params
-    from pkmn_quant.research.walkforward import run_walkforward
+    from pkmn_quant.research.walkforward import VALID_OBJECTIVE_METRICS, run_walkforward
 
     entry = REGISTRY.get(strategy)
     if entry is None:
         raise typer.BadParameter(f"unknown strategy {strategy!r}; known: {sorted(REGISTRY)}")
+    if objective_metric not in VALID_OBJECTIVE_METRICS:
+        raise typer.BadParameter(
+            f"unknown objective metric {objective_metric!r};"
+            f" choose from {sorted(VALID_OBJECTIVE_METRICS)}"
+        )
     try:
         start_date = dt.date.fromisoformat(start)
         end_date = dt.date.fromisoformat(end)
@@ -149,6 +158,7 @@ def walkforward(
         is_days=is_days,
         oos_days=oos_days,
         initial_cash=cash,
+        objective_metric=objective_metric,
         warmup_days=warmup_days,
     )
 
@@ -158,11 +168,50 @@ def walkforward(
     run_dir.mkdir(parents=True, exist_ok=True)
     result.stitched_curve.write_parquet(run_dir / "stitched_equity.parquet")
     (run_dir / "report.md").write_text(render_markdown(result, strategy_name=strategy))
+    write_walkforward_json(run_dir, result, strategy_name=strategy)
 
     typer.echo(f"strategy: {strategy}  folds: {len(result.folds)}")
     for key, value in result.summary.items():
         typer.echo(f"{key}: {value:.4f}")
     typer.echo(f"report written to {run_dir / 'report.md'}")
+
+
+@app.command()
+def signals(
+    strategy: str = typer.Option(..., help="Strategy name: see pkmn_quant.research.registry."),
+    cash: float = typer.Option(10_000.0, help="Hypothetical cash for position sizing."),
+    warmup_days: int = typer.Option(
+        365, help="History days loaded before the latest date for signal lookbacks."
+    ),
+    root: Path = typer.Option(Path("."), help="Project root holding the data/ directory."),
+) -> None:
+    """Run a strategy in live mode against the latest ingested prices."""
+    from pkmn_quant.data.warehouse import Warehouse
+    from pkmn_quant.live.report import render_signals_markdown, signals_to_json
+    from pkmn_quant.live.signals import SignalsError, generate_signals
+
+    results_dir = root / "data" / "results"
+    try:
+        report = generate_signals(
+            warehouse=Warehouse(Paths(root=root)),
+            strategy_name=strategy,
+            cash=cash,
+            results_dir=results_dir,
+            warmup_days=warmup_days,
+        )
+    except SignalsError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+    markdown = render_signals_markdown(report)
+    out_dir = results_dir / f"signals-{strategy}-{report.as_of.isoformat()}"
+    if out_dir.exists():
+        typer.echo(f"warning: overwriting existing results in {out_dir}", err=True)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "signals.md").write_text(markdown)
+    (out_dir / "signals.json").write_text(signals_to_json(report))
+
+    typer.echo(markdown)
+    typer.echo(f"artifacts written to {out_dir}", err=True)
 
 
 @app.command()

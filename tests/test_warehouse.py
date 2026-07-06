@@ -78,6 +78,15 @@ def test_stored_days_ignores_stray_dirs(warehouse: Warehouse) -> None:
     assert warehouse.stored_days() == [day]
 
 
+def test_stored_days_ignores_empty_partition_dir(warehouse: Warehouse) -> None:
+    """A crash between mkdir and the atomic tmp-rename in write_prices leaves a
+    partition dir with no data.parquet; stored_days must not report that day."""
+    day = date(2025, 6, 1)
+    warehouse.write_prices(day, pl.DataFrame([price_row(day, 1, 10.0)], schema=PRICE_SCHEMA))
+    (warehouse.paths.prices / "date=2025-06-02").mkdir()
+    assert warehouse.stored_days() == [day]
+
+
 def test_duckdb_query_over_prices_and_products(warehouse: Warehouse) -> None:
     day = date(2025, 6, 1)
     prices = pl.DataFrame([price_row(day, 1, 10.0), price_row(day, 2, 99.0)], schema=PRICE_SCHEMA)

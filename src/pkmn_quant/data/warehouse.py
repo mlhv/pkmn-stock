@@ -65,6 +65,8 @@ class Warehouse:
         for p in self.paths.prices.iterdir():
             if not p.name.startswith("date="):
                 continue
+            if not (p / "data.parquet").exists():  # crashed write left an empty dir
+                continue
             try:
                 days.append(date.fromisoformat(p.name.removeprefix("date=")))
             except ValueError:  # stray artifacts like date=tmp

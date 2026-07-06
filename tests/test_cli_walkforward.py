@@ -60,6 +60,7 @@ def test_walkforward_cli_runs_and_writes_report(tmp_path: Path) -> None:
     run_dir = next(iter(out.iterdir()))
     assert (run_dir / "report.md").exists()
     assert (run_dir / "stitched_equity.parquet").exists()
+    assert (run_dir / "walkforward.json").exists()
     assert "overfitting_gap" in (run_dir / "report.md").read_text()
 
 
@@ -118,3 +119,26 @@ def test_walkforward_cli_warmup_days_clamps_to_available_data(tmp_path: Path) ->
         ],
     )
     assert result.exit_code == 0, result.output
+
+
+def test_walkforward_unknown_objective_metric_clean_error(tmp_path: Path) -> None:
+    seed_forty_days(tmp_path)
+    result = CliRunner().invoke(
+        app,
+        [
+            "walkforward",
+            "--strategy",
+            "sealed-accumulation",
+            "--start",
+            "2025-01-01",
+            "--end",
+            "2025-02-09",
+            "--objective-metric",
+            "sharpe_ratio",
+            "--root",
+            str(tmp_path),
+        ],
+    )
+    assert result.exit_code != 0
+    assert "sharpe_ratio" in result.output
+    assert result.exception is None or isinstance(result.exception, SystemExit)
