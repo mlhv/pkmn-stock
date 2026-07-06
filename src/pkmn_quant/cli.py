@@ -339,7 +339,12 @@ def walkforward(
 @app.command()
 def signals(
     strategy: str = typer.Option(..., help="Strategy name: see pkmn_quant.research.registry."),
-    cash: float = typer.Option(10_000.0, help="Hypothetical cash for position sizing."),
+    cash: float | None = typer.Option(
+        None, "--cash", help="Hypothetical cash for position sizing (default 10000)."
+    ),
+    portfolio_flag: bool = typer.Option(
+        False, "--portfolio", help="Run against the real ledger (positions + cash)."
+    ),
     warmup_days: int = typer.Option(
         365, help="History days loaded before the latest date for signal lookbacks."
     ),
@@ -347,19 +352,27 @@ def signals(
 ) -> None:
     """Run a strategy in live mode against the latest ingested prices."""
     from pkmn_quant.data.warehouse import Warehouse
+    from pkmn_quant.live.ledger import LedgerError, ledger_path, load_portfolio
     from pkmn_quant.live.report import render_signals_markdown, signals_to_json
     from pkmn_quant.live.signals import SignalsError, generate_signals
 
+    if portfolio_flag and cash is not None:
+        raise typer.BadParameter("--cash and --portfolio are mutually exclusive")
+    warehouse = Warehouse(Paths(root=root))
     results_dir = root / "data" / "results"
     try:
+        pf = (
+            load_portfolio(ledger_path(root), warehouse.load_products()) if portfolio_flag else None
+        )
         report = generate_signals(
-            warehouse=Warehouse(Paths(root=root)),
+            warehouse=warehouse,
             strategy_name=strategy,
-            cash=cash,
             results_dir=results_dir,
+            cash=None if portfolio_flag else (cash if cash is not None else 10_000.0),
+            portfolio=pf,
             warmup_days=warmup_days,
         )
-    except SignalsError as exc:
+    except (SignalsError, LedgerError) as exc:
         raise typer.BadParameter(str(exc)) from exc
 
     markdown = render_signals_markdown(report)

@@ -90,3 +90,80 @@ def test_signals_cli_without_walkforward_clean_error(tmp_path: Path) -> None:
     assert result.exit_code != 0
     assert "pkmn walkforward" in result.output
     assert result.exception is None or isinstance(result.exception, SystemExit)
+
+
+def test_signals_portfolio_flag_end_to_end(tmp_path: Path) -> None:
+    """Ledger holds 2 units bought at 35; latest mark 100 >= 35*take_profit for
+    every take_profit in the search space (max 2.5 -> threshold 87.5), so the
+    SELL fires regardless of what optuna picked."""
+    seed(tmp_path)
+    runner = CliRunner()
+    wf = runner.invoke(
+        app,
+        [
+            "walkforward",
+            "--strategy",
+            "sealed-accumulation",
+            "--start",
+            "2025-01-01",
+            "--end",
+            "2025-04-11",
+            "--is-days",
+            "30",
+            "--oos-days",
+            "30",
+            "--trials",
+            "2",
+            "--cash",
+            "1000",
+            "--root",
+            str(tmp_path),
+        ],
+    )
+    assert wf.exit_code == 0, wf.output
+    for args in (
+        ["portfolio", "deposit", "--amount", "1000", "--date", "2025-01-02"],
+        [
+            "portfolio",
+            "buy",
+            "--product-id",
+            "1",
+            "--sub-type",
+            "Normal",
+            "--qty",
+            "2",
+            "--price",
+            "35",
+            "--date",
+            "2025-01-03",
+        ],
+    ):
+        r = runner.invoke(app, [*args, "--root", str(tmp_path)])
+        assert r.exit_code == 0, r.output
+
+    result = runner.invoke(
+        app,
+        ["signals", "--strategy", "sealed-accumulation", "--portfolio", "--root", str(tmp_path)],
+    )
+    assert result.exit_code == 0, result.output
+    assert "SELL" in result.output
+    assert "## Portfolio" in result.output
+
+
+def test_signals_portfolio_and_cash_conflict(tmp_path: Path) -> None:
+    seed(tmp_path)
+    result = CliRunner().invoke(
+        app,
+        [
+            "signals",
+            "--strategy",
+            "sealed-accumulation",
+            "--portfolio",
+            "--cash",
+            "5000",
+            "--root",
+            str(tmp_path),
+        ],
+    )
+    assert result.exit_code != 0
+    assert result.exception is None or isinstance(result.exception, SystemExit)
