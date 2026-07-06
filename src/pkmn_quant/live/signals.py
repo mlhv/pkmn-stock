@@ -22,7 +22,7 @@ from pkmn_quant.data.warehouse import Warehouse
 from pkmn_quant.engine.data import MarketData
 from pkmn_quant.engine.portfolio import Portfolio, Position
 from pkmn_quant.engine.strategy import Context
-from pkmn_quant.live.ledger import Snapshot, make_snapshot
+from pkmn_quant.live.ledger import LedgerError, Snapshot, make_snapshot
 from pkmn_quant.research.artifacts import find_latest_wf_run, load_walkforward_json
 from pkmn_quant.research.registry import REGISTRY
 
@@ -78,7 +78,7 @@ def generate_signals(
         raise SignalsError(f"unknown strategy {strategy_name!r}; known: {sorted(REGISTRY)}")
 
     if (cash is None) == (portfolio is None):
-        raise SignalsError("provide either cash (hypothetical) or portfolio (ledger), not both")
+        raise SignalsError("provide either cash (hypothetical) or portfolio (ledger) — exactly one")
     if portfolio is not None and strategy_name not in PORTFOLIO_SAFE_STRATEGIES:
         raise SignalsError(
             f"{strategy_name!r} cannot run against real positions: its exit rule"
@@ -164,11 +164,22 @@ def generate_signals(
                 market_price=mark,
                 notional=round(qty * mark, 2),
                 avg_cost=avg_cost,
-                gain_pct=(mark / avg_cost - 1.0) if avg_cost is not None else None,
+                # avg_cost==0.0 is falsy so the guard also blocks division-by-zero;
+                # the ledger validates price > 0, so 0.0 is unreachable via real data.
+                gain_pct=(mark / avg_cost - 1.0) if avg_cost else None,
             )
         )
 
-    snapshot = make_snapshot(portfolio, marks, names) if portfolio is not None else None
+    if portfolio is not None:
+        try:
+            snapshot = make_snapshot(portfolio, marks, names)
+        except LedgerError as exc:
+            raise SignalsError(
+                f"cannot value portfolio — {exc};"
+                f" try a larger --warmup-days so all held assets have a warehouse mark"
+            ) from exc
+    else:
+        snapshot = None
 
     return SignalReport(
         as_of=latest,

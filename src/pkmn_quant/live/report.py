@@ -52,13 +52,18 @@ def render_signals_markdown(report: SignalReport) -> str:
         snap = report.portfolio_snapshot
         lines += ["", "## Portfolio", ""]
         exits = [r for r in report.recommendations if r.action == "SELL"]
+        exited_keys = {(r.product_id, r.sub_type) for r in exits}
         for r in exits:
-            assert r.avg_cost is not None and r.gain_pct is not None
-            lines.append(
-                f"- EXIT {r.name}: {r.quantity} @ mark ${r.market_price:.2f},"
-                f" basis ${r.avg_cost:.2f}, gain {r.gain_pct:+.1%}"
-            )
+            if r.avg_cost is not None and r.gain_pct is not None:
+                suffix = f", basis ${r.avg_cost:.2f}, gain {r.gain_pct:+.1%}"
+            elif r.avg_cost is not None:
+                suffix = f", basis ${r.avg_cost:.2f}, gain n/a"
+            else:
+                suffix = ", basis n/a"
+            lines.append(f"- EXIT {r.name}: {r.quantity} @ mark ${r.market_price:.2f}{suffix}")
         for p in snap.positions:
+            if (p.product_id, p.sub_type) in exited_keys:
+                continue  # already rendered as EXIT above; skip the conflicting HOLD line
             lines.append(
                 f"- HOLD {p.name} ({p.sub_type}) x{p.quantity}: avg ${p.avg_cost:.2f},"
                 f" mark ${p.mark:.2f}, unrealized ${p.unrealized_pnl:+.2f}"
