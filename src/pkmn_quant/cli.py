@@ -412,26 +412,13 @@ def daily(
     import json as _json
 
     from pkmn_quant.live import notify
-    from pkmn_quant.live.ledger import LedgerError
+    from pkmn_quant.live.ledger import LedgerError, load_portfolio
     from pkmn_quant.live.report import render_signals_markdown, signals_to_json
     from pkmn_quant.live.signals import SignalsError, generate_signals
 
     today = dt.date.today()
     out_dir = root / "data" / "results" / f"daily-{today.isoformat()}"
     out_dir.mkdir(parents=True, exist_ok=True)
-
-    ingest_error: str | None = None
-    if not skip_ingest:
-        try:
-            from pkmn_quant.data.warehouse import Warehouse as _Warehouse
-
-            warehouse_for_days = _Warehouse(Paths(root=root))
-            days = warehouse_for_days.stored_days()
-            yesterday = today - dt.timedelta(days=1)
-            if days and days[-1] < yesterday:
-                ingest_range(Paths(root=root), days[-1] + dt.timedelta(days=1), yesterday)
-        except Exception as exc:  # scheduled run must never die silently
-            ingest_error = f"ingest failed: {exc}"
 
     def finish(
         status: str, error: str | None, n_buys: int, n_sells: int, as_of: str | None
@@ -452,9 +439,29 @@ def daily(
             + "\n"
         )
 
+    def _fail(error: str) -> None:
+        """Write error daily.json, clean up stale signal artifacts, notify, print, exit 1."""
+        finish("error", error, 0, 0, None)
+        for stale in ("signals.md", "signals.json"):
+            (out_dir / stale).unlink(missing_ok=True)
+        notify.send_notification("pkmn daily FAILED", error)
+        typer.echo(f"error: {error}", err=True)
+        raise typer.Exit(1)
+
+    ingest_error: str | None = None
     try:
+        # _portfolio_deps raises BadParameter when no warehouse exists; keep it
+        # inside the protected block so that case produces error daily.json.
         warehouse, products, lpath = _portfolio_deps(root)
-        from pkmn_quant.live.ledger import load_portfolio
+
+        if not skip_ingest:
+            yesterday = today - dt.timedelta(days=1)
+            days = warehouse.stored_days()
+            if days and days[-1] < yesterday:
+                try:
+                    ingest_range(Paths(root=root), days[-1] + dt.timedelta(days=1), yesterday)
+                except Exception as exc:  # scheduled run must never die silently
+                    ingest_error = f"ingest failed: {exc}"
 
         pf = load_portfolio(lpath, products)
         report = generate_signals(
@@ -464,10 +471,16 @@ def daily(
             portfolio=pf,
         )
     except (SignalsError, LedgerError, typer.BadParameter) as exc:
-        finish("error", str(exc), 0, 0, None)
-        notify.send_notification("pkmn daily FAILED", str(exc))
-        typer.echo(f"error: {exc}", err=True)
-        raise typer.Exit(1) from exc
+        # Combine ingest error with signals/deps error when both occurred.
+        error = f"{exc}; {ingest_error}" if ingest_error else str(exc)
+        _fail(error)
+        return  # unreachable; satisfies type checker after _fail raises Exit
+    except Exception as exc:
+        # Unexpected errors (polars ComputeError, OSError, strategy bugs, …)
+        # must not die silently — wrap same finish/notify/exit path.
+        error = f"{exc}; {ingest_error}" if ingest_error else str(exc)
+        _fail(error)
+        return  # unreachable
 
     (out_dir / "signals.md").write_text(render_signals_markdown(report))
     (out_dir / "signals.json").write_text(signals_to_json(report))

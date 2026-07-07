@@ -1,6 +1,8 @@
+import datetime as dt
 import json
 from datetime import date, timedelta
 from pathlib import Path
+from typing import Any
 
 import polars as pl
 import pytest
@@ -123,3 +125,86 @@ def test_daily_failure_writes_error_status_and_notifies(
     assert meta["status"] == "error"
     assert "walkforward" in meta["error"] or "walk-forward" in meta["error"]
     assert len(sent) == 1
+
+
+# ---------------------------------------------------------------------------
+# Item 5a: ingest path — boundary test
+# ---------------------------------------------------------------------------
+
+
+def test_daily_calls_ingest_when_warehouse_is_stale(
+    tmp_path: Path,
+    sent: list[tuple[str, str]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When the warehouse's last stored day is old, daily must call ingest_range
+    with start = last_day+1 and end = yesterday."""
+    seed(tmp_path)
+    runner = CliRunner()
+    run_walkforward(runner, tmp_path)
+    # Deposit so signals succeed (portfolio mode needs cash)
+    deposit_args = ["portfolio", "deposit", "--amount", "1000", "--date", "2025-01-02"]
+    r = runner.invoke(app, [*deposit_args, "--root", str(tmp_path)])
+    assert r.exit_code == 0, r.output
+
+    ingest_calls: list[tuple[Any, ...]] = []
+
+    def fake_ingest(paths: Any, start: date, end: date) -> list[Any]:
+        ingest_calls.append((paths, start, end))
+        return []
+
+    monkeypatch.setattr("pkmn_quant.cli.ingest_range", fake_ingest)
+
+    # The warehouse's last day is 2025-05-01 (seeded).  yesterday is computed
+    # at runtime; we compute it the same way here to keep the assertion exact.
+    yesterday = dt.date.today() - dt.timedelta(days=1)
+    expected_start = date(2025, 5, 2)  # days[-1] + 1 day
+
+    result = runner.invoke(app, ["daily", "--root", str(tmp_path)])
+    assert result.exit_code == 0, result.output
+
+    assert len(ingest_calls) == 1, f"expected 1 ingest call, got {len(ingest_calls)}"
+    _, call_start, call_end = ingest_calls[0]
+    assert call_start == expected_start
+    assert call_end == yesterday
+
+
+# ---------------------------------------------------------------------------
+# Item 5b: ingest failure test
+# ---------------------------------------------------------------------------
+
+
+def test_daily_ingest_failure_exits_1_and_records_error(
+    tmp_path: Path,
+    sent: list[tuple[str, str]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If ingest_range raises, daily must exit 1 and record status error;
+    signals.md should still be written (signals ran despite ingest failure)
+    and the notification body should mention the ingest error."""
+    seed(tmp_path)
+    runner = CliRunner()
+    run_walkforward(runner, tmp_path)
+    deposit_args = ["portfolio", "deposit", "--amount", "1000", "--date", "2025-01-02"]
+    r = runner.invoke(app, [*deposit_args, "--root", str(tmp_path)])
+    assert r.exit_code == 0, r.output
+
+    def fake_ingest_fail(paths: Any, start: date, end: date) -> list[Any]:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr("pkmn_quant.cli.ingest_range", fake_ingest_fail)
+
+    result = runner.invoke(app, ["daily", "--root", str(tmp_path)])
+    assert result.exit_code == 1
+
+    meta = json.loads(next((tmp_path / "data" / "results").glob("daily-*/daily.json")).read_text())
+    assert meta["status"] == "error"
+    assert "ingest failed" in meta["error"]
+
+    # signals.md is present — signals ran successfully despite the ingest error
+    daily_dir = next((tmp_path / "data" / "results").glob("daily-*"))
+    assert (daily_dir / "signals.md").exists()
+
+    # At least one notification must mention the ingest problem
+    ingest_notifs = [t for t, b in sent if "ingest" in t.lower() or "ingest" in b.lower()]
+    assert len(ingest_notifs) >= 1
