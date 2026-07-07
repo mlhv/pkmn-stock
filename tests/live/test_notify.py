@@ -49,6 +49,12 @@ def test_send_notification_passes_body_and_title_as_argv_items(
     cmd = captured[0]
     assert cmd[0] == "osascript"
 
+    # "--" must appear before body/title so a leading dash in body isn't eaten as a flag
+    assert "--" in cmd, '"--" separator must be present in the osascript command'
+    dash_dash_idx = cmd.index("--")
+    assert cmd[dash_dash_idx + 1] == body, f"body must immediately follow '--': {cmd}"
+    assert cmd[dash_dash_idx + 2] == title, f"title must immediately follow body: {cmd}"
+
     # body and title must be the last two positional items, NOT embedded in -e text
     assert cmd[-2] == body, f"body not found as second-to-last argv item: {cmd}"
     assert cmd[-1] == title, f"title not found as last argv item: {cmd}"
@@ -58,6 +64,35 @@ def test_send_notification_passes_body_and_title_as_argv_items(
     for s in e_strings:
         assert body not in s, f"-e script embeds the body string: {s!r}"
         assert title not in s, f"-e script embeds the title string: {s!r}"
+
+
+def test_send_notification_leading_dash_body_has_separator(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A body starting with '-' must not be consumed as a flag — the '--'
+    separator must still appear before body/title in the command list."""
+    title = "Price alert"
+    body = "-3.2% drop in Charizard ex"
+
+    captured: list[list[str]] = []
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> MagicMock:
+        captured.append(cmd)
+        result = MagicMock()
+        result.returncode = 0
+        return result
+
+    monkeypatch.setattr(notify.subprocess, "run", fake_run)
+    monkeypatch.setattr(notify.sys, "platform", "darwin")
+
+    notify.send_notification(title, body)
+
+    assert len(captured) == 1
+    cmd = captured[0]
+    assert "--" in cmd, '"--" separator must guard leading-dash body'
+    dash_dash_idx = cmd.index("--")
+    assert cmd[dash_dash_idx + 1] == body
+    assert cmd[dash_dash_idx + 2] == title
 
 
 def test_send_notification_noop_on_non_darwin(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -107,6 +142,37 @@ def test_osascript_argv_round_trip_with_special_chars() -> None:
     )
 
     assert result.returncode == 0, f"osascript exited {result.returncode}: {result.stderr}"
+    assert result.stdout.strip() == body
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="osascript only on macOS")
+def test_osascript_argv_round_trip_leading_dash_body() -> None:
+    """A body starting with '-' must round-trip through osascript without
+    being consumed as a flag.  Uses ``return (item 1 of argv)`` (no banner).
+    Expects returncode 0 and the exact body on stdout."""
+    body = "-3.2% drop in Charizard ex"
+
+    result = subprocess.run(
+        [
+            "osascript",
+            "-e",
+            "on run argv",
+            "-e",
+            "return (item 1 of argv)",
+            "-e",
+            "end run",
+            "--",
+            body,
+            "ignored-title",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, (
+        f"osascript exited {result.returncode} for leading-dash body: {result.stderr}"
+    )
     assert result.stdout.strip() == body
 
 

@@ -26,6 +26,7 @@ def send_notification(title: str, body: str) -> None:
             "display notification (item 1 of argv) with title (item 2 of argv)",
             "-e",
             "end run",
+            "--",  # prevent osascript from treating a leading '-' in body as a flag
             body,
             title,
         ],
