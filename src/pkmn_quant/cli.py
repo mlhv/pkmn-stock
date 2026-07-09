@@ -24,8 +24,11 @@ portfolio_app = typer.Typer(no_args_is_help=True, help="Record and inspect real 
 app.add_typer(portfolio_app, name="portfolio")
 
 
-def _portfolio_deps(root: Path) -> tuple[Warehouse, pl.DataFrame, Path]:
-    """(warehouse, products, ledger file) — shared by the portfolio subcommands."""
+def _portfolio_deps(root: Path, paper: bool = False) -> tuple[Warehouse, pl.DataFrame, Path]:
+    """(warehouse, products, ledger file) — shared by the portfolio subcommands.
+
+    Pass paper=True to route to the paper ledger (data/portfolio/paper.jsonl).
+    """
     from pkmn_quant.data.warehouse import Warehouse
     from pkmn_quant.live.ledger import ledger_path
 
@@ -33,7 +36,7 @@ def _portfolio_deps(root: Path) -> tuple[Warehouse, pl.DataFrame, Path]:
     warehouse = Warehouse(paths)
     if not paths.products.exists():
         raise typer.BadParameter(f"no warehouse at {root}; run 'pkmn ingest' first")
-    return warehouse, warehouse.load_products(), ledger_path(root)
+    return warehouse, warehouse.load_products(), ledger_path(root, paper=paper)
 
 
 def _append_or_die(path: Path, event: dict[str, object], products: pl.DataFrame) -> None:
@@ -50,10 +53,11 @@ def _append_or_die(path: Path, event: dict[str, object], products: pl.DataFrame)
 def deposit(
     amount: float = typer.Option(..., help="Cash added to the portfolio."),
     date: str | None = typer.Option(None, help="Event date (YYYY-MM-DD); default today."),
+    paper: bool = typer.Option(False, "--paper", help="Use the paper ledger."),
     root: Path = typer.Option(Path("."), help="Project root holding the data/ directory."),
 ) -> None:
     """Record a cash deposit."""
-    _, products, path = _portfolio_deps(root)
+    _, products, path = _portfolio_deps(root, paper=paper)
     try:
         day = dt.date.fromisoformat(date).isoformat() if date else dt.date.today().isoformat()
     except ValueError as exc:
@@ -65,10 +69,11 @@ def deposit(
 def withdraw(
     amount: float = typer.Option(..., help="Cash removed from the portfolio."),
     date: str | None = typer.Option(None, help="Event date (YYYY-MM-DD); default today."),
+    paper: bool = typer.Option(False, "--paper", help="Use the paper ledger."),
     root: Path = typer.Option(Path("."), help="Project root holding the data/ directory."),
 ) -> None:
     """Record a cash withdrawal."""
-    _, products, path = _portfolio_deps(root)
+    _, products, path = _portfolio_deps(root, paper=paper)
     try:
         day = dt.date.fromisoformat(date).isoformat() if date else dt.date.today().isoformat()
     except ValueError as exc:
@@ -85,8 +90,9 @@ def _trade(
     fees: float,
     date: str | None,
     root: Path,
+    paper: bool = False,
 ) -> None:
-    _, products, path = _portfolio_deps(root)
+    _, products, path = _portfolio_deps(root, paper=paper)
     try:
         day = dt.date.fromisoformat(date).isoformat() if date else dt.date.today().isoformat()
     except ValueError as exc:
@@ -114,10 +120,11 @@ def buy(
     price: float = typer.Option(..., help="Per-unit price actually paid."),
     fees: float = typer.Option(0.0, help="Total non-price cost (shipping etc.)."),
     date: str | None = typer.Option(None, help="Trade date (YYYY-MM-DD); default today."),
+    paper: bool = typer.Option(False, "--paper", help="Use the paper ledger."),
     root: Path = typer.Option(Path("."), help="Project root holding the data/ directory."),
 ) -> None:
     """Record a real purchase."""
-    _trade("buy", product_id, sub_type, qty, price, fees, date, root)
+    _trade("buy", product_id, sub_type, qty, price, fees, date, root, paper=paper)
 
 
 @portfolio_app.command()
@@ -128,14 +135,16 @@ def sell(
     price: float = typer.Option(..., help="Per-unit sale price."),
     fees: float = typer.Option(0.0, help="Total fees + shipping kept by the marketplace."),
     date: str | None = typer.Option(None, help="Trade date (YYYY-MM-DD); default today."),
+    paper: bool = typer.Option(False, "--paper", help="Use the paper ledger."),
     root: Path = typer.Option(Path("."), help="Project root holding the data/ directory."),
 ) -> None:
     """Record a real sale."""
-    _trade("sell", product_id, sub_type, qty, price, fees, date, root)
+    _trade("sell", product_id, sub_type, qty, price, fees, date, root, paper=paper)
 
 
 @portfolio_app.command()
 def show(
+    paper: bool = typer.Option(False, "--paper", help="Use the paper ledger."),
     root: Path = typer.Option(Path("."), help="Project root holding the data/ directory."),
 ) -> None:
     """Positions, cash, and P&L valued at the latest warehouse marks."""
@@ -143,7 +152,7 @@ def show(
     from pkmn_quant.live.ledger import LedgerError, load_portfolio, make_snapshot
     from pkmn_quant.live.signals import DEFAULT_WARMUP_DAYS
 
-    warehouse, products, path = _portfolio_deps(root)
+    warehouse, products, path = _portfolio_deps(root, paper=paper)
     try:
         pf = load_portfolio(path, products)
         if not pf.positions and pf.cash == 0.0 and pf.realized_pnl == 0.0:
@@ -347,6 +356,7 @@ def signals(
     portfolio_flag: bool = typer.Option(
         False, "--portfolio", help="Run against the real ledger (positions + cash)."
     ),
+    paper: bool = typer.Option(False, "--paper", help="Use the paper ledger."),
     warmup_days: int = typer.Option(
         365, help="History days loaded before the latest date for signal lookbacks."
     ),
@@ -358,15 +368,17 @@ def signals(
     from pkmn_quant.live.report import render_signals_markdown, signals_to_json
     from pkmn_quant.live.signals import SignalsError, generate_signals
 
+    # --paper implies portfolio mode (paper ledger holds positions + cash)
+    portfolio_flag = portfolio_flag or paper
     if portfolio_flag and cash is not None:
-        raise typer.BadParameter("--cash and --portfolio are mutually exclusive")
+        raise typer.BadParameter("--cash and --portfolio/--paper are mutually exclusive")
     results_dir = root / "data" / "results"
     try:
         if portfolio_flag:
             # _portfolio_deps guards against a missing warehouse and returns
             # (warehouse, products, ledger_path); use it so missing-warehouse
             # gets a clean BadParameter instead of a raw FileNotFoundError.
-            warehouse, products, lpath = _portfolio_deps(root)
+            warehouse, products, lpath = _portfolio_deps(root, paper=paper)
             pf = load_portfolio(lpath, products)
         else:
             warehouse = Warehouse(Paths(root=root))
@@ -383,6 +395,7 @@ def signals(
             cash=resolved_cash,
             portfolio=pf,
             warmup_days=warmup_days,
+            paper=paper,
         )
     except (SignalsError, LedgerError) as exc:
         raise typer.BadParameter(str(exc)) from exc
@@ -405,10 +418,21 @@ def daily(
     skip_ingest: bool = typer.Option(
         False, "--skip-ingest", help="Skip fetching new price days (tests/offline)."
     ),
+    paper: bool = typer.Option(False, "--paper", help="Use the paper ledger."),
     root: Path = typer.Option(Path("."), help="Project root holding the data/ directory."),
 ) -> None:
     """The morning loop: ingest missing days, run signals against the ledger,
-    write artifacts, notify when actionable. Designed for launchd/cron."""
+    write artifacts, notify when actionable. Designed for launchd/cron.
+
+    Paper mode (--paper): routes all ledger reads/writes to data/portfolio/paper.jsonl
+    and auto-records the day's recommended fills using the engine CostModel so the
+    strategy trades fake money through the identical pipeline. Every output surface is
+    labeled PAPER.
+
+    Known optimism vs the backtester: paper fills are recorded same-day at the
+    warehouse mark, not T+1. The backtester uses T+1 fills; paper results will
+    therefore look slightly better than a true OOS simulation.
+    """
     import json as _json
 
     from pkmn_quant.live import notify
@@ -433,6 +457,7 @@ def daily(
                     "n_buys": n_buys,
                     "n_sells": n_sells,
                     "as_of": as_of,
+                    "paper": paper,
                 },
                 indent=2,
             )
@@ -452,7 +477,7 @@ def daily(
     try:
         # _portfolio_deps raises BadParameter when no warehouse exists; keep it
         # inside the protected block so that case produces error daily.json.
-        warehouse, products, lpath = _portfolio_deps(root)
+        warehouse, products, lpath = _portfolio_deps(root, paper=paper)
 
         if not skip_ingest:
             yesterday = today - dt.timedelta(days=1)
@@ -469,6 +494,7 @@ def daily(
             strategy_name=strategy,
             results_dir=root / "data" / "results",
             portfolio=pf,
+            paper=paper,
         )
     except (SignalsError, LedgerError, typer.BadParameter) as exc:
         # Combine ingest error with signals/deps error when both occurred.
@@ -486,6 +512,38 @@ def daily(
     (out_dir / "signals.json").write_text(signals_to_json(report))
     n_buys = sum(1 for r in report.recommendations if r.action == "BUY")
     n_sells = sum(1 for r in report.recommendations if r.action == "SELL")
+
+    # Paper mode: auto-record recommended fills using the engine CostModel so the
+    # strategy trades fake money through the identical pipeline as the backtester.
+    # Fills land inside the main try/except so LedgerError routes through _fail.
+    if paper and report.recommendations:
+        try:
+            from pkmn_quant.engine.costs import CostModel
+            from pkmn_quant.live.ledger import append_event, ledger_path
+
+            cost = CostModel()
+            for rec in report.recommendations:
+                if rec.action == "BUY":
+                    fees = cost.shipping_per_line
+                else:
+                    fees = rec.quantity * rec.market_price * cost.fee_rate + cost.shipping_per_line
+                append_event(
+                    ledger_path(root, paper=True),
+                    {
+                        "date": report.as_of.isoformat(),
+                        "kind": rec.action.lower(),
+                        "product_id": rec.product_id,
+                        "sub_type": rec.sub_type,
+                        "qty": rec.quantity,
+                        "price": rec.market_price,
+                        "fees": round(fees, 2),
+                    },
+                    products,
+                )
+        except LedgerError as exc:
+            _fail(f"paper auto-record failed: {exc}")
+            return  # unreachable
+
     finish(
         "error" if ingest_error else "ok", ingest_error, n_buys, n_sells, report.as_of.isoformat()
     )

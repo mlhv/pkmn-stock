@@ -63,6 +63,7 @@ class SignalReport:
     wf_run_dir: str
     recommendations: list[Recommendation]
     portfolio_snapshot: Snapshot | None = None
+    paper: bool = False
 
 
 def generate_signals(
@@ -72,6 +73,7 @@ def generate_signals(
     cash: float | None = None,
     portfolio: Portfolio | None = None,
     warmup_days: int = DEFAULT_WARMUP_DAYS,
+    paper: bool = False,
 ) -> SignalReport:
     entry = REGISTRY.get(strategy_name)
     if entry is None:
@@ -189,4 +191,5 @@ def generate_signals(
         wf_run_dir=str(run_dir),
         recommendations=recommendations,
         portfolio_snapshot=snapshot,
+        paper=paper,
     )

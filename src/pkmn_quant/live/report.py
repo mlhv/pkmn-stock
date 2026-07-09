@@ -28,7 +28,7 @@ THESIS = {
 
 def render_signals_markdown(report: SignalReport) -> str:
     lines = [
-        f"# Signals: {report.strategy} — {report.as_of}",
+        f"# Signals{' (PAPER)' if report.paper else ''}: {report.strategy} — {report.as_of}",
         "",
         f"Thesis: {THESIS.get(report.strategy, 'n/a')}",
         f"Params (last walk-forward fold): {format_params(report.params)}",
