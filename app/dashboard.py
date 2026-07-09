@@ -20,7 +20,7 @@ import pkmn_quant.live.ledger as ledger_mod
 from pkmn_quant.config import Paths
 from pkmn_quant.data.warehouse import Warehouse
 from pkmn_quant.engine.data import MarketData
-from pkmn_quant.live.ledger import LedgerError, ledger_path, load_portfolio, make_snapshot
+from pkmn_quant.live.ledger import LedgerError, ledger_path, make_snapshot
 
 ROOT = Path(".")
 RESULTS = ROOT / "data" / "results"
@@ -169,20 +169,25 @@ with tab_trades:
 with tab_portfolio:
     # Alerts strip: recent daily runs, newest first.
     daily_dirs = sorted(RESULTS.glob("daily-*/daily.json"), reverse=True)
-    if daily_dirs:
+    if not daily_dirs:
+        st.caption("No daily runs yet — schedule `pkmn daily` (see README).")
+    else:
         st.subheader("Daily runs")
         for meta_path in daily_dirs[:14]:
             meta = json.loads(meta_path.read_text())
             actionable = (meta.get("n_buys", 0) + meta.get("n_sells", 0)) > 0
-            if meta.get("status") != "ok":
-                label = f"🔴 {meta['date']} — FAILED: {meta.get('error')}"
+            failed = meta.get("status") != "ok"
+            if failed and meta.get("as_of") is None:
+                label = f"🔴 {meta.get('date')} — FAILED: {meta.get('error')}"
             elif actionable:
+                suffix = " — ingest problem, prices may be stale" if failed else ""
                 label = (
-                    f"🟡 {meta['date']} — {meta['n_buys']} buys,"
-                    f" {meta['n_sells']} sells ({meta['strategy']})"
+                    f"🟡 {meta.get('date')} — {meta['n_buys']} buys,"
+                    f" {meta['n_sells']} sells ({meta.get('strategy')}){suffix}"
                 )
             else:
-                label = f"⚪ {meta['date']} — nothing to do"
+                suffix = " — ingest problem" if failed else ""
+                label = f"⚪ {meta.get('date')} — nothing to do{suffix}"
             with st.expander(label, expanded=False):
                 md = meta_path.parent / "signals.md"
                 if md.exists():
@@ -196,8 +201,10 @@ with tab_portfolio:
     else:
         warehouse = Warehouse(Paths(root=ROOT))
         products = load_products()
+        # Parse once; reuse for both the snapshot and the equity chart.
+        events = ledger_mod._parse_lines(lp.read_text().splitlines())
         try:
-            pf = load_portfolio(lp, products)
+            pf = ledger_mod._replay(events, products)
             days = warehouse.stored_days()
             latest = days[-1]
             market = MarketData.from_warehouse(warehouse, latest, latest, warmup_days=365)
@@ -233,8 +240,6 @@ with tab_portfolio:
 
             # Equity over time: replay the ledger day by day against
             # forward-filled marks for the assets ever held. Demo-grade.
-            lines = lp.read_text().splitlines()
-            events = ledger_mod._parse_lines(lines)
             if events:
                 held_ids = {e.asset.product_id for e in events if e.asset is not None}
                 prices = load_prices()
