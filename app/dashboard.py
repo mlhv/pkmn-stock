@@ -202,8 +202,8 @@ with tab_portfolio:
         warehouse = Warehouse(Paths(root=ROOT))
         products = load_products()
         # Parse once; reuse for both the snapshot and the equity chart.
-        events = ledger_mod._parse_lines(lp.read_text().splitlines())
         try:
+            events = ledger_mod._parse_lines(lp.read_text().splitlines())
             pf = ledger_mod._replay(events, products)
             days = warehouse.stored_days()
             latest = days[-1]
