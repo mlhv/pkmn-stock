@@ -28,6 +28,8 @@ uv run pkmn walkforward --strategy sealed-accumulation \
     --start 2024-03-01 --end 2026-06-30 --trials 15      # research run
 uv run pkmn signals --strategy sealed-accumulation       # live recommendations
 uv run --group dashboard streamlit run app/dashboard.py  # results explorer
+uv run pkmn portfolio show                               # real positions + P&L
+uv run pkmn daily --skip-ingest                          # the loop, offline
 ```
 
 All four gates must pass before every commit. CI runs them with

@@ -71,6 +71,16 @@ caveats: [docs/research-findings-2026-07.md](docs/research-findings-2026-07.md).
     uv run pkmn signals --strategy sealed-accumulation       # today's entries
     uv run --group dashboard streamlit run app/dashboard.py  # explorer
 
+### Scheduling the daily loop (macOS)
+
+    sed "s|REPO_PATH|$(pwd)|" scripts/com.pkmn-quant.daily.plist \
+        > ~/Library/LaunchAgents/com.pkmn-quant.daily.plist
+    launchctl load ~/Library/LaunchAgents/com.pkmn-quant.daily.plist
+
+Runs `pkmn daily` at 09:00: ingests new prices, runs signals against your
+ledger (`pkmn portfolio ...`), and sends a macOS notification only when
+there is something to act on.
+
 ## Engineering
 
 - `uv` everything; `ruff` lint+format; `mypy --strict` on `src/`; pytest.
