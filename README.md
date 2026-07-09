@@ -77,9 +77,16 @@ caveats: [docs/research-findings-2026-07.md](docs/research-findings-2026-07.md).
         > ~/Library/LaunchAgents/com.pkmn-quant.daily.plist
     launchctl load ~/Library/LaunchAgents/com.pkmn-quant.daily.plist
 
-Runs `pkmn daily` at 09:00: ingests new prices, runs signals against your
-ledger (`pkmn portfolio ...`), and sends a macOS notification only when
-there is something to act on.
+Runs `pkmn daily` at 09:00 (or on next wake, if the Mac was asleep at 09:00):
+ingests new prices, runs signals against your ledger (`pkmn portfolio ...`),
+and sends a macOS notification when there is something to act on, or when the
+run fails.
+
+Troubleshooting:
+
+    launchctl start com.pkmn-quant.daily                        # fire immediately to test
+    launchctl list | grep pkmn-quant                            # loaded? last exit code?
+    launchctl unload ~/Library/LaunchAgents/com.pkmn-quant.daily.plist   # required before re-loading an edited plist
 
 ## Engineering
 
