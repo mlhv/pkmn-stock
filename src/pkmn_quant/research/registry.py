@@ -8,6 +8,7 @@ from dataclasses import dataclass
 import optuna
 
 from pkmn_quant.engine.strategy import Strategy
+from pkmn_quant.strategies.cost_aware_reversion import CostAwareReversion
 from pkmn_quant.strategies.dip_buyer import DipBuyer
 from pkmn_quant.strategies.momentum import CrossSectionalMomentum
 from pkmn_quant.strategies.sealed_accumulation import SealedAccumulation
@@ -69,8 +70,29 @@ def _momentum_factory(p: Params) -> Strategy:
     )
 
 
+def _reversion_space(trial: optuna.Trial) -> Params:
+    return {
+        "dip_window_days": trial.suggest_int("dip_window_days", 14, 90),
+        "dip_threshold": trial.suggest_float("dip_threshold", 0.15, 0.50),
+        "min_edge": trial.suggest_float("min_edge", 0.02, 0.15),
+        "take_profit": trial.suggest_float("take_profit", 1.1, 1.6),
+        "max_hold_days": trial.suggest_int("max_hold_days", 30, 180),
+    }
+
+
+def _reversion_factory(p: Params) -> Strategy:
+    return CostAwareReversion(
+        dip_window_days=int(p["dip_window_days"]),
+        dip_threshold=float(p["dip_threshold"]),
+        min_edge=float(p["min_edge"]),
+        take_profit=float(p["take_profit"]),
+        max_hold_days=int(p["max_hold_days"]),
+    )
+
+
 REGISTRY: dict[str, RegistryEntry] = {
     "sealed-accumulation": RegistryEntry(factory=_sealed_factory, space=_sealed_space),
     "dip-buyer": RegistryEntry(factory=_dip_factory, space=_dip_space),
     "xs-momentum": RegistryEntry(factory=_momentum_factory, space=_momentum_space),
+    "cost-aware-reversion": RegistryEntry(factory=_reversion_factory, space=_reversion_space),
 }
