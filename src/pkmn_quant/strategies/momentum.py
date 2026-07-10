@@ -15,13 +15,28 @@ from pkmn_quant.engine.strategy import Context, Strategy
 class CrossSectionalMomentum(Strategy):
     """Every rebalance_days: rank singles by trailing lookback return, target
     the top_n equally weighted, sell everything that dropped out (sells
-    emitted first). Stateful (_last_rebalance); reset() clears it.
+    emitted first). Stateless: rebalance timing is derived from the ledger
+    via Position.opened_on rather than a mutable clock.
+
+    Rebalance clock semantics:
+    - When the portfolio is flat (no positions), the strategy evaluates every
+      bar until a buy fills — it no longer waits out rebalance_days with no
+      holdings.
+    - When positions are held, a rebalance is due when
+      (today - newest opened_on).days >= rebalance_days, where the newest
+      opened_on approximates the date of the last rebalance buy.
+    - A rebalance whose buys don't fill (e.g. price gaps above budget) retries
+      the following bar, because the portfolio remains flat or the newest
+      opened_on is unchanged.
+    - Corollary: a due rebalance that needs no new buys (every held name is
+      still in the target) emits nothing and stays due, so the ranking is
+      recomputed every bar until a buy fills. Idempotent, just extra compute.
 
     Names that stay in the target are never trimmed (long-only, entry-only
-    weighting): winners drift above equal weight over time. The rebalance clock
-    advances even when no candidates are found (e.g. before lookback_days of
-    history exist), so the first productive rebalance can be delayed by up to
-    rebalance_days.
+    weighting): winners drift above equal weight over time.
+
+    Positions constructed outside the engine (e.g. hand-built test portfolios)
+    may have opened_on=None; on_bar raises ValueError loudly in that case.
     """
 
     def __init__(
@@ -36,18 +51,24 @@ class CrossSectionalMomentum(Strategy):
         self.rebalance_days = rebalance_days
         self.min_price = min_price
         self.name = "xs-momentum"
-        self._last_rebalance: date | None = None
 
-    def reset(self) -> None:
-        self._last_rebalance = None
+    def _rebalance_due(self, ctx: Context) -> bool:
+        if not ctx.positions:
+            return True
+        newest: date | None = None
+        for asset, pos in ctx.positions.items():
+            if pos.opened_on is None:
+                raise ValueError(
+                    f"{self.name}: position {asset} has no opened_on; "
+                    "engine fills and ledger replay always set it"
+                )
+            newest = pos.opened_on if newest is None else max(newest, pos.opened_on)
+        assert newest is not None
+        return (ctx.today - newest).days >= self.rebalance_days
 
     def on_bar(self, ctx: Context) -> list[Order]:
-        if (
-            self._last_rebalance is not None
-            and (ctx.today - self._last_rebalance).days < self.rebalance_days
-        ):
+        if not self._rebalance_due(ctx):
             return []
-        self._last_rebalance = ctx.today
 
         single_ids = set(ctx.products.filter(pl.col("kind") == "single")["product_id"].to_list())
         window_start = ctx.today - timedelta(days=self.lookback_days)
