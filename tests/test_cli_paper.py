@@ -127,6 +127,43 @@ def test_paper_daily_records_sell_with_fee_formula(
     assert sell["fees"] == expected_fees
 
 
+def test_paper_daily_works_when_deposit_postdates_warehouse(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Real-world shape: warehouse data ends (as_of 2025-05-01) BEFORE the user
+    funds the paper account (2025-06-01). Fills must be dated the run date so
+    the replay's date-sort keeps them after the deposit; dating them as_of
+    replays buys before the money exists and rejects the batch."""
+    monkeypatch.setattr(notify, "send_notification", lambda t, b: None)
+    seed(tmp_path)
+    runner = CliRunner()
+    run_walkforward(runner, tmp_path)
+    r = runner.invoke(
+        app,
+        [
+            "portfolio",
+            "deposit",
+            "--amount",
+            "1000",
+            "--date",
+            "2025-06-01",
+            "--paper",
+            "--root",
+            str(tmp_path),
+        ],
+    )
+    assert r.exit_code == 0, r.output
+    result = runner.invoke(app, ["daily", "--skip-ingest", "--paper", "--root", str(tmp_path)])
+    assert result.exit_code == 0, result.output
+    lines = (tmp_path / "data" / "portfolio" / "paper.jsonl").read_text().strip().splitlines()
+    assert len(lines) >= 2
+    buy = json.loads(lines[1])
+    assert buy["kind"] == "buy"
+    import datetime as dt
+
+    assert buy["date"] == dt.date.today().isoformat()  # run date, not as_of
+
+
 def test_paper_show_reads_paper_ledger(tmp_path: Path) -> None:
     seed(tmp_path)
     runner = CliRunner()

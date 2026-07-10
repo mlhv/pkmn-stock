@@ -548,6 +548,11 @@ def daily(
 
             # Process SELLs first (they add cash), then BUYs — same order as
             # the recommendations list (strategy always emits sells before buys).
+            #
+            # Fills are dated the run date (today), not report.as_of.  The ledger
+            # is chronological in event time; as_of marks can predate deposits, so
+            # using as_of would sort fills before the deposit and cause cash-negative
+            # replay failures.  Prices/quantities/fees are still based on as_of marks.
             for rec in report.recommendations:
                 mark = rec.market_price
                 cap = cost.max_daily_qty(mark)
@@ -560,7 +565,7 @@ def daily(
                     cash_remaining += qty * mark * (1 - cost.fee_rate) - cost.shipping_per_line
                     batch.append(
                         {
-                            "date": report.as_of.isoformat(),
+                            "date": today.isoformat(),
                             "kind": "sell",
                             "product_id": rec.product_id,
                             "sub_type": rec.sub_type,
@@ -580,7 +585,7 @@ def daily(
                     cash_remaining -= qty * mark + cost.shipping_per_line
                     batch.append(
                         {
-                            "date": report.as_of.isoformat(),
+                            "date": today.isoformat(),
                             "kind": "buy",
                             "product_id": rec.product_id,
                             "sub_type": rec.sub_type,
