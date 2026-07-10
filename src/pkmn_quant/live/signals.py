@@ -30,11 +30,12 @@ Params = dict[str, float | int]
 
 DEFAULT_WARMUP_DAYS = 365
 
-# Strategies whose exit rules read only Context (positions.avg_cost + marks).
-# dip-buyer / xs-momentum keep hold-day clocks in strategy-internal state a
-# single live bar cannot reconstruct (dip-buyer treats unknown entries as
-# overdue and would dump every holding). Research plan adds Position.opened_on.
-PORTFOLIO_SAFE_STRATEGIES = frozenset({"sealed-accumulation"})
+# Strategies whose exit rules read only Context. Since Plan 6, positions
+# carry opened_on (engine fills and ledger replay both set it), so hold-day
+# and rebalance clocks are reconstructible from a single live bar.
+PORTFOLIO_SAFE_STRATEGIES = frozenset(
+    {"sealed-accumulation", "dip-buyer", "xs-momentum", "cost-aware-reversion"}
+)
 
 
 class SignalsError(Exception):

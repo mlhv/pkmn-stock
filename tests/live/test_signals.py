@@ -44,8 +44,12 @@ def warehouse(tmp_path: Path) -> Warehouse:
 PARAMS: dict[str, float | int] = {"min_drawdown": 0.25, "take_profit": 1.5, "min_age_days": 60}
 
 
-def seed_wf_artifact(results_dir: Path, params: dict[str, float | int] = PARAMS) -> None:
-    run_dir = results_dir / "wf-sealed-accumulation-2025-01-01-2025-04-01"
+def seed_wf_artifact(
+    results_dir: Path,
+    params: dict[str, float | int] = PARAMS,
+    strategy: str = "sealed-accumulation",
+) -> None:
+    run_dir = results_dir / f"wf-{strategy}-2025-01-01-2025-04-01"
     run_dir.mkdir(parents=True)
     fold = Fold(date(2025, 1, 1), date(2025, 2, 1), date(2025, 2, 2), date(2025, 3, 1))
     fr = FoldResult(
@@ -60,7 +64,7 @@ def seed_wf_artifact(results_dir: Path, params: dict[str, float | int] = PARAMS)
         stitched_curve=pl.DataFrame({"date": [date(2025, 2, 2)], "equity": [1000.0]}),
         summary={"stitched_total_return": 0.01, "overfitting_gap": 0.04},
     )
-    write_walkforward_json(run_dir, result, strategy_name="sealed-accumulation")
+    write_walkforward_json(run_dir, result, strategy_name=strategy)
 
 
 def test_generates_buy_recommendation(warehouse: Warehouse, tmp_path: Path) -> None:
@@ -203,11 +207,17 @@ def test_portfolio_mode_no_mark_raises_signals_error(warehouse: Warehouse, tmp_p
         )
 
 
-def test_portfolio_mode_rejects_entry_state_strategies(
-    warehouse: Warehouse, tmp_path: Path
+def test_portfolio_mode_guard_still_rejects_unlisted_strategy(
+    warehouse: Warehouse, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """The allowlist mechanism survives even though every current strategy
+    is now a member: shrink it and confirm the clean rejection."""
+    import pkmn_quant.live.signals as signals_mod
     from pkmn_quant.engine.portfolio import Portfolio
 
+    monkeypatch.setattr(
+        signals_mod, "PORTFOLIO_SAFE_STRATEGIES", frozenset({"sealed-accumulation"})
+    )
     with pytest.raises(SignalsError, match="dip-buyer"):
         generate_signals(
             warehouse=warehouse,
@@ -215,6 +225,38 @@ def test_portfolio_mode_rejects_entry_state_strategies(
             results_dir=tmp_path / "data" / "results",
             portfolio=Portfolio(cash=100.0),
         )
+
+
+def test_dip_buyer_portfolio_mode_time_exit_end_to_end(
+    warehouse: Warehouse, tmp_path: Path
+) -> None:
+    """A ledger position held past hold_days produces a SELL through the real
+    generate_signals path — the whole point of Plan 6."""
+    from pkmn_quant.engine.portfolio import Asset as EAsset
+    from pkmn_quant.engine.portfolio import Portfolio, Position
+
+    results_dir = tmp_path / "data" / "results"
+    seed_wf_artifact(
+        results_dir,
+        strategy="dip-buyer",
+        params={"dip_threshold": 0.3, "hold_days": 30, "take_profit": 5.0},
+    )
+    pf = Portfolio(cash=100.0)
+    # opened_on far in the past relative to the warehouse's latest day:
+    # any hold_days in the search space has elapsed; take_profit 5.0 can't
+    # fire (mark 100 < 60*5), so the SELL is unambiguously the time exit.
+    pf.positions[EAsset(1, "Normal")] = Position(
+        quantity=2, avg_cost=60.0, opened_on=date(2020, 1, 1)
+    )
+    report = generate_signals(
+        warehouse=warehouse,
+        strategy_name="dip-buyer",
+        results_dir=results_dir,
+        portfolio=pf,
+    )
+    sells = [r for r in report.recommendations if r.action == "SELL"]
+    [sell] = sells
+    assert sell.quantity == 2 and sell.avg_cost == 60.0
 
 
 def test_cash_and_portfolio_are_mutually_exclusive(warehouse: Warehouse, tmp_path: Path) -> None:
