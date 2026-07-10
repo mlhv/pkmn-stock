@@ -109,3 +109,36 @@ def test_avg_cost_is_quantity_weighted_mean(buys: list[tuple[int, float]]) -> No
         total_qty += qty
         total_cost += qty * price
     assert p.positions[asset].avg_cost == pytest.approx(total_cost / total_qty)
+
+
+def test_opened_on_set_when_position_created() -> None:
+    pf = Portfolio(cash=1000.0)
+    pf.apply(Fill(day=date(2026, 1, 5), asset=Asset(1, "Normal"), quantity=2, price=10.0, fees=0.0))
+    assert pf.positions[Asset(1, "Normal")].opened_on == date(2026, 1, 5)
+
+
+def test_opened_on_kept_when_adding_to_position() -> None:
+    """Age = first fill of the continuous holding (conservative for time exits)."""
+    pf = Portfolio(cash=1000.0)
+    a = Asset(1, "Normal")
+    pf.apply(Fill(day=date(2026, 1, 5), asset=a, quantity=1, price=10.0, fees=0.0))
+    pf.apply(Fill(day=date(2026, 2, 1), asset=a, quantity=1, price=20.0, fees=0.0))
+    assert pf.positions[a].opened_on == date(2026, 1, 5)
+    assert pf.positions[a].avg_cost == pytest.approx(15.0)  # accounting unchanged
+
+
+def test_opened_on_survives_partial_sell() -> None:
+    pf = Portfolio(cash=1000.0)
+    a = Asset(1, "Normal")
+    pf.apply(Fill(day=date(2026, 1, 5), asset=a, quantity=2, price=10.0, fees=0.0))
+    pf.apply(Fill(day=date(2026, 3, 1), asset=a, quantity=-1, price=12.0, fees=0.0))
+    assert pf.positions[a].opened_on == date(2026, 1, 5)
+
+
+def test_opened_on_fresh_after_close_and_reopen() -> None:
+    pf = Portfolio(cash=1000.0)
+    a = Asset(1, "Normal")
+    pf.apply(Fill(day=date(2026, 1, 5), asset=a, quantity=1, price=10.0, fees=0.0))
+    pf.apply(Fill(day=date(2026, 2, 1), asset=a, quantity=-1, price=12.0, fees=0.0))
+    pf.apply(Fill(day=date(2026, 4, 1), asset=a, quantity=1, price=8.0, fees=0.0))
+    assert pf.positions[a].opened_on == date(2026, 4, 1)
