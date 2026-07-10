@@ -228,3 +228,53 @@ def test_cash_and_portfolio_are_mutually_exclusive(warehouse: Warehouse, tmp_pat
             cash=1000.0,
             portfolio=Portfolio(cash=100.0),
         )
+
+
+# ---------------------------------------------------------------------------
+# Task 2: trust-boundary copy carries opened_on
+# ---------------------------------------------------------------------------
+
+
+def test_portfolio_mode_context_copy_carries_opened_on(
+    warehouse: Warehouse, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The trust-boundary copy must not drop opened_on (strategies need it).
+
+    Pin it by capturing the Context a strategy actually receives: swap the
+    sealed-accumulation factory for one returning a recording strategy."""
+    from pkmn_quant.engine.execution import Order
+    from pkmn_quant.engine.portfolio import Asset as EAsset
+    from pkmn_quant.engine.portfolio import Portfolio, Position
+    from pkmn_quant.engine.strategy import Context, Strategy
+    from pkmn_quant.research.registry import REGISTRY, RegistryEntry
+
+    captured: list[Context] = []
+
+    class Recorder(Strategy):
+        name = "sealed-accumulation"
+
+        def on_bar(self, ctx: Context) -> list[Order]:
+            captured.append(ctx)
+            return []
+
+    old = REGISTRY["sealed-accumulation"]
+    monkeypatch.setitem(
+        REGISTRY,
+        "sealed-accumulation",
+        RegistryEntry(factory=lambda p: Recorder(), space=old.space),
+    )
+    results_dir = tmp_path / "data" / "results"
+    seed_wf_artifact(results_dir)
+    pf = Portfolio(cash=500.0)
+    original = Position(quantity=2, avg_cost=60.0, opened_on=date(2025, 1, 10))
+    pf.positions[EAsset(1, "Normal")] = original
+    generate_signals(
+        warehouse=warehouse,
+        strategy_name="sealed-accumulation",
+        results_dir=results_dir,
+        portfolio=pf,
+    )
+    [ctx] = captured
+    copied = ctx.positions[EAsset(1, "Normal")]
+    assert copied.opened_on == date(2025, 1, 10)  # field carried
+    assert copied is not original  # trust boundary: a copy, not an alias

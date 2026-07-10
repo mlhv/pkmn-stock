@@ -68,8 +68,9 @@ class Backtest:
             pending = []
 
             # 2. Strategy sees history <= today and emits orders for tomorrow.
-            # positions is DEEP-COPIED: Portfolio.positions is mutable and
-            # aliased; a buggy strategy must not be able to edit real holdings.
+            # positions is copied per-Position via replace() (sufficient: all
+            # Position fields are immutable); a buggy strategy must not be
+            # able to edit real holdings.
             marks = market.marks_on(day)  # computed once: used by Context AND equity
             ctx = Context(
                 today=day,

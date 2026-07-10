@@ -14,13 +14,13 @@ default, pass cash=) and portfolio mode are mutually exclusive.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date
 from pathlib import Path
 
 from pkmn_quant.data.warehouse import Warehouse
 from pkmn_quant.engine.data import MarketData
-from pkmn_quant.engine.portfolio import Portfolio, Position
+from pkmn_quant.engine.portfolio import Portfolio
 from pkmn_quant.engine.strategy import Context
 from pkmn_quant.live.ledger import LedgerError, Snapshot, make_snapshot
 from pkmn_quant.research.artifacts import find_latest_wf_run, load_walkforward_json
@@ -124,10 +124,9 @@ def generate_signals(
 
     if portfolio is not None:
         ctx_cash = portfolio.cash
-        ctx_positions = {
-            a: Position(quantity=p.quantity, avg_cost=p.avg_cost)
-            for a, p in portfolio.positions.items()
-        }
+        # Same trust-boundary idiom as the backtest loop (backtest.py):
+        # replace() copies every field, including opened_on.
+        ctx_positions = {a: replace(p) for a, p in portfolio.positions.items()}
     else:
         assert cash is not None
         ctx_cash = cash
