@@ -3,8 +3,8 @@
 A quant research system for TCGplayer card prices: custom event-driven
 backtest engine with realistic card-market execution costs, three
 parameterized strategies, optuna walk-forward validation, live signal
-generation, and a Streamlit results explorer. Python 3.12, polars,
-strict mypy, 152 tests, CI.
+generation, reinvest loop with portfolio ledger and daily scheduling, and a
+Streamlit results explorer. Python 3.12, polars, strict mypy, 213 tests, CI.
 
 **The honest headline:** across 2024-08 → 2026-06, none of the three active
 strategies beat buy-and-hold sealed product (+151% out-of-sample). The
@@ -63,12 +63,17 @@ caveats: [docs/research-findings-2026-07.md](docs/research-findings-2026-07.md).
 ## Quickstart
 
     uv sync
-    uv run pytest                                        # 152 tests
+    uv run pytest                                        # 213 tests
     uv run pkmn ingest --start 2024-02-08 --end 2026-06-30   # ~40 min, ~2.9M rows
     uv run pkmn backtest --start 2024-03-01 --end 2026-06-30 # benchmark
     uv run pkmn walkforward --strategy sealed-accumulation \
         --start 2024-03-01 --end 2026-06-30 --trials 15      # minutes
     uv run pkmn signals --strategy sealed-accumulation       # today's entries
+    uv run pkmn portfolio deposit --amount 1000              # seed the ledger
+    uv run pkmn portfolio buy --product-id ... --qty ... --price ...  # record a buy
+    uv run pkmn portfolio show                               # positions + P&L
+    uv run pkmn signals --strategy sealed-accumulation --portfolio  # entries + exits
+    uv run pkmn daily --skip-ingest                          # full loop, offline
     uv run --group dashboard streamlit run app/dashboard.py  # explorer
 
 ### Scheduling the daily loop (macOS)
@@ -108,5 +113,7 @@ Troubleshooting:
 
 ## Future work
 
-Scheduled ingestion + signals (cron/Actions), position tracking in live mode,
-multi-marketplace data (eBay, PSA-graded), ML strategies, Docker.
+- Multi-marketplace data (eBay, PSA-graded)
+- ML strategies
+- Docker
+- Short-horizon strategies + entry-date exits (Plan 6, planned)
