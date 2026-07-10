@@ -131,3 +131,100 @@ def test_incompatible_params_raises_clean_error(warehouse: Warehouse, tmp_path: 
             cash=1000.0,
             results_dir=results_dir,
         )
+
+
+def test_portfolio_mode_emits_sell_at_take_profit(warehouse: Warehouse, tmp_path: Path) -> None:
+    """Bought at 60, mark is 100, take_profit 1.5 -> 100 >= 90 fires the exit."""
+    from pkmn_quant.engine.portfolio import Asset as EAsset
+    from pkmn_quant.engine.portfolio import Portfolio, Position
+
+    results_dir = tmp_path / "data" / "results"
+    seed_wf_artifact(results_dir)
+    pf = Portfolio(cash=500.0)
+    pf.positions[EAsset(1, "Normal")] = Position(quantity=2, avg_cost=60.0)
+    report = generate_signals(
+        warehouse=warehouse,
+        strategy_name="sealed-accumulation",
+        results_dir=results_dir,
+        portfolio=pf,
+    )
+    sells = [r for r in report.recommendations if r.action == "SELL"]
+    [sell] = sells
+    assert sell.product_id == 1 and sell.quantity == 2
+    assert sell.avg_cost == 60.0
+    assert sell.gain_pct == pytest.approx(100.0 / 60.0 - 1.0)
+    assert report.portfolio_snapshot is not None
+    assert report.portfolio_snapshot.cash == 500.0
+    assert report.portfolio_snapshot.equity == pytest.approx(500.0 + 200.0)
+    # BUY recommendations (if any) must not carry avg_cost (that belongs to SELLs only)
+    buys = [r for r in report.recommendations if r.action == "BUY"]
+    assert all(r.avg_cost is None for r in buys)
+
+
+def test_portfolio_mode_no_sell_below_take_profit(warehouse: Warehouse, tmp_path: Path) -> None:
+    """avg_cost=90, mark=100, take_profit=1.5 -> target is 135; no exit fired."""
+    from pkmn_quant.engine.portfolio import Asset as EAsset
+    from pkmn_quant.engine.portfolio import Portfolio, Position
+
+    results_dir = tmp_path / "data" / "results"
+    seed_wf_artifact(results_dir)
+    pf = Portfolio(cash=300.0)
+    pf.positions[EAsset(1, "Normal")] = Position(quantity=1, avg_cost=90.0)
+    report = generate_signals(
+        warehouse=warehouse,
+        strategy_name="sealed-accumulation",
+        results_dir=results_dir,
+        portfolio=pf,
+    )
+    sells = [r for r in report.recommendations if r.action == "SELL"]
+    assert sells == []
+    assert report.portfolio_snapshot is not None
+    # equity = cash + mark * qty = 300 + 100 * 1
+    assert report.portfolio_snapshot.equity == pytest.approx(300.0 + 100.0)
+
+
+def test_portfolio_mode_no_mark_raises_signals_error(warehouse: Warehouse, tmp_path: Path) -> None:
+    """A held asset with sub_type not in the warehouse has no mark; generate_signals
+    must raise SignalsError (not LedgerError) with a message mentioning warmup."""
+    from pkmn_quant.engine.portfolio import Asset as EAsset
+    from pkmn_quant.engine.portfolio import Portfolio, Position
+
+    results_dir = tmp_path / "data" / "results"
+    seed_wf_artifact(results_dir)
+    pf = Portfolio(cash=500.0)
+    # Asset(1, "Weird") has no price rows in the warehouse → mark is missing
+    pf.positions[EAsset(1, "Weird")] = Position(quantity=1, avg_cost=80.0)
+    with pytest.raises(SignalsError, match="warmup"):
+        generate_signals(
+            warehouse=warehouse,
+            strategy_name="sealed-accumulation",
+            results_dir=results_dir,
+            portfolio=pf,
+        )
+
+
+def test_portfolio_mode_rejects_entry_state_strategies(
+    warehouse: Warehouse, tmp_path: Path
+) -> None:
+    from pkmn_quant.engine.portfolio import Portfolio
+
+    with pytest.raises(SignalsError, match="dip-buyer"):
+        generate_signals(
+            warehouse=warehouse,
+            strategy_name="dip-buyer",
+            results_dir=tmp_path / "data" / "results",
+            portfolio=Portfolio(cash=100.0),
+        )
+
+
+def test_cash_and_portfolio_are_mutually_exclusive(warehouse: Warehouse, tmp_path: Path) -> None:
+    from pkmn_quant.engine.portfolio import Portfolio
+
+    with pytest.raises(SignalsError, match="either"):
+        generate_signals(
+            warehouse=warehouse,
+            strategy_name="sealed-accumulation",
+            results_dir=tmp_path / "data" / "results",
+            cash=1000.0,
+            portfolio=Portfolio(cash=100.0),
+        )

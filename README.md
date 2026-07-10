@@ -3,8 +3,8 @@
 A quant research system for TCGplayer card prices: custom event-driven
 backtest engine with realistic card-market execution costs, three
 parameterized strategies, optuna walk-forward validation, live signal
-generation, and a Streamlit results explorer. Python 3.12, polars,
-strict mypy, 152 tests, CI.
+generation, reinvest loop with portfolio ledger and daily scheduling, and a
+Streamlit results explorer. Python 3.12, polars, strict mypy, 213 tests, CI.
 
 **The honest headline:** across 2024-08 → 2026-06, none of the three active
 strategies beat buy-and-hold sealed product (+151% out-of-sample). The
@@ -63,13 +63,45 @@ caveats: [docs/research-findings-2026-07.md](docs/research-findings-2026-07.md).
 ## Quickstart
 
     uv sync
-    uv run pytest                                        # 152 tests
+    uv run pytest                                        # 213 tests
     uv run pkmn ingest --start 2024-02-08 --end 2026-06-30   # ~40 min, ~2.9M rows
     uv run pkmn backtest --start 2024-03-01 --end 2026-06-30 # benchmark
     uv run pkmn walkforward --strategy sealed-accumulation \
         --start 2024-03-01 --end 2026-06-30 --trials 15      # minutes
     uv run pkmn signals --strategy sealed-accumulation       # today's entries
+    uv run pkmn portfolio deposit --amount 1000              # seed the ledger
+    uv run pkmn portfolio buy --product-id ... --qty ... --price ...  # record a buy
+    uv run pkmn portfolio show                               # positions + P&L
+    uv run pkmn signals --strategy sealed-accumulation --portfolio  # entries + exits
+    uv run pkmn daily --skip-ingest                          # full loop, offline
     uv run --group dashboard streamlit run app/dashboard.py  # explorer
+
+### Scheduling the daily loop (macOS)
+
+    sed "s|REPO_PATH|$(pwd)|" scripts/com.pkmn-quant.daily.plist \
+        > ~/Library/LaunchAgents/com.pkmn-quant.daily.plist
+    launchctl load ~/Library/LaunchAgents/com.pkmn-quant.daily.plist
+
+Runs `pkmn daily` at 09:00 (or on next wake, if the Mac was asleep at 09:00):
+ingests new prices, runs signals against your ledger (`pkmn portfolio ...`),
+and sends a macOS notification when there is something to act on, or when the
+run fails.
+
+Before committing real cash, run the loop with `--paper` first
+(`uv run pkmn daily --skip-ingest --paper`, or a second launchd job pointing
+at the same repo).  Paper mode routes all ledger reads and writes to
+`data/portfolio/paper.jsonl`, auto-records fills using the same CostModel
+as the backtester (shipping, marketplace fee, per-day liquidity cap), and
+labels every output surface PAPER — the dashboard alerts strip, notification
+titles, and the `daily-{date}-paper/` artifact directory.  Use it to watch
+the strategy trade fake money through the identical pipeline before you act on
+any real recommendation.
+
+Troubleshooting:
+
+    launchctl start com.pkmn-quant.daily                        # fire immediately to test
+    launchctl list | grep pkmn-quant                            # loaded? last exit code?
+    launchctl unload ~/Library/LaunchAgents/com.pkmn-quant.daily.plist   # required before re-loading an edited plist
 
 ## Engineering
 
@@ -81,5 +113,7 @@ caveats: [docs/research-findings-2026-07.md](docs/research-findings-2026-07.md).
 
 ## Future work
 
-Scheduled ingestion + signals (cron/Actions), position tracking in live mode,
-multi-marketplace data (eBay, PSA-graded), ML strategies, Docker.
+- Multi-marketplace data (eBay, PSA-graded)
+- ML strategies
+- Docker
+- Short-horizon strategies + entry-date exits (Plan 6, planned)

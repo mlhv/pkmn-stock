@@ -3,17 +3,24 @@
 Algo-trading research system for Pokemon card prices (TCGplayer data via
 tcgcsv.com). Design spec: `docs/superpowers/specs/2026-06-09-pkmn-quant-design.md`.
 
-## Status (2026-07-05)
+## Status (2026-07-09)
 
-- Plans 1-4 are merged to main. 152 tests. Plan 4 closed out the v1 spec:
-  `walkforward.json` artifacts, `pkmn signals` (live recommendations carrying
-  the strategy's OOS record), the Streamlit dashboard, and the README.
-- Walk-forward findings for the README live in
-  `docs/research-findings-2026-07.md` — headline: nothing beat buy-and-hold
-  sealed (+151% over the OOS span); sealed-accumulation +13.6% stitched OOS
-  was the only positive strategy.
-- Next: future-work backlog (scheduled ingestion/signals, live position
-  tracking, more data sources) — no active plan.
+- Plans 1-4 merged to main. Plan 4 closed out the v1 spec: `walkforward.json`
+  artifacts, `pkmn signals`, Streamlit dashboard, README.
+- Plan 5 complete on feat/reinvest-loop (213 tests): reinvest loop ships the
+  manual-entry JSONL ledger feeding real holdings into `pkmn signals`
+  (strategy exit rules produce SELLs), `pkmn portfolio` CLI, `pkmn daily`
+  scheduled loop with macOS notifications + launchd template
+  (`scripts/com.pkmn-quant.daily.plist`), dashboard Portfolio tab with
+  daily-runs alerts strip, paper-trading mode (`--paper`,
+  executor-fidelity auto-recorded fills).
+- Walk-forward findings in `docs/research-findings-2026-07.md`: nothing beat
+  buy-and-hold sealed (+151% OOS); sealed-accumulation +13.6% was the only
+  positive active strategy.
+- Next: Plan 6 short-horizon research
+  (`docs/superpowers/plans/2026-07-06-short-horizon-research.md`) -
+  Position.opened_on, dip-buyer/xs-momentum live exits,
+  cost-aware-reversion strategy.
 
 ## Commands
 
@@ -28,6 +35,9 @@ uv run pkmn walkforward --strategy sealed-accumulation \
     --start 2024-03-01 --end 2026-06-30 --trials 15      # research run
 uv run pkmn signals --strategy sealed-accumulation       # live recommendations
 uv run --group dashboard streamlit run app/dashboard.py  # results explorer
+uv run pkmn portfolio show                               # real positions + P&L
+uv run pkmn daily --skip-ingest                          # the loop, offline
+uv run pkmn daily --skip-ingest --paper                  # paper mode dry-run
 ```
 
 All four gates must pass before every commit. CI runs them with
@@ -48,10 +58,14 @@ uv.lock together).
 - `src/pkmn_quant/live/` — `pkmn signals`: one on_bar at the latest warehouse
   date using the last fold's params from the latest walk-forward artifact;
   markdown + JSON reports that carry the strategy's OOS record.
+  `ledger.py`: append-only JSONL trade ledger replayed through the engine
+  Portfolio; single source of truth, marks never stored. `notify.py`:
+  osascript banners, argv-passing.
 - `app/dashboard.py` — Streamlit results explorer (dependency group
   `dashboard`; not mypy'd, not imported by src/ or tests — demo tool only).
 - `data/` — gitignored. Contains 874 ingested days (2024-02-08..2026-06-30,
   ~2.9M price rows) plus raw archives. Do not delete; re-ingest is ~40 min.
+  `data/portfolio/` holds the gitignored real and paper ledgers.
 
 ## Conventions and gotchas
 

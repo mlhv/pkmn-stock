@@ -28,7 +28,7 @@ THESIS = {
 
 def render_signals_markdown(report: SignalReport) -> str:
     lines = [
-        f"# Signals: {report.strategy} — {report.as_of}",
+        f"# Signals{' (PAPER)' if report.paper else ''}: {report.strategy} — {report.as_of}",
         "",
         f"Thesis: {THESIS.get(report.strategy, 'n/a')}",
         f"Params (last walk-forward fold): {format_params(report.params)}",
@@ -47,6 +47,31 @@ def render_signals_markdown(report: SignalReport) -> str:
             f"| {r.action} | {r.name} | {r.sub_type} | {r.quantity}"
             f" | ${r.market_price:.2f} | ${r.notional:.2f} |"
             for r in report.recommendations
+        ]
+    if report.portfolio_snapshot is not None:
+        snap = report.portfolio_snapshot
+        lines += ["", "## Portfolio", ""]
+        exits = [r for r in report.recommendations if r.action == "SELL"]
+        exited_keys = {(r.product_id, r.sub_type) for r in exits}
+        for r in exits:
+            if r.avg_cost is not None and r.gain_pct is not None:
+                suffix = f", basis ${r.avg_cost:.2f}, gain {r.gain_pct:+.1%}"
+            elif r.avg_cost is not None:
+                suffix = f", basis ${r.avg_cost:.2f}, gain n/a"
+            else:
+                suffix = ", basis n/a"
+            lines.append(f"- EXIT {r.name}: {r.quantity} @ mark ${r.market_price:.2f}{suffix}")
+        for p in snap.positions:
+            if (p.product_id, p.sub_type) in exited_keys:
+                continue  # already rendered as EXIT above; skip the conflicting HOLD line
+            lines.append(
+                f"- HOLD {p.name} ({p.sub_type}) x{p.quantity}: avg ${p.avg_cost:.2f},"
+                f" mark ${p.mark:.2f}, unrealized ${p.unrealized_pnl:+.2f}"
+            )
+        lines += [
+            f"- cash: ${snap.cash:.2f}",
+            f"- realized P&L: ${snap.realized_pnl:+.2f}",
+            f"- equity: ${snap.equity:.2f}",
         ]
     lines += [
         "",
