@@ -186,6 +186,20 @@ def append_event(path: Path, event: dict[str, object], products: pl.DataFrame) -
     path.write_text("".join(line + "\n" for line in candidate))
 
 
+def append_events(path: Path, events: list[dict[str, object]], products: pl.DataFrame) -> None:
+    """Validate existing + ALL new events in one replay; write once (atomic).
+
+    If any event in *events* is invalid (or the combined sequence violates
+    portfolio invariants), raises LedgerError and the file is left completely
+    unchanged.  Mirror of append_event but for a batch of events.
+    """
+    existing = path.read_text().splitlines() if path.exists() else []
+    candidate = [*existing, *[json.dumps(e) for e in events]]
+    _replay(_parse_lines(candidate), products)  # raises LedgerError if invalid
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("".join(line + "\n" for line in candidate))
+
+
 def make_snapshot(pf: Portfolio, marks: dict[Asset, float], names: dict[int, str]) -> Snapshot:
     rows: list[PositionView] = []
     missing: list[Asset] = []

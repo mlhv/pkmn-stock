@@ -82,6 +82,16 @@ ingests new prices, runs signals against your ledger (`pkmn portfolio ...`),
 and sends a macOS notification when there is something to act on, or when the
 run fails.
 
+Before committing real cash, run the loop with `--paper` first
+(`uv run pkmn daily --skip-ingest --paper`, or a second launchd job pointing
+at the same repo).  Paper mode routes all ledger reads and writes to
+`data/portfolio/paper.jsonl`, auto-records fills using the same CostModel
+as the backtester (shipping, marketplace fee, per-day liquidity cap), and
+labels every output surface PAPER — the dashboard alerts strip, notification
+titles, and the `daily-{date}-paper/` artifact directory.  Use it to watch
+the strategy trade fake money through the identical pipeline before you act on
+any real recommendation.
+
 Troubleshooting:
 
     launchctl start com.pkmn-quant.daily                        # fire immediately to test

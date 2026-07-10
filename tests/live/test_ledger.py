@@ -7,6 +7,7 @@ import pytest
 from pkmn_quant.live.ledger import (
     LedgerError,
     append_event,
+    append_events,
     ledger_path,
     load_portfolio,
     make_snapshot,
@@ -372,3 +373,83 @@ def test_withdraw_exact_half_cent_boundary_raises(tmp_path: Path) -> None:
     )
     with pytest.raises(LedgerError, match="negative"):
         load_portfolio(path, PRODUCTS)
+
+
+# ---------------------------------------------------------------------------
+# Fix 1: append_events — atomic batch recording
+# ---------------------------------------------------------------------------
+
+
+def test_append_events_two_valid_events_atomic(tmp_path: Path) -> None:
+    """Two valid events appended in one call are both present afterwards."""
+    path = tmp_path / "ledger.jsonl"
+    # Seed an existing deposit so cash is available.
+    write_lines(path, ['{"date": "2026-07-01", "kind": "deposit", "amount": 1000.0}'])
+
+    events: list[dict[str, object]] = [
+        {
+            "date": "2026-07-02",
+            "kind": "buy",
+            "product_id": 1,
+            "sub_type": "Normal",
+            "qty": 2,
+            "price": 100.0,
+            "fees": 1.0,
+        },
+        {
+            "date": "2026-07-03",
+            "kind": "sell",
+            "product_id": 1,
+            "sub_type": "Normal",
+            "qty": 1,
+            "price": 120.0,
+            "fees": 16.3,
+        },
+    ]
+    append_events(path, events, PRODUCTS)
+
+    lines = path.read_text().strip().splitlines()
+    assert len(lines) == 3  # deposit + buy + sell
+
+    pf = load_portfolio(path, PRODUCTS)
+    # cash = 1000 - (2*100+1) + (1*120*(1-0) - 16.3) ... fees in ledger are
+    # the actual numbers we wrote, so just check position and realized p&l.
+    assert pf.positions  # still holds 1 unit
+
+
+def test_append_events_second_invalid_leaves_file_unchanged(tmp_path: Path) -> None:
+    """Second event invalid → LedgerError; file is completely unchanged."""
+    path = tmp_path / "ledger.jsonl"
+    write_lines(path, ['{"date": "2026-07-01", "kind": "deposit", "amount": 500.0}'])
+    original_text = path.read_text()
+
+    events: list[dict[str, object]] = [
+        {
+            "date": "2026-07-02",
+            "kind": "buy",
+            "product_id": 1,
+            "sub_type": "Normal",
+            "qty": 2,
+            "price": 100.0,
+            "fees": 1.0,
+        },
+        {
+            # Invalid: sell more than held (only 2 bought above; selling 5 oversells)
+            "date": "2026-07-03",
+            "kind": "sell",
+            "product_id": 1,
+            "sub_type": "Normal",
+            "qty": 5,
+            "price": 100.0,
+            "fees": 1.0,
+        },
+    ]
+
+    with pytest.raises(LedgerError):
+        append_events(path, events, PRODUCTS)
+
+    # File must be byte-for-byte identical to what it was before the call.
+    assert path.read_text() == original_text
+    pf = load_portfolio(path, PRODUCTS)
+    assert pf.cash == pytest.approx(500.0)
+    assert pf.positions == {}

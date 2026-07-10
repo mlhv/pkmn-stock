@@ -177,17 +177,18 @@ with tab_portfolio:
             meta = json.loads(meta_path.read_text())
             actionable = (meta.get("n_buys", 0) + meta.get("n_sells", 0)) > 0
             failed = meta.get("status") != "ok"
+            paper_prefix = "PAPER " if meta.get("paper") else ""
             if failed and meta.get("as_of") is None:
-                label = f"🔴 {meta.get('date')} — FAILED: {meta.get('error')}"
+                label = f"🔴 {paper_prefix}{meta.get('date')} — FAILED: {meta.get('error')}"
             elif actionable:
                 suffix = " — ingest problem, prices may be stale" if failed else ""
                 label = (
-                    f"🟡 {meta.get('date')} — {meta['n_buys']} buys,"
+                    f"🟡 {paper_prefix}{meta.get('date')} — {meta['n_buys']} buys,"
                     f" {meta['n_sells']} sells ({meta.get('strategy')}){suffix}"
                 )
             else:
                 suffix = " — ingest problem" if failed else ""
-                label = f"⚪ {meta.get('date')} — nothing to do{suffix}"
+                label = f"⚪ {paper_prefix}{meta.get('date')} — nothing to do{suffix}"
             with st.expander(label, expanded=False):
                 md = meta_path.parent / "signals.md"
                 if md.exists():

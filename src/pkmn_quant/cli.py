@@ -427,13 +427,18 @@ def daily(
     Paper mode (--paper): routes all ledger reads/writes to data/portfolio/paper.jsonl
     and auto-records the day's recommended fills using the engine CostModel so the
     strategy trades fake money through the identical pipeline. Every output surface is
-    labeled PAPER.
+    labeled PAPER.  The output directory is ``daily-{date}-paper`` (real runs use
+    ``daily-{date}``), and notifications are tagged "(paper)".
 
-    Known optimism vs the backtester: paper fills are recorded same-day at the
-    warehouse mark, not T+1. The backtester uses T+1 fills; paper results will
-    therefore look slightly better than a true OOS simulation.
+    Known optimism vs the backtester:
+    - Fills use the carry-forward warehouse mark on the as_of date, not a
+      same-day actual print.  On days a card didn't trade, the mark is stale
+      and paper may fill at a price no real buyer could have obtained.
+    - The backtester uses T+1 fills; paper fills are recorded same-day, so
+      paper results will look slightly better than a true OOS simulation.
     """
     import json as _json
+    import math
 
     from pkmn_quant.live import notify
     from pkmn_quant.live.ledger import LedgerError, load_portfolio
@@ -441,8 +446,11 @@ def daily(
     from pkmn_quant.live.signals import SignalsError, generate_signals
 
     today = dt.date.today()
-    out_dir = root / "data" / "results" / f"daily-{today.isoformat()}"
+    dir_suffix = "-paper" if paper else ""
+    out_dir = root / "data" / "results" / f"daily-{today.isoformat()}{dir_suffix}"
     out_dir.mkdir(parents=True, exist_ok=True)
+
+    notify_title_base = "pkmn daily (paper)" if paper else "pkmn daily"
 
     def finish(
         status: str, error: str | None, n_buys: int, n_sells: int, as_of: str | None
@@ -464,12 +472,18 @@ def daily(
             + "\n"
         )
 
-    def _fail(error: str) -> None:
-        """Write error daily.json, clean up stale signal artifacts, notify, print, exit 1."""
+    def _fail(error: str, keep_artifacts: bool = False) -> None:
+        """Write error daily.json, optionally remove stale signal artifacts, notify, exit 1.
+
+        Pass keep_artifacts=True when the signals.md/signals.json are still
+        valid (e.g. all-or-nothing ledger write failed after artifacts were
+        written — no fills were recorded so the artifacts are consistent).
+        """
         finish("error", error, 0, 0, None)
-        for stale in ("signals.md", "signals.json"):
-            (out_dir / stale).unlink(missing_ok=True)
-        notify.send_notification("pkmn daily FAILED", error)
+        if not keep_artifacts:
+            for stale in ("signals.md", "signals.json"):
+                (out_dir / stale).unlink(missing_ok=True)
+        notify.send_notification(f"{notify_title_base} FAILED", error)
         typer.echo(f"error: {error}", err=True)
         raise typer.Exit(1)
 
@@ -515,33 +529,71 @@ def daily(
 
     # Paper mode: auto-record recommended fills using the engine CostModel so the
     # strategy trades fake money through the identical pipeline as the backtester.
-    # Fills land inside the main try/except so LedgerError routes through _fail.
+    # All fills are validated and written in one atomic append_events call so that
+    # a mid-batch failure leaves the ledger completely unchanged.  If LedgerError
+    # fires: the signals artifacts are left in place (they describe recommendations
+    # and no fills were recorded, so the artifacts are consistent) and _fail is
+    # called with keep_artifacts=True.
     if paper and report.recommendations:
         try:
             from pkmn_quant.engine.costs import CostModel
-            from pkmn_quant.live.ledger import append_event, ledger_path
+            from pkmn_quant.live.ledger import append_events, ledger_path
 
             cost = CostModel()
+            lp = ledger_path(root, paper=True)
+            # Load the current portfolio state to track running cash through
+            # this batch of fills, mirroring the executor's clipping logic.
+            cash_remaining = pf.cash
+            batch: list[dict[str, object]] = []
+
+            # Process SELLs first (they add cash), then BUYs — same order as
+            # the recommendations list (strategy always emits sells before buys).
             for rec in report.recommendations:
-                if rec.action == "BUY":
+                mark = rec.market_price
+                cap = cost.max_daily_qty(mark)
+                if rec.action == "SELL":
+                    # Clip to liquidity cap; rec.quantity already equals held qty
+                    qty = min(rec.quantity, cap)
+                    if qty <= 0:
+                        continue
+                    fees = round(qty * mark * cost.fee_rate + cost.shipping_per_line, 2)
+                    cash_remaining += qty * mark * (1 - cost.fee_rate) - cost.shipping_per_line
+                    batch.append(
+                        {
+                            "date": report.as_of.isoformat(),
+                            "kind": "sell",
+                            "product_id": rec.product_id,
+                            "sub_type": rec.sub_type,
+                            "qty": qty,
+                            "price": mark,
+                            "fees": fees,
+                        }
+                    )
+                else:  # BUY
+                    # Mirror executor _fill_buy: clip to liquidity cap, then to
+                    # what cash_remaining can afford after shipping is reserved.
+                    affordable = math.floor((cash_remaining - cost.shipping_per_line) / mark)
+                    qty = min(rec.quantity, cap, max(affordable, 0))
+                    if qty <= 0:
+                        continue
                     fees = cost.shipping_per_line
-                else:
-                    fees = rec.quantity * rec.market_price * cost.fee_rate + cost.shipping_per_line
-                append_event(
-                    ledger_path(root, paper=True),
-                    {
-                        "date": report.as_of.isoformat(),
-                        "kind": rec.action.lower(),
-                        "product_id": rec.product_id,
-                        "sub_type": rec.sub_type,
-                        "qty": rec.quantity,
-                        "price": rec.market_price,
-                        "fees": round(fees, 2),
-                    },
-                    products,
-                )
+                    cash_remaining -= qty * mark + cost.shipping_per_line
+                    batch.append(
+                        {
+                            "date": report.as_of.isoformat(),
+                            "kind": "buy",
+                            "product_id": rec.product_id,
+                            "sub_type": rec.sub_type,
+                            "qty": qty,
+                            "price": mark,
+                            "fees": fees,
+                        }
+                    )
+
+            if batch:
+                append_events(lp, batch, products)
         except LedgerError as exc:
-            _fail(f"paper auto-record failed: {exc}")
+            _fail(f"paper auto-record failed: {exc}", keep_artifacts=True)
             return  # unreachable
 
     finish(
@@ -550,10 +602,11 @@ def daily(
 
     if n_buys + n_sells > 0:
         notify.send_notification(
-            "pkmn daily", f"{strategy}: {n_buys} buys, {n_sells} sells — see dashboard"
+            notify_title_base,
+            f"{strategy}: {n_buys} buys, {n_sells} sells — see dashboard",
         )
     if ingest_error:
-        notify.send_notification("pkmn daily: ingest problem", ingest_error)
+        notify.send_notification(f"{notify_title_base}: ingest problem", ingest_error)
         typer.echo(ingest_error, err=True)
         raise typer.Exit(1)
     typer.echo(f"daily run written to {out_dir}")

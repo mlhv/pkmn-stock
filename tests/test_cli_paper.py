@@ -36,13 +36,95 @@ def test_paper_daily_auto_records_fills(tmp_path: Path, monkeypatch: pytest.Monk
     paper = tmp_path / "data" / "portfolio" / "paper.jsonl"
     lines = paper.read_text().strip().splitlines()
     assert len(lines) >= 2  # deposit + at least one auto-recorded buy
-    assert json.loads(lines[1])["kind"] == "buy"
+    buy_event = json.loads(lines[1])
+    assert buy_event["kind"] == "buy"
+    # CostModel.shipping_per_line == 1.0; executor sets fees = shipping for buys
+    assert buy_event["fees"] == 1.0
     assert not (tmp_path / "data" / "portfolio" / "ledger.jsonl").exists()  # real untouched
 
+    # Output goes to the -paper suffixed directory (Fix 5)
+    daily_dirs = list((tmp_path / "data" / "results").glob("daily-*"))
+    assert len(daily_dirs) == 1
+    assert daily_dirs[0].name.endswith("-paper")
+
     # Paper label on every surface
-    daily_dir = next((tmp_path / "data" / "results").glob("daily-*"))
+    daily_dir = daily_dirs[0]
     assert "PAPER" in (daily_dir / "signals.md").read_text()
     assert json.loads((daily_dir / "daily.json").read_text())["paper"] is True
+
+
+def test_paper_daily_records_sell_with_fee_formula(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Pre-seed the paper ledger with a buy at 35; latest mark is 100.
+
+    100 >= 35 * take_profit for every take_profit in the search space
+    (max 2.5 -> threshold 87.5), so the SELL fires regardless of which
+    params optuna picked.
+
+    Liquidity check: DEFAULT_LIQUIDITY_TIERS = ((5.0,20),(50.0,8),(200.0,3)).
+    Mark 100 falls in the (50.0, 8) tier -> cap 8/day.  qty 2 < 8, so the
+    full position is sold and no clipping occurs.
+
+    Expected sell fees = qty * price * fee_rate + shipping
+                       = 2 * 100.0 * 0.1275 + 1.0 = 25.5 + 1.0 = 26.5
+    """
+    monkeypatch.setattr(notify, "send_notification", lambda t, b: None)
+    seed(tmp_path)
+    runner = CliRunner()
+    run_walkforward(runner, tmp_path)
+
+    # Seed the paper ledger: deposit then buy 2 units at 35
+    for args in (
+        [
+            "portfolio",
+            "deposit",
+            "--amount",
+            "1000",
+            "--date",
+            "2025-01-02",
+            "--paper",
+            "--root",
+            str(tmp_path),
+        ],
+        [
+            "portfolio",
+            "buy",
+            "--product-id",
+            "1",
+            "--sub-type",
+            "Normal",
+            "--qty",
+            "2",
+            "--price",
+            "35",
+            "--date",
+            "2025-01-03",
+            "--paper",
+            "--root",
+            str(tmp_path),
+        ],
+    ):
+        r = runner.invoke(app, args)
+        assert r.exit_code == 0, r.output
+
+    result = runner.invoke(app, ["daily", "--skip-ingest", "--paper", "--root", str(tmp_path)])
+    assert result.exit_code == 0, result.output
+
+    paper = tmp_path / "data" / "portfolio" / "paper.jsonl"
+    lines = paper.read_text().strip().splitlines()
+
+    # Find the auto-recorded sell line (kind == "sell")
+    sell_lines = [json.loads(ln) for ln in lines if json.loads(ln).get("kind") == "sell"]
+    assert sell_lines, "no auto-recorded sell; check fixture produces SELL signal"
+
+    sell = sell_lines[0]
+    assert sell["kind"] == "sell"
+    assert sell["qty"] > 0
+    qty = sell["qty"]
+    price = sell["price"]
+    expected_fees = round(qty * price * 0.1275 + 1.0, 2)
+    assert sell["fees"] == expected_fees
 
 
 def test_paper_show_reads_paper_ledger(tmp_path: Path) -> None:
