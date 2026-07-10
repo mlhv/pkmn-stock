@@ -401,7 +401,8 @@ def signals(
         raise typer.BadParameter(str(exc)) from exc
 
     markdown = render_signals_markdown(report)
-    out_dir = results_dir / f"signals-{strategy}-{report.as_of.isoformat()}"
+    paper_suffix = "-paper" if paper else ""
+    out_dir = results_dir / f"signals-{strategy}-{report.as_of.isoformat()}{paper_suffix}"
     if out_dir.exists():
         typer.echo(f"warning: overwriting existing results in {out_dir}", err=True)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -537,10 +538,10 @@ def daily(
     if paper and report.recommendations:
         try:
             from pkmn_quant.engine.costs import CostModel
-            from pkmn_quant.live.ledger import append_events, ledger_path
+            from pkmn_quant.live.ledger import append_events
 
             cost = CostModel()
-            lp = ledger_path(root, paper=True)
+            lp = lpath
             # Load the current portfolio state to track running cash through
             # this batch of fills, mirroring the executor's clipping logic.
             cash_remaining = pf.cash

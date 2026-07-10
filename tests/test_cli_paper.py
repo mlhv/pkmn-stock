@@ -164,6 +164,48 @@ def test_paper_daily_works_when_deposit_postdates_warehouse(
     assert buy["date"] == dt.date.today().isoformat()  # run date, not as_of
 
 
+def test_paper_signals_writes_to_paper_suffixed_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """signals --paper must write artifacts to a -paper suffixed directory."""
+    monkeypatch.setattr(notify, "send_notification", lambda t, b: None)
+    seed(tmp_path)
+    runner = CliRunner()
+    run_walkforward(runner, tmp_path)
+    r = runner.invoke(
+        app,
+        [
+            "portfolio",
+            "deposit",
+            "--amount",
+            "1000",
+            "--date",
+            "2025-01-02",
+            "--paper",
+            "--root",
+            str(tmp_path),
+        ],
+    )
+    assert r.exit_code == 0, r.output
+
+    result = runner.invoke(
+        app,
+        ["signals", "--strategy", "sealed-accumulation", "--paper", "--root", str(tmp_path)],
+    )
+    assert result.exit_code == 0, result.output
+
+    # The artifact directory must carry the -paper suffix.
+    signal_dirs = list((tmp_path / "data" / "results").glob("signals-sealed-accumulation-*"))
+    assert len(signal_dirs) == 1, f"expected 1 signals dir, got {signal_dirs}"
+    assert signal_dirs[0].name.endswith("-paper"), (
+        f"signals dir should end with -paper, got {signal_dirs[0].name}"
+    )
+
+    signals_md = signal_dirs[0] / "signals.md"
+    assert signals_md.exists()
+    assert "(PAPER)" in signals_md.read_text()
+
+
 def test_paper_show_reads_paper_ledger(tmp_path: Path) -> None:
     seed(tmp_path)
     runner = CliRunner()
