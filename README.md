@@ -1,12 +1,12 @@
 # pkmn_quant — an event-driven backtester for Pokemon card markets
 
 A quant research system for TCGplayer card prices: custom event-driven
-backtest engine with realistic card-market execution costs, three
+backtest engine with realistic card-market execution costs, four
 parameterized strategies, optuna walk-forward validation, live signal
 generation, reinvest loop with portfolio ledger and daily scheduling, and a
-Streamlit results explorer. Python 3.12, polars, strict mypy, 213 tests, CI.
+Streamlit results explorer. Python 3.12, polars, strict mypy, 235 tests, CI.
 
-**The honest headline:** across 2024-08 → 2026-06, none of the three active
+**The honest headline:** across 2024-08 → 2026-06, none of the four active
 strategies beat buy-and-hold sealed product (+151% out-of-sample). The
 system's value is that it can prove that honestly — walk-forward
 out-of-sample testing, transaction-cost realism, and an explicit
@@ -14,12 +14,16 @@ overfitting measurement.
 
 ## Results (walk-forward, out-of-sample only)
 
-| Strategy            | Stitched OOS total | Mean OOS CAGR | Overfitting gap |
-|---------------------|-------------------:|--------------:|----------------:|
-| buy-and-hold sealed | **+151.1%**        | —             | —               |
-| sealed-accumulation | +13.6%             | +8.7%         | +4.8 pts        |
-| xs-momentum         | −11.0%             | −4.1%         | +4.7 pts        |
-| dip-buyer           | −9.3%              | −5.0%         | +0.3 pts        |
+Numbers from the 2026-07-10 re-runs after the `opened_on` bug fixes (Plan 6).
+Prior numbers (2026-07-04) remain in the findings doc.
+
+| Strategy             | Stitched OOS total | Mean OOS CAGR | Overfitting gap |
+|----------------------|-------------------:|--------------:|----------------:|
+| buy-and-hold sealed  | **+151.1%**        | —             | —               |
+| sealed-accumulation  | +13.6%             | +8.7%         | +4.8 pts        |
+| dip-buyer            | −9.0%              | −4.8%         | −0.4 pts        |
+| cost-aware-reversion | −10.2%             | −5.3%         | +1.7 pts        |
+| xs-momentum          | −25.1%             | −10.1%        | +12.9 pts       |
 
 11 folds each: optimize 180 days in-sample, freeze params, test 60 days
 out-of-sample, roll, stitch the OOS segments. The overfitting gap
@@ -54,7 +58,8 @@ caveats: [docs/research-findings-2026-07.md](docs/research-findings-2026-07.md).
     -> Strategy.on_bar -> orders -> T+1 fill
     simulator -> portfolio -> metrics
         │
-        ├── strategies/  sealed_accumulation, dip_buyer, momentum, buy_and_hold
+        ├── strategies/  sealed_accumulation, dip_buyer, momentum,
+        │                cost_aware_reversion, buy_and_hold
         ├── research/    folds -> seeded optuna search -> walk-forward
         │                runner/stitcher -> registry -> reports + artifacts
         └── live/        pkmn signals: same Strategy, latest data,
@@ -73,6 +78,7 @@ caveats: [docs/research-findings-2026-07.md](docs/research-findings-2026-07.md).
     uv run pkmn portfolio buy --product-id ... --qty ... --price ...  # record a buy
     uv run pkmn portfolio show                               # positions + P&L
     uv run pkmn signals --strategy sealed-accumulation --portfolio  # entries + exits
+    uv run pkmn signals --strategy cost-aware-reversion --portfolio  # cost-hurdle strategy
     uv run pkmn daily --skip-ingest                          # full loop, offline
     uv run --group dashboard streamlit run app/dashboard.py  # explorer
 
@@ -95,7 +101,10 @@ as the backtester (shipping, marketplace fee, per-day liquidity cap), and
 labels every output surface PAPER — the dashboard alerts strip, notification
 titles, and the `daily-{date}-paper/` artifact directory.  Use it to watch
 the strategy trade fake money through the identical pipeline before you act on
-any real recommendation.
+any real recommendation.  All four strategies (sealed-accumulation, dip-buyer,
+cost-aware-reversion, xs-momentum) are portfolio-safe: each supports
+`--portfolio` for exit signals against a real ledger and works with the paper
+daily loop.
 
 Troubleshooting:
 
@@ -116,4 +125,3 @@ Troubleshooting:
 - Multi-marketplace data (eBay, PSA-graded)
 - ML strategies
 - Docker
-- Short-horizon strategies + entry-date exits (Plan 6, planned)
