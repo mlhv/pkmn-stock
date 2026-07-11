@@ -39,6 +39,11 @@ class Fill:
 class Position:
     quantity: int
     avg_cost: float
+    # Date of the first fill of the current continuous holding. Adding to a
+    # position keeps it; a full close removes the Position, so re-opening
+    # records a fresh date. None only when hand-built (tests) — engine fills
+    # always set it.
+    opened_on: date | None = None
 
 
 @dataclass
@@ -66,7 +71,9 @@ class Portfolio:
         self.realized_pnl -= f.fees
         pos = self.positions.get(f.asset)
         if pos is None:
-            self.positions[f.asset] = Position(quantity=f.quantity, avg_cost=f.price)
+            self.positions[f.asset] = Position(
+                quantity=f.quantity, avg_cost=f.price, opened_on=f.day
+            )
         else:
             total_cost = pos.avg_cost * pos.quantity + cost
             pos.quantity += f.quantity

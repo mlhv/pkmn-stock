@@ -3,7 +3,7 @@
 Algo-trading research system for Pokemon card prices (TCGplayer data via
 tcgcsv.com). Design spec: `docs/superpowers/specs/2026-06-09-pkmn-quant-design.md`.
 
-## Status (2026-07-09)
+## Status (2026-07-10)
 
 - Plans 1-4 merged to main. Plan 4 closed out the v1 spec: `walkforward.json`
   artifacts, `pkmn signals`, Streamlit dashboard, README.
@@ -14,13 +14,17 @@ tcgcsv.com). Design spec: `docs/superpowers/specs/2026-06-09-pkmn-quant-design.m
   (`scripts/com.pkmn-quant.daily.plist`), dashboard Portfolio tab with
   daily-runs alerts strip, paper-trading mode (`--paper`,
   executor-fidelity auto-recorded fills).
+- Plan 6 complete on feat/short-horizon-research (235 tests):
+  `Position.opened_on` engine field; dip-buyer and xs-momentum retrofitted
+  from internal clocks onto `opened_on` (stateless, live-safe — documented
+  bug fixes that change backtest numbers); new cost-aware-reversion strategy
+  (entries must clear the round-trip cost hurdle); all four strategies are
+  now PORTFOLIO_SAFE_STRATEGIES (usable with `pkmn signals --portfolio` and
+  `pkmn daily --paper`).
 - Walk-forward findings in `docs/research-findings-2026-07.md`: nothing beat
   buy-and-hold sealed (+151% OOS); sealed-accumulation +13.6% was the only
-  positive active strategy.
-- Next: Plan 6 short-horizon research
-  (`docs/superpowers/plans/2026-07-06-short-horizon-research.md`) -
-  Position.opened_on, dip-buyer/xs-momentum live exits,
-  cost-aware-reversion strategy.
+  positive active strategy. 2026-07-10 re-runs after opened_on fixes logged
+  in the same file (new Plan 6 section).
 
 ## Commands
 
@@ -51,7 +55,9 @@ uv.lock together).
 - `src/pkmn_quant/engine/` — event-driven backtester: costs, portfolio, data
   view, execution, strategy ABC, metrics, backtest loop. T+1 fills, long-only.
 - `src/pkmn_quant/strategies/` — Strategy implementations: buy_and_hold,
-  sealed_accumulation, dip_buyer, momentum.
+  sealed_accumulation, dip_buyer, momentum, cost_aware_reversion. All four
+  active strategies are in PORTFOLIO_SAFE_STRATEGIES (support `--portfolio`
+  exit signals against a real ledger and the paper daily loop).
 - `src/pkmn_quant/research/` — walk-forward layer: folds, seeded optuna search,
   runner/stitcher, strategy registry, markdown report, `walkforward.json`
   artifacts (the research → live bridge).

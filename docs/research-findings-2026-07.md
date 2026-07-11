@@ -36,6 +36,94 @@ that holds cash between entries or takes profit early pays dearly for it.
   not mean-revert enough to cover transaction costs; the near-zero
   overfitting gap just means there was no edge to overfit.
 
+## Plan 6 re-runs — 2026-07-10
+
+All three active strategies re-run after the `opened_on` retrofit (Plan 6) and
+the first run of cost-aware-reversion.  Old 2026-07-04 numbers remain in the
+Headline table above as the historical record; new numbers are here.
+
+### Why the numbers changed for dip-buyer and xs-momentum
+
+The `opened_on` field on `Position` fixed two classes of bugs that affected
+both strategies — these are **documented bug fixes, not tuning changes**; old
+numbers measured buggy strategies:
+
+1. **Hold/rebalance clocks** previously started at order *emission* (T+0), not
+   at the actual T+1 fill.  Both strategies are now stateless on `opened_on`
+   (a field on the position itself) rather than derived from an internal clock
+   seeded at emission.  In the backtester the difference is one day per
+   position; in live mode the old code could drift arbitrarily if a daily loop
+   was paused.
+2. **Dip-buyer orphan bug** — when a buy order partially filled (or filled on
+   the last bar before the hold window expired), the code dumped the position
+   immediately every subsequent bar.  The fill-date reanchoring on `opened_on`
+   eliminates this.  An emitted-but-unfilled buy no longer blocks re-entry on
+   the next bar.
+3. **xs-momentum flat-period idle** — when the strategy had no open positions
+   it waited out `rebalance_days` doing nothing.  Fixed: when flat, the
+   strategy evaluates every bar and can enter immediately.
+
+### Updated numbers
+
+| Strategy                | Stitched OOS total | OOS CAGR (mean) | IS CAGR (mean) | Overfitting gap |
+|-------------------------|-------------------:|----------------:|---------------:|----------------:|
+| buy-and-hold sealed     | **+151.1%**        | —               | —              | —               |
+| sealed-accumulation     | +13.6%             | +8.7%           | +13.4%         | +4.8 pts        |
+| xs-momentum (2026-07-10)| −25.1%             | −10.1%          | +2.8%          | +12.9 pts       |
+| dip-buyer (2026-07-10)  | −9.0%              | −4.8%           | −5.2%          | −0.4 pts        |
+| cost-aware-reversion    | −10.2%             | −5.3%           | −3.5%          | +1.7 pts        |
+
+### Delta analysis
+
+**dip-buyer** is essentially unchanged (−9.3% → −9.0% stitched; gap now ~0).
+The bug fixes did not materially alter its trading pattern; the conclusion is
+unchanged: no edge to overfit, consistently unprofitable IS and OOS.
+
+**xs-momentum** is markedly worse (−11.0% → −25.1% stitched; gap +4.7 →
++12.9 pts).  The always-evaluate-when-flat and emission-clock fixes cause it
+to trade significantly more: previously it idled through dead periods (when
+flat it waited out `rebalance_days` doing nothing), suppressing the round-trip
+toll.  Every extra rebalance pays the ~12-15% round-trip cost.  The larger
+IS/OOS gap (12.9 pts) means the extra optimizer freedom is fitting noise rather
+than signal.  The honest conclusion: the old, better-looking number was an
+artifact of bugs that suppressed trading.  xs-momentum is more decisively
+refuted after the fixes.
+
+**cost-aware-reversion** (first run): −10.2% stitched OOS vs buy-and-hold
+sealed +151.1% and sealed-accumulation +13.6%.  Negative.  The cost hurdle
+(`fee_rate + 2*shipping/price + margin`) correctly excludes untradeable dips,
+but what remains still did not revert enough to overcome costs in this period.
+Notes from the parameter posteriors:
+
+- Tuned `take_profit=1.51` sits above the round-trip break-even (~1.15-1.4
+  depending on price), so the optimizer found the sane region.
+- `take_profit` values below ~1.2 would be loss-cutting rather than
+  profit-taking; the tuner avoided this.
+- At high `min_edge` the `dip_threshold` knob is partially inert (the cost
+  hurdle binds first), so the posterior on `dip_threshold` should be
+  interpreted cautiously.
+
+Last-fold tuned params (2026-07-09 warehouse date): `dip_window_days=80`,
+`dip_threshold=0.1526`, `min_edge=0.04755`, `take_profit=1.51`,
+`max_hold_days=101`.  Live smoke (`pkmn signals --strategy cost-aware-reversion
+--portfolio`) produced a clean report (no recommendations; real ledger empty).
+Dip-buyer live smoke likewise clean with tuned params `dip_threshold=0.1031`,
+`hold_days=90`, `take_profit=1.453`.
+
+### Sharpe/Sortino caveat
+
+Applies here as in the original runs: Sharpe/Sortino numbers are inflated by
+mark smoothing (thin markets, carry-forward marks).  Compare strategies to
+each other and to buy-and-hold only.
+
+### Framing
+
+Report negative results as negative.  The success criterion for Plan 6 is a
+usable short-horizon tool plus an honest record, not beating buy-and-hold.
+The deliverable is that hold-day exits now run identically in backtests and
+against the real ledger, and that all four strategies are portfolio-safe (usable
+with `pkmn signals --portfolio` and `pkmn daily --paper`).
+
 ## Overfitting gap
 
 Positive as expected for the two strategies with tunable edge

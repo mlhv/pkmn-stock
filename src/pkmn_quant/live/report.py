@@ -23,6 +23,10 @@ THESIS = {
         "Winners keep winning: hold the top trailing performers among singles,"
         " rebalance periodically."
     ),
+    "cost-aware-reversion": (
+        "Cards trading well below recent highs tend to revert; buy dips that clear"
+        " ~12.75% round-trip cost hurdle, sell at profit target or time limit."
+    ),
 }
 
 

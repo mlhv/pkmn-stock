@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from datetime import date, timedelta
+from datetime import timedelta
 
 import polars as pl
 
@@ -14,19 +14,21 @@ from pkmn_quant.engine.strategy import Context, Strategy
 
 class DipBuyer(Strategy):
     """Entry: singles down >= dip_threshold over dip_window_days.
-    Exit: held >= hold_days, or mark >= avg_cost * take_profit.
-    Stateful (_entries: asset -> entry-intent date); reset() clears it.
+    Exit: held >= hold_days (measured from Position.opened_on), or
+    mark >= avg_cost * take_profit.
 
-    Known imprecision (acceptable for research): _entries records order-EMISSION
-    date, not fill date. An emitted buy that never fills leaves a stale entry,
-    blocking re-entry for that asset until reset(). The hold_days clock
-    therefore starts at order emission, making actual holding one day shorter
-    than hold_days (T+1 fill).
+    Stateless: all exit timing comes from pos.opened_on, which the engine sets
+    at the T+1 fill date (not at order-emission time). This means:
+    - The hold clock starts at the actual fill, so a position held for exactly
+      hold_days days exits on that bar (not one day early as in the old
+      emission-based clock).
+    - Partial fills keep their original opened_on; there is no stale-entry
+      problem, and the remaining quantity is not re-sold every bar.
+    - An emitted-but-unfilled buy does NOT block re-entry: the next bar may
+      re-emit a buy order while the dip persists and no position yet exists.
 
-    Partial-fill behaviour: when a sell order is emitted the entry record is
-    removed immediately. If the executor clips the fill (liquidity cap), the
-    remaining position has no entry record and is treated as overdue — it will
-    be re-sold every bar until fully closed.
+    Positions constructed outside the engine (e.g. hand-built test portfolios)
+    may have opened_on=None; on_bar raises ValueError loudly in that case.
     """
 
     def __init__(
@@ -47,10 +49,6 @@ class DipBuyer(Strategy):
         self.budget_frac = budget_frac
         self.min_price = min_price
         self.name = "dip-buyer"
-        self._entries: dict[Asset, date] = {}
-
-    def reset(self) -> None:
-        self._entries = {}
 
     def on_bar(self, ctx: Context) -> list[Order]:
         orders: list[Order] = []
@@ -58,13 +56,16 @@ class DipBuyer(Strategy):
         # Sells first: the executor fills this list sequentially on T+1, so
         # sell proceeds are in portfolio.cash before any buy fill is attempted.
         for asset, pos in sorted(ctx.positions.items(), key=lambda kv: kv[0].product_id):
+            if pos.opened_on is None:
+                raise ValueError(
+                    f"{self.name}: position {asset} has no opened_on; "
+                    "engine fills and ledger replay always set it"
+                )
             mark = ctx.marks.get(asset)
-            entered = self._entries.get(asset)
-            too_old = entered is None or (ctx.today - entered).days >= self.hold_days
+            too_old = (ctx.today - pos.opened_on).days >= self.hold_days
             hit_target = mark is not None and mark >= pos.avg_cost * self.take_profit
             if too_old or hit_target:
                 orders.append(Order(asset=asset, quantity=-pos.quantity))
-                self._entries.pop(asset, None)
 
         open_slots = self.max_positions - (len(ctx.positions) - len(orders))
         if open_slots <= 0:
@@ -86,7 +87,7 @@ class DipBuyer(Strategy):
 
         candidates: list[tuple[float, Asset, float]] = []
         for asset, past_price in past_by_asset.items():
-            if asset in ctx.positions or asset in self._entries or past_price <= 0:
+            if asset in ctx.positions or past_price <= 0:
                 continue
             mark = ctx.marks.get(asset)
             if mark is None or mark < self.min_price:
@@ -104,5 +105,4 @@ class DipBuyer(Strategy):
         ]
         for asset, _, qty in affordable[:open_slots]:
             orders.append(Order(asset=asset, quantity=qty))
-            self._entries[asset] = ctx.today
         return orders

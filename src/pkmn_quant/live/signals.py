@@ -14,13 +14,13 @@ default, pass cash=) and portfolio mode are mutually exclusive.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date
 from pathlib import Path
 
 from pkmn_quant.data.warehouse import Warehouse
 from pkmn_quant.engine.data import MarketData
-from pkmn_quant.engine.portfolio import Portfolio, Position
+from pkmn_quant.engine.portfolio import Portfolio
 from pkmn_quant.engine.strategy import Context
 from pkmn_quant.live.ledger import LedgerError, Snapshot, make_snapshot
 from pkmn_quant.research.artifacts import find_latest_wf_run, load_walkforward_json
@@ -30,11 +30,12 @@ Params = dict[str, float | int]
 
 DEFAULT_WARMUP_DAYS = 365
 
-# Strategies whose exit rules read only Context (positions.avg_cost + marks).
-# dip-buyer / xs-momentum keep hold-day clocks in strategy-internal state a
-# single live bar cannot reconstruct (dip-buyer treats unknown entries as
-# overdue and would dump every holding). Research plan adds Position.opened_on.
-PORTFOLIO_SAFE_STRATEGIES = frozenset({"sealed-accumulation"})
+# Strategies whose exit rules read only Context. Since Plan 6, positions
+# carry opened_on (engine fills and ledger replay both set it), so hold-day
+# and rebalance clocks are reconstructible from a single live bar.
+PORTFOLIO_SAFE_STRATEGIES = frozenset(
+    {"sealed-accumulation", "dip-buyer", "xs-momentum", "cost-aware-reversion"}
+)
 
 
 class SignalsError(Exception):
@@ -124,10 +125,9 @@ def generate_signals(
 
     if portfolio is not None:
         ctx_cash = portfolio.cash
-        ctx_positions = {
-            a: Position(quantity=p.quantity, avg_cost=p.avg_cost)
-            for a, p in portfolio.positions.items()
-        }
+        # Same trust-boundary idiom as the backtest loop (backtest.py):
+        # replace() copies every field, including opened_on.
+        ctx_positions = {a: replace(p) for a, p in portfolio.positions.items()}
     else:
         assert cash is not None
         ctx_cash = cash

@@ -1,6 +1,7 @@
 from datetime import date, timedelta
 
 import polars as pl
+import pytest
 
 from pkmn_quant.engine.portfolio import Asset, Position
 from pkmn_quant.engine.strategy import Context
@@ -67,11 +68,13 @@ def test_ignores_small_dip() -> None:
 
 
 def test_exits_after_hold_days() -> None:
+    # Buy order emitted on TODAY, filled at T+1 (TODAY+1); opened_on=TODAY+1.
+    # hold_days=10: exit fires when (later - opened_on).days >= 10.
+    # With later=TODAY+11 and opened_on=TODAY+1, days held = 10 → exit.
     hist = history_for([(TODAY - timedelta(days=7), 100.0), (TODAY, 60.0)])
     strat = DipBuyer(dip_threshold=0.30, hold_days=10, budget_frac=0.5)
-    strat.on_bar(make_ctx(hist, {CARD: 60.0}))  # records entry intent today
     later = TODAY + timedelta(days=11)
-    positions = {CARD: Position(quantity=8, avg_cost=60.0)}
+    positions = {CARD: Position(quantity=8, avg_cost=60.0, opened_on=TODAY + timedelta(days=1))}
     orders = strat.on_bar(make_ctx(hist, {CARD: 61.0}, positions=positions, today=later))
     assert [(o.asset, o.quantity) for o in orders] == [(CARD, -8)]
 
@@ -79,20 +82,11 @@ def test_exits_after_hold_days() -> None:
 def test_exits_on_take_profit_before_hold_days() -> None:
     hist = history_for([(TODAY - timedelta(days=7), 100.0), (TODAY, 60.0)])
     strat = DipBuyer(dip_threshold=0.30, hold_days=30, take_profit=1.2, budget_frac=0.5)
-    strat.on_bar(make_ctx(hist, {CARD: 60.0}))
-    positions = {CARD: Position(quantity=8, avg_cost=60.0)}
+    # opened_on=TODAY+1 (T+1 fill); soon=TODAY+2 means 1 day held < hold_days=30.
+    positions = {CARD: Position(quantity=8, avg_cost=60.0, opened_on=TODAY + timedelta(days=1))}
     soon = TODAY + timedelta(days=2)
     orders = strat.on_bar(make_ctx(hist, {CARD: 75.0}, positions=positions, today=soon))
     assert [(o.asset, o.quantity) for o in orders] == [(CARD, -8)]  # 75 >= 60*1.2
-
-
-def test_reset_clears_entry_dates() -> None:
-    hist = history_for([(TODAY - timedelta(days=7), 100.0), (TODAY, 60.0)])
-    strat = DipBuyer(dip_threshold=0.30, budget_frac=0.5)
-    strat.on_bar(make_ctx(hist, {CARD: 60.0}))
-    assert strat._entries
-    strat.reset()
-    assert not strat._entries
 
 
 def test_skips_unaffordable_candidate_for_affordable_one() -> None:
@@ -158,25 +152,96 @@ def test_skips_unaffordable_candidate_for_affordable_one() -> None:
     assert orders[0].quantity == 2  # floor(100/50)
 
 
-def test_orphaned_position_is_resold() -> None:
-    # A fresh DipBuyer has no _entries. A held position with no entry record
-    # (orphaned after a partial sell fill) must be re-sold immediately.
-    # mark=61 < avg_cost*take_profit (60*1.2=72), so take_profit does NOT fire.
-    # The orphan guard (entered is None) should fire instead.
-    hist = history_for([(TODAY - timedelta(days=7), 100.0), (TODAY, 61.0)])
-    strat = DipBuyer(dip_threshold=0.30, hold_days=30, take_profit=1.2)
-    positions = {CARD: Position(quantity=5, avg_cost=60.0)}
-    orders = strat.on_bar(make_ctx(hist, {CARD: 61.0}, positions=positions))
-    assert [(o.asset, o.quantity) for o in orders] == [(CARD, -5)]
+def _mk_ctx(
+    today: date,
+    positions: dict[Asset, Position],
+    cash: float,
+    marks: dict[Asset, float],
+) -> Context:
+    """Minimal Context for exit-rule tests: entries need history, exits don't."""
+    empty_prices = pl.DataFrame(
+        schema={"date": pl.Date, "product_id": pl.Int64, "sub_type": pl.Utf8, "market": pl.Float64}
+    )
+    products = pl.DataFrame(
+        {
+            "product_id": [1],
+            "group_id": [1],
+            "name": ["X"],
+            "rarity": [None],
+            "kind": ["single"],
+            "released_on": [date(2024, 1, 1)],
+        }
+    )
+    return Context(
+        today=today,
+        history=empty_prices,
+        products=products,
+        positions=positions,
+        cash=cash,
+        marks=marks,
+    )
 
 
-def test_stale_entry_blocks_reentry() -> None:
-    # If _entries[CARD] is recent (yesterday), the asset is considered "in
-    # flight" (emitted-but-not-yet-filled buy). It must not be bought again
-    # even when its current mark shows a qualifying dip.
-    hist = history_for([(TODAY - timedelta(days=7), 100.0), (TODAY, 60.0)])  # -40%
-    strat = DipBuyer(dip_threshold=0.30, hold_days=30, budget_frac=0.5)
-    strat._entries[CARD] = TODAY - timedelta(days=1)  # white-box: simulate in-flight entry
-    orders = strat.on_bar(make_ctx(hist, {CARD: 60.0}))
-    # No position => sell loop is skipped; stale entry blocks buy loop.
-    assert orders == []
+def test_time_exit_uses_opened_on() -> None:
+    s = DipBuyer(hold_days=30, take_profit=10.0)  # take_profit unreachable
+    a = Asset(1, "Normal")
+    held_29 = _mk_ctx(
+        date(2026, 2, 3),
+        {a: Position(quantity=2, avg_cost=10.0, opened_on=date(2026, 1, 5))},
+        100.0,
+        {a: 10.0},
+    )
+    assert s.on_bar(held_29) == []  # 29 days held: no exit
+    held_30 = _mk_ctx(
+        date(2026, 2, 4),
+        {a: Position(quantity=2, avg_cost=10.0, opened_on=date(2026, 1, 5))},
+        100.0,
+        {a: 10.0},
+    )
+    [order] = s.on_bar(held_30)
+    assert order.quantity == -2  # 30 days held: full exit
+
+
+def test_none_opened_on_raises() -> None:
+    s = DipBuyer()
+    a = Asset(1, "Normal")
+    ctx = _mk_ctx(date(2026, 2, 4), {a: Position(quantity=1, avg_cost=10.0)}, 100.0, {a: 10.0})
+    with pytest.raises(ValueError, match="opened_on"):
+        s.on_bar(ctx)
+
+
+def test_dip_buyer_is_stateless_across_bars() -> None:
+    """No _entries: the same instance gives identical answers for identical
+    Contexts — the property that makes single-bar live invocation safe."""
+    s = DipBuyer(hold_days=30, take_profit=10.0)
+    a = Asset(1, "Normal")
+    ctx = _mk_ctx(
+        date(2026, 2, 4),
+        {a: Position(quantity=2, avg_cost=10.0, opened_on=date(2026, 1, 5))},
+        100.0,
+        {a: 10.0},
+    )
+    first = s.on_bar(ctx)
+    ctx2 = _mk_ctx(
+        date(2026, 2, 4),
+        {a: Position(quantity=2, avg_cost=10.0, opened_on=date(2026, 1, 5))},
+        100.0,
+        {a: 10.0},
+    )
+    assert s.on_bar(ctx2) == first
+    assert not hasattr(s, "_entries")
+
+
+def test_time_exit_fires_without_a_mark() -> None:
+    """A held position whose asset no longer prints a price (no mark) must
+    still exit on the hold-day clock — take-profit needs a mark, age doesn't."""
+    s = DipBuyer(hold_days=30, take_profit=10.0)
+    a = Asset(1, "Normal")
+    ctx = _mk_ctx(
+        date(2026, 2, 4),
+        {a: Position(quantity=2, avg_cost=10.0, opened_on=date(2026, 1, 5))},
+        100.0,
+        {},  # no marks at all
+    )
+    [order] = s.on_bar(ctx)
+    assert order.quantity == -2

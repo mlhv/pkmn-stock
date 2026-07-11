@@ -453,3 +453,23 @@ def test_append_events_second_invalid_leaves_file_unchanged(tmp_path: Path) -> N
     pf = load_portfolio(path, PRODUCTS)
     assert pf.cash == pytest.approx(500.0)
     assert pf.positions == {}
+
+
+# ---------------------------------------------------------------------------
+# Task 2: opened_on flows from ledger replay
+# ---------------------------------------------------------------------------
+
+
+def test_replay_sets_opened_on_from_buy_date(tmp_path: Path) -> None:
+    path = tmp_path / "ledger.jsonl"
+    write_lines(
+        path,
+        [
+            '{"date": "2026-07-01", "kind": "deposit", "amount": 1000.0}',
+            '{"date": "2026-07-03", "kind": "buy", "product_id": 1, "sub_type": "Normal",'
+            ' "qty": 2, "price": 100.0, "fees": 0.0}',
+        ],
+    )
+    pf = load_portfolio(path, PRODUCTS)
+    [(_asset, pos)] = list(pf.positions.items())
+    assert pos.opened_on == date(2026, 7, 3)
