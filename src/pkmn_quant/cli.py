@@ -439,7 +439,6 @@ def daily(
       paper results will look slightly better than a true OOS simulation.
     """
     import json as _json
-    import math
 
     from pkmn_quant.live import notify
     from pkmn_quant.live.ledger import LedgerError, load_portfolio
@@ -528,79 +527,27 @@ def daily(
     n_buys = sum(1 for r in report.recommendations if r.action == "BUY")
     n_sells = sum(1 for r in report.recommendations if r.action == "SELL")
 
-    # Paper mode: auto-record recommended fills using the engine CostModel so the
-    # strategy trades fake money through the identical pipeline as the backtester.
-    # All fills are validated and written in one atomic append_events call so that
-    # a mid-batch failure leaves the ledger completely unchanged.  If LedgerError
-    # fires: the signals artifacts are left in place (they describe recommendations
-    # and no fills were recorded, so the artifacts are consistent) and _fail is
-    # called with keep_artifacts=True.
+    # Paper mode: auto-record recommended fills through the pure planner
+    # (live/paper.py) and one atomic append_events write. A mid-batch
+    # validation failure leaves the ledger completely unchanged. In paper
+    # mode n_buys/n_sells are re-counted from the recorded batch: the
+    # planner clips to liquidity and affordability (sometimes to zero),
+    # and daily.json must report what actually happened, not what the
+    # strategy wished for.
     if paper and report.recommendations:
-        try:
-            from pkmn_quant.engine.costs import CostModel
-            from pkmn_quant.live.ledger import append_events
+        from pkmn_quant.engine.costs import CostModel
+        from pkmn_quant.live.ledger import append_events
+        from pkmn_quant.live.paper import plan_paper_fills
 
-            cost = CostModel()
-            lp = lpath
-            # Load the current portfolio state to track running cash through
-            # this batch of fills, mirroring the executor's clipping logic.
-            cash_remaining = pf.cash
-            batch: list[dict[str, object]] = []
-
-            # Process SELLs first (they add cash), then BUYs — same order as
-            # the recommendations list (strategy always emits sells before buys).
-            #
-            # Fills are dated the run date (today), not report.as_of.  The ledger
-            # is chronological in event time; as_of marks can predate deposits, so
-            # using as_of would sort fills before the deposit and cause cash-negative
-            # replay failures.  Prices/quantities/fees are still based on as_of marks.
-            for rec in report.recommendations:
-                mark = rec.market_price
-                cap = cost.max_daily_qty(mark)
-                if rec.action == "SELL":
-                    # Clip to liquidity cap; rec.quantity already equals held qty
-                    qty = min(rec.quantity, cap)
-                    if qty <= 0:
-                        continue
-                    fees = round(qty * mark * cost.fee_rate + cost.shipping_per_line, 2)
-                    cash_remaining += qty * mark * (1 - cost.fee_rate) - cost.shipping_per_line
-                    batch.append(
-                        {
-                            "date": today.isoformat(),
-                            "kind": "sell",
-                            "product_id": rec.product_id,
-                            "sub_type": rec.sub_type,
-                            "qty": qty,
-                            "price": mark,
-                            "fees": fees,
-                        }
-                    )
-                else:  # BUY
-                    # Mirror executor _fill_buy: clip to liquidity cap, then to
-                    # what cash_remaining can afford after shipping is reserved.
-                    affordable = math.floor((cash_remaining - cost.shipping_per_line) / mark)
-                    qty = min(rec.quantity, cap, max(affordable, 0))
-                    if qty <= 0:
-                        continue
-                    fees = cost.shipping_per_line
-                    cash_remaining -= qty * mark + cost.shipping_per_line
-                    batch.append(
-                        {
-                            "date": today.isoformat(),
-                            "kind": "buy",
-                            "product_id": rec.product_id,
-                            "sub_type": rec.sub_type,
-                            "qty": qty,
-                            "price": mark,
-                            "fees": fees,
-                        }
-                    )
-
-            if batch:
-                append_events(lp, batch, products)
-        except LedgerError as exc:
-            _fail(f"paper auto-record failed: {exc}", keep_artifacts=True)
-            return  # unreachable
+        batch = plan_paper_fills(report.recommendations, pf.cash, today, CostModel())
+        if batch:
+            try:
+                append_events(lpath, batch, products)
+            except LedgerError as exc:
+                _fail(f"paper auto-record failed: {exc}", keep_artifacts=True)
+                return  # unreachable
+        n_buys = sum(1 for e in batch if e["kind"] == "buy")
+        n_sells = sum(1 for e in batch if e["kind"] == "sell")
 
     finish(
         "error" if ingest_error else "ok", ingest_error, n_buys, n_sells, report.as_of.isoformat()

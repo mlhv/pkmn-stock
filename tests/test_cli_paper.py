@@ -1,4 +1,5 @@
 import json
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -227,3 +228,72 @@ def test_paper_show_reads_paper_ledger(tmp_path: Path) -> None:
     show = runner.invoke(app, ["portfolio", "show", "--paper", "--root", str(tmp_path)])
     assert show.exit_code == 0, show.output
     assert "777.00" in show.output
+
+
+def test_paper_n_buys_counts_recorded_fills_not_recommendations(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A BUY recommendation the paper cash cannot afford records ZERO fills;
+    daily.json must say n_buys == 0 and no notification may fire.
+
+    Fails on pre-fix code, which counted recommendations (n_buys == 1, one
+    notification). generate_signals is monkeypatched with a fabricated
+    report so the unaffordable recommendation is deterministic (no optuna).
+    daily() imports generate_signals at call time, so patching the module
+    attribute works."""
+    import pkmn_quant.live.signals as signals_mod
+    from pkmn_quant.live.signals import Recommendation, SignalReport
+
+    sent: list[tuple[str, str]] = []
+    monkeypatch.setattr(notify, "send_notification", lambda t, b: sent.append((t, b)))
+    seed(tmp_path)
+    runner = CliRunner()
+    r = runner.invoke(
+        app,
+        [
+            "portfolio",
+            "deposit",
+            "--amount",
+            "100",
+            "--date",
+            "2025-01-02",
+            "--paper",
+            "--root",
+            str(tmp_path),
+        ],
+    )
+    assert r.exit_code == 0, r.output
+
+    def fake_generate_signals(**kwargs: object) -> SignalReport:
+        return SignalReport(
+            as_of=date(2025, 5, 1),
+            strategy="sealed-accumulation",
+            params={},
+            wf_summary={},
+            wf_run_dir="wf-fake",
+            recommendations=[
+                Recommendation(
+                    action="BUY",
+                    product_id=1,
+                    sub_type="Normal",
+                    name="Crashed Box",
+                    quantity=1,
+                    market_price=5000.0,
+                    notional=5000.0,
+                )
+            ],
+            paper=True,
+        )
+
+    monkeypatch.setattr(signals_mod, "generate_signals", fake_generate_signals)
+    result = runner.invoke(app, ["daily", "--skip-ingest", "--paper", "--root", str(tmp_path)])
+    assert result.exit_code == 0, result.output
+
+    meta = json.loads(
+        next((tmp_path / "data" / "results").glob("daily-*-paper/daily.json")).read_text()
+    )
+    assert meta["n_buys"] == 0 and meta["n_sells"] == 0
+    assert sent == []  # nothing recorded -> nothing to announce
+    # Ledger still holds only the deposit line.
+    paper = tmp_path / "data" / "portfolio" / "paper.jsonl"
+    assert len(paper.read_text().strip().splitlines()) == 1
