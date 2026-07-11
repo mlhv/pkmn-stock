@@ -134,9 +134,11 @@ clock, rank-and-hold-top-N.
   `HistGradientBoostingRegressor` (pinned `random_state=0`; tuned
   hyperparams below) → `build_features(ctx.history, ..., as_of=today)` →
   predict → rank descending. Target = top_n names with mark >= min_price.
-  Sell holdings that dropped out of the target (full position); buy
-  entrants equal-weighted from `cash * budget_frac` per name. Not-due bars
-  return `[]`.
+  Sell holdings that dropped out of the target (full position); buys use
+  xs-momentum's sizing verbatim: per-name allocation = total equity /
+  len(target), topping up held names to the allocation (full investment —
+  a budget-fraction cap would idle capital and directly hurt the
+  closest-to-benchmark goal). Not-due bars return `[]`.
 - **Degenerate-data guard:** if the training frame has fewer than
   `min_train_rows` rows (constructor param, default 200), no model is fit
   and `on_bar` returns `[]` — with no model there is no target, so neither
@@ -155,8 +157,8 @@ clock, rank-and-hold-top-N.
 
 Constructor params (defaults): `horizon_days=30`, `rebalance_days=30`,
 `top_n=8`, `train_days=365`, `stride_days=None` (→ horizon_days),
-`min_price=3.0`, `budget_frac=0.10`, `min_train_rows=200`,
-`max_iter=100`, `learning_rate=0.1`, `min_samples_leaf=20`.
+`min_price=3.0`, `min_train_rows=200`, `max_iter=100`,
+`learning_rate=0.1`, `min_samples_leaf=20`.
 
 ## Look-ahead guards (three layers, each enforced)
 
