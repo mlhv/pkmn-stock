@@ -124,3 +124,39 @@ def test_warmup_zero_behaves_identically(warmup_warehouse: Warehouse) -> None:
     h_default = md_default.history_until(_WARMUP_END).height
     h_explicit = md_explicit.history_until(_WARMUP_END).height
     assert h_default == h_explicit
+
+
+def test_marks_on_out_of_order_queries_match_monotone(tmp_path: Path) -> None:
+    """The marks cursor fast-path (monotone queries) and the rebuild path
+    (going backwards) must give identical answers to a fresh instance."""
+    w = Warehouse(Paths(root=tmp_path))
+    a_days = [date(2025, 1, 1), date(2025, 1, 3), date(2025, 1, 5)]
+    prices = [10.0, 12.0, 11.0]
+    for d, p in zip(a_days, prices, strict=True):
+        w.write_prices(d, pl.DataFrame([price_row(d, 1, p)], schema=PRICE_SCHEMA))
+    md = MarketData.from_warehouse(w, date(2025, 1, 1), date(2025, 1, 5))
+    forward = [md.marks_on(d) for d in (date(2025, 1, 1), date(2025, 1, 4), date(2025, 1, 5))]
+    # Now go BACKWARDS on the same instance: must equal a fresh instance's answer.
+    back = md.marks_on(date(2025, 1, 2))
+    fresh = MarketData.from_warehouse(w, date(2025, 1, 1), date(2025, 1, 5))
+    assert back == fresh.marks_on(date(2025, 1, 2))
+    assert forward[1] == fresh.marks_on(date(2025, 1, 4))  # carry-forward day
+    assert forward[2][Asset(1, "Normal")] == 11.0
+
+
+def test_marks_cursor_multi_asset_same_day(tmp_path: Path) -> None:
+    """Two assets printing on the same days: within-day change-point order
+    cannot matter (last-write-wins per asset). Pins the date-only sort."""
+    w = Warehouse(Paths(root=tmp_path))
+    for d, (p1, p2) in {
+        date(2025, 1, 1): (10.0, 50.0),
+        date(2025, 1, 3): (12.0, 45.0),
+    }.items():
+        w.write_prices(
+            d,
+            pl.DataFrame([price_row(d, 1, p1), price_row(d, 2, p2)], schema=PRICE_SCHEMA),
+        )
+    md = MarketData.from_warehouse(w, date(2025, 1, 1), date(2025, 1, 3))
+    assert md.marks_on(date(2025, 1, 1)) == {Asset(1, "Normal"): 10.0, Asset(2, "Normal"): 50.0}
+    assert md.marks_on(date(2025, 1, 2)) == {Asset(1, "Normal"): 10.0, Asset(2, "Normal"): 50.0}
+    assert md.marks_on(date(2025, 1, 3)) == {Asset(1, "Normal"): 12.0, Asset(2, "Normal"): 45.0}
