@@ -4,7 +4,8 @@ A quant research system for TCGplayer card prices: custom event-driven
 backtest engine with realistic card-market execution costs, four
 parameterized strategies, optuna walk-forward validation, live signal
 generation, reinvest loop with portfolio ledger and daily scheduling, and a
-Streamlit results explorer. Python 3.12, polars, strict mypy, 235 tests, CI.
+Streamlit results explorer. Python 3.12, polars, strict mypy, 245 tests
+(plus 3 dashboard tests behind an opt-in dependency group), CI.
 
 **The honest headline:** across 2024-08 → 2026-06, none of the four active
 strategies beat buy-and-hold sealed product (+151% out-of-sample). The
@@ -68,7 +69,7 @@ caveats: [docs/research-findings-2026-07.md](docs/research-findings-2026-07.md).
 ## Quickstart
 
     uv sync
-    uv run pytest                                        # 213 tests
+    uv run pytest                # 245 tests (3 dashboard tests skip without --group dashboard)
     uv run pkmn ingest --start 2024-02-08 --end 2026-06-30   # ~40 min, ~2.9M rows
     uv run pkmn backtest --start 2024-03-01 --end 2026-06-30 # benchmark
     uv run pkmn walkforward --strategy sealed-accumulation \
@@ -80,7 +81,7 @@ caveats: [docs/research-findings-2026-07.md](docs/research-findings-2026-07.md).
     uv run pkmn signals --strategy sealed-accumulation --portfolio  # entries + exits
     uv run pkmn signals --strategy cost-aware-reversion --portfolio  # cost-hurdle strategy
     uv run pkmn daily --skip-ingest                          # full loop, offline
-    uv run --group dashboard streamlit run app/dashboard.py  # explorer
+    uv run --group dashboard streamlit run app/dashboard.py  # explorer (Portfolio tab: Real/Paper toggle)
 
 ### Scheduling the daily loop (macOS)
 
@@ -99,9 +100,12 @@ at the same repo).  Paper mode routes all ledger reads and writes to
 `data/portfolio/paper.jsonl`, auto-records fills using the same CostModel
 as the backtester (shipping, marketplace fee, per-day liquidity cap), and
 labels every output surface PAPER — the dashboard alerts strip, notification
-titles, and the `daily-{date}-paper/` artifact directory.  Use it to watch
-the strategy trade fake money through the identical pipeline before you act on
-any real recommendation.  All four strategies (sealed-accumulation, dip-buyer,
+titles, and the `daily-{date}-paper/` artifact directory.  Fill counts in
+`daily.json` reflect recorded fills only (after liquidity and affordability
+clipping, not raw recommendations), so a paper day where every order clips to
+zero sends no notification.  Use it to watch the strategy trade fake money
+through the identical pipeline before you act on any real recommendation.
+All four strategies (sealed-accumulation, dip-buyer,
 cost-aware-reversion, xs-momentum) are portfolio-safe: each supports
 `--portfolio` for exit signals against a real ledger and works with the paper
 daily loop.

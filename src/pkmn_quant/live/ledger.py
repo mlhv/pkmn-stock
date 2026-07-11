@@ -134,7 +134,11 @@ def _parse_lines(lines: list[str]) -> list[LedgerEvent]:
     return sorted(events, key=lambda e: e.day)
 
 
-def _replay(events: list[LedgerEvent], products: pl.DataFrame) -> Portfolio:
+def replay(events: list[LedgerEvent], products: pl.DataFrame) -> Portfolio:
+    """Replay parsed events into a Portfolio.
+
+    Raises LedgerError, naming the offending line, on invalid sequences.
+    """
     known_ids = set(products["product_id"].to_list())
     pf = Portfolio(cash=0.0)
     for e in events:
@@ -169,19 +173,23 @@ def _replay(events: list[LedgerEvent], products: pl.DataFrame) -> Portfolio:
     return pf
 
 
+def load_events(path: Path) -> list[LedgerEvent]:
+    """Parse the ledger file into date-sorted events. Missing file = []."""
+    if not path.exists():
+        return []
+    return _parse_lines(path.read_text().splitlines())
+
+
 def load_portfolio(path: Path, products: pl.DataFrame) -> Portfolio:
     """Replay the ledger into a Portfolio. Missing file = empty portfolio."""
-    if not path.exists():
-        return Portfolio(cash=0.0)
-    lines = path.read_text().splitlines()
-    return _replay(_parse_lines(lines), products)
+    return replay(load_events(path), products)
 
 
 def append_event(path: Path, event: dict[str, object], products: pl.DataFrame) -> None:
     """Validate existing + new event together; only then append to the file."""
     existing = path.read_text().splitlines() if path.exists() else []
     candidate = [*existing, json.dumps(event)]
-    _replay(_parse_lines(candidate), products)  # raises LedgerError if invalid
+    replay(_parse_lines(candidate), products)  # raises LedgerError if invalid
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("".join(line + "\n" for line in candidate))
 
@@ -195,7 +203,7 @@ def append_events(path: Path, events: list[dict[str, object]], products: pl.Data
     """
     existing = path.read_text().splitlines() if path.exists() else []
     candidate = [*existing, *[json.dumps(e) for e in events]]
-    _replay(_parse_lines(candidate), products)  # raises LedgerError if invalid
+    replay(_parse_lines(candidate), products)  # raises LedgerError if invalid
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("".join(line + "\n" for line in candidate))
 

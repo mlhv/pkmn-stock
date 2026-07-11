@@ -9,8 +9,10 @@ from pkmn_quant.live.ledger import (
     append_event,
     append_events,
     ledger_path,
+    load_events,
     load_portfolio,
     make_snapshot,
+    replay,
 )
 
 PRODUCTS = pl.DataFrame(
@@ -473,3 +475,31 @@ def test_replay_sets_opened_on_from_buy_date(tmp_path: Path) -> None:
     pf = load_portfolio(path, PRODUCTS)
     [(_asset, pos)] = list(pf.positions.items())
     assert pos.opened_on == date(2026, 7, 3)
+
+
+# ---------------------------------------------------------------------------
+# Task 3: public ledger API — load_events + replay
+# ---------------------------------------------------------------------------
+
+
+def test_load_events_missing_file_is_empty(tmp_path: Path) -> None:
+    assert load_events(tmp_path / "nope.jsonl") == []
+
+
+def test_load_events_then_replay_matches_load_portfolio(tmp_path: Path) -> None:
+    """The public two-step API is exactly load_portfolio, decomposed —
+    the dashboard needs the events list for its day-by-day equity chart."""
+    path = tmp_path / "ledger.jsonl"
+    write_lines(
+        path,
+        [
+            '{"date": "2026-07-01", "kind": "deposit", "amount": 1000.0}',
+            '{"date": "2026-07-03", "kind": "buy", "product_id": 1, "sub_type": "Normal",'
+            ' "qty": 2, "price": 100.0, "fees": 1.0}',
+        ],
+    )
+    events = load_events(path)
+    assert [e.kind for e in events] == ["deposit", "buy"]
+    pf = replay(events, PRODUCTS)
+    ref = load_portfolio(path, PRODUCTS)
+    assert pf.cash == ref.cash and pf.positions == ref.positions

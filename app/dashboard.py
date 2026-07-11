@@ -196,16 +196,22 @@ with tab_portfolio:
                 else:
                     st.write(meta)
 
-    lp = ledger_path(ROOT)
+    use_paper = st.radio("Ledger", ["Real", "Paper"], horizontal=True) == "Paper"
+    lp = ledger_path(ROOT, paper=use_paper)
     if not lp.exists():
-        st.info("No ledger yet. Record trades with `uv run pkmn portfolio buy ...`.")
+        st.info(
+            "No paper ledger yet. Start one with "
+            "`uv run pkmn portfolio deposit --paper --amount ...`."
+            if use_paper
+            else "No ledger yet. Record trades with `uv run pkmn portfolio buy ...`."
+        )
     else:
         warehouse = Warehouse(Paths(root=ROOT))
         products = load_products()
         # Parse once; reuse for both the snapshot and the equity chart.
         try:
-            events = ledger_mod._parse_lines(lp.read_text().splitlines())
-            pf = ledger_mod._replay(events, products)
+            events = ledger_mod.load_events(lp)
+            pf = ledger_mod.replay(events, products)
             days = warehouse.stored_days()
             latest = days[-1]
             market = MarketData.from_warehouse(warehouse, latest, latest, warmup_days=365)
@@ -253,7 +259,7 @@ with tab_portfolio:
                 all_days = sorted(d for d in prices["date"].unique().to_list() if d >= first)
                 series = []
                 for d in all_days:
-                    pf_d = ledger_mod._replay([e for e in events if e.day <= d], products)
+                    pf_d = ledger_mod.replay([e for e in events if e.day <= d], products)
                     value = 0.0
                     ok = True
                     for asset, pos in pf_d.positions.items():

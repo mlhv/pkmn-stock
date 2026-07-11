@@ -25,6 +25,13 @@ tcgcsv.com). Design spec: `docs/superpowers/specs/2026-06-09-pkmn-quant-design.m
   buy-and-hold sealed (+151% OOS); sealed-accumulation +13.6% was the only
   positive active strategy. 2026-07-10 re-runs after opened_on fixes logged
   in the same file (new Plan 6 section).
+- Plan 7 complete on feat/paper-dashboard-cleanup (245 tests + 3 dashboard tests;
+  a fresh `uv run pytest` shows 245 passed, 3 skipped — the dashboard tests need
+  `uv run --group dashboard pytest tests/test_dashboard.py`): `live/paper.py` extracts `plan_paper_fills`
+  planner from cli.py; paper `daily.json` `n_buys`/`n_sells` now count recorded
+  fills, not recommendations (a paper day where everything clips to zero sends
+  no notification); public ledger API `load_events`/`replay`; dashboard Portfolio
+  tab has a Real/Paper toggle; headless dashboard tests in `tests/test_dashboard.py`.
 
 ## Commands
 
@@ -66,9 +73,13 @@ uv.lock together).
   markdown + JSON reports that carry the strategy's OOS record.
   `ledger.py`: append-only JSONL trade ledger replayed through the engine
   Portfolio; single source of truth, marks never stored. `notify.py`:
-  osascript banners, argv-passing.
+  osascript banners, argv-passing. `paper.py`: `plan_paper_fills` planner
+  (extracted from cli.py) — pure function mapping signals + ledger state to
+  recorded paper fills via the CostModel.
 - `app/dashboard.py` — Streamlit results explorer (dependency group
   `dashboard`; not mypy'd, not imported by src/ or tests — demo tool only).
+  Headless tests in `tests/test_dashboard.py`; run via
+  `uv run --group dashboard pytest tests/test_dashboard.py` (skip without the group).
 - `data/` — gitignored. Contains 874 ingested days (2024-02-08..2026-06-30,
   ~2.9M price rows) plus raw archives. Do not delete; re-ingest is ~40 min.
   `data/portfolio/` holds the gitignored real and paper ledgers.
