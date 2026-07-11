@@ -18,7 +18,9 @@ tiny test contexts; not an error.
 Stateless: the fitted model is a local of the due-bar path; nothing
 survives between invocations that cannot be rebuilt from Context, so a
 single live bar (365d warm-up history) behaves like a backtest bar.
-Determinism is pinned by tests (random_state=0)."""
+Determinism is pinned by tests (random_state=0). All-null feature columns
+(e.g. ret_90d in early-history folds) are dropped from both fit and predict;
+they carry no information for that bar and would crash sklearn 1.9's binner."""
 
 from __future__ import annotations
 
@@ -89,6 +91,14 @@ class MLRanker(Strategy):
         if training.height < self.min_train_rows:
             return []  # no model -> no target -> hold (documented above)
 
+        # sklearn 1.9's binner crashes on all-NaN columns (unhandled upstream
+        # edge: np.unique of no non-missing values). Early-history training
+        # frames legitimately produce them (e.g. ret_90d before the warehouse
+        # is 90 days old). An all-null feature carries no information for
+        # this fit, so drop it — from BOTH fit and predict (alignment).
+        usable_cols = [c for c in FEATURE_COLS if training[c].null_count() < training.height]
+        if not usable_cols:
+            return []
         model = HistGradientBoostingRegressor(
             max_iter=self.max_iter,
             learning_rate=self.learning_rate,
@@ -96,14 +106,14 @@ class MLRanker(Strategy):
             random_state=0,
         )
         model.fit(
-            training.select(FEATURE_COLS).to_numpy(),
+            training.select(usable_cols).to_numpy(),
             training["label"].to_numpy(),
         )
 
         today_feats = build_features(ctx.history, ctx.products, ctx.today)
         if today_feats.height == 0:
             return []
-        preds = model.predict(today_feats.select(FEATURE_COLS).to_numpy())
+        preds = model.predict(today_feats.select(usable_cols).to_numpy())
         ranked: list[tuple[float, Asset, float]] = []
         for score, r in zip(np.asarray(preds), today_feats.iter_rows(named=True), strict=True):
             asset = Asset(product_id=int(r["product_id"]), sub_type=str(r["sub_type"]))

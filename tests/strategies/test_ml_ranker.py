@@ -134,6 +134,23 @@ def test_min_price_excludes_cheap_assets() -> None:
     assert all(o.asset != Asset(1, "Normal") for o in orders if o.quantity > 0)
 
 
+def test_all_null_feature_column_does_not_crash_fit() -> None:
+    """Early-history folds: no asset has a price 90 days back, so ret_90d is
+    null in EVERY training row. sklearn 1.9's binner crashes on all-NaN
+    columns; the strategy must drop all-null features for that fit instead.
+    History spans 70 days, so ret_90d is null everywhere while ret_7d/30d
+    exist; with min_train_rows=10 the model must still fit and rank."""
+    rows: list[tuple[date, int, str, float]] = []
+    start = TODAY - timedelta(days=69)  # 70 days of history, < 90
+    for i in range(70):
+        d = start + timedelta(days=i)
+        rows.append((d, 1, "Normal", 100.0 * 1.01**i))
+        rows.append((d, 2, "Normal", 100.0 * 0.99**i))
+    orders = _ranker().on_bar(_ctx({}, 1000.0, _history(rows)))
+    buys = [o for o in orders if o.quantity > 0]
+    assert buys and all(o.asset == Asset(1, "Normal") for o in buys)
+
+
 def test_ranking_follows_momentum_not_price_level() -> None:
     """Discriminating case: the RISER is cheap (ends ~13.5, above min_price 3),
     the FALLER is expensive (ends ~135). A model ranking by log_price alone
