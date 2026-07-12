@@ -27,6 +27,9 @@ THESIS = {
         "Cards trading well below recent highs tend to revert; buy dips that clear"
         " ~12.75% round-trip cost hurdle, sell at profit target or time limit."
     ),
+    "ml-ranker": "Gradient-boosted model ranks all products by predicted"
+    " forward return from trailing features; hold the top names, retrain"
+    " each rebalance from history only.",
 }
 
 

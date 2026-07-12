@@ -277,6 +277,38 @@ def test_cash_and_portfolio_are_mutually_exclusive(warehouse: Warehouse, tmp_pat
 # ---------------------------------------------------------------------------
 
 
+def test_ml_ranker_portfolio_mode_smoke(warehouse: Warehouse, tmp_path: Path) -> None:
+    """ml-ranker passes the allowlist and produces a clean report through the
+    real generate_signals path. The tiny warehouse is degenerate for training
+    (min_train_rows unmet), so no recommendations — the point is the wiring:
+    params flow through the artifact into the factory, and portfolio mode
+    accepts the strategy. Ranking correctness is pinned at unit level."""
+    from pkmn_quant.engine.portfolio import Portfolio
+
+    results_dir = tmp_path / "data" / "results"
+    seed_wf_artifact(
+        results_dir,
+        strategy="ml-ranker",
+        params={
+            "horizon_days": 14,
+            "rebalance_days": 30,
+            "top_n": 3,
+            "train_days": 120,
+            "max_iter": 50,
+            "learning_rate": 0.1,
+            "min_samples_leaf": 10,
+        },
+    )
+    report = generate_signals(
+        warehouse=warehouse,
+        strategy_name="ml-ranker",
+        results_dir=results_dir,
+        portfolio=Portfolio(cash=500.0),
+    )
+    assert report.strategy == "ml-ranker"
+    assert report.recommendations == []  # degenerate training data -> hold
+
+
 def test_portfolio_mode_context_copy_carries_opened_on(
     warehouse: Warehouse, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -33,8 +33,10 @@ DEFAULT_WARMUP_DAYS = 365
 # Strategies whose exit rules read only Context. Since Plan 6, positions
 # carry opened_on (engine fills and ledger replay both set it), so hold-day
 # and rebalance clocks are reconstructible from a single live bar.
+# ml-ranker satisfies this contract: its rebalance clock uses opened_on from
+# Context and the model is retrained from ctx.history on each due bar.
 PORTFOLIO_SAFE_STRATEGIES = frozenset(
-    {"sealed-accumulation", "dip-buyer", "xs-momentum", "cost-aware-reversion"}
+    {"sealed-accumulation", "dip-buyer", "xs-momentum", "cost-aware-reversion", "ml-ranker"}
 )
 
 

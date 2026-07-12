@@ -10,6 +10,7 @@ import optuna
 from pkmn_quant.engine.strategy import Strategy
 from pkmn_quant.strategies.cost_aware_reversion import CostAwareReversion
 from pkmn_quant.strategies.dip_buyer import DipBuyer
+from pkmn_quant.strategies.ml_ranker import MLRanker
 from pkmn_quant.strategies.momentum import CrossSectionalMomentum
 from pkmn_quant.strategies.sealed_accumulation import SealedAccumulation
 
@@ -90,9 +91,34 @@ def _reversion_factory(p: Params) -> Strategy:
     )
 
 
+def _ml_ranker_space(trial: optuna.Trial) -> Params:
+    return {
+        "horizon_days": trial.suggest_int("horizon_days", 14, 60),
+        "rebalance_days": trial.suggest_int("rebalance_days", 21, 90),
+        "top_n": trial.suggest_int("top_n", 3, 15),
+        "train_days": trial.suggest_int("train_days", 120, 540),
+        "max_iter": trial.suggest_int("max_iter", 50, 300, log=True),
+        "learning_rate": trial.suggest_float("learning_rate", 0.03, 0.3, log=True),
+        "min_samples_leaf": trial.suggest_int("min_samples_leaf", 10, 50),
+    }
+
+
+def _ml_ranker_factory(p: Params) -> Strategy:
+    return MLRanker(
+        horizon_days=int(p["horizon_days"]),
+        rebalance_days=int(p["rebalance_days"]),
+        top_n=int(p["top_n"]),
+        train_days=int(p["train_days"]),
+        max_iter=int(p["max_iter"]),
+        learning_rate=float(p["learning_rate"]),
+        min_samples_leaf=int(p["min_samples_leaf"]),
+    )
+
+
 REGISTRY: dict[str, RegistryEntry] = {
     "sealed-accumulation": RegistryEntry(factory=_sealed_factory, space=_sealed_space),
     "dip-buyer": RegistryEntry(factory=_dip_factory, space=_dip_space),
     "xs-momentum": RegistryEntry(factory=_momentum_factory, space=_momentum_space),
     "cost-aware-reversion": RegistryEntry(factory=_reversion_factory, space=_reversion_space),
+    "ml-ranker": RegistryEntry(factory=_ml_ranker_factory, space=_ml_ranker_space),
 }

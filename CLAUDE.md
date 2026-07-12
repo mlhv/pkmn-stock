@@ -3,7 +3,7 @@
 Algo-trading research system for Pokemon card prices (TCGplayer data via
 tcgcsv.com). Design spec: `docs/superpowers/specs/2026-06-09-pkmn-quant-design.md`.
 
-## Status (2026-07-10)
+## Status (2026-07-11)
 
 - Plans 1-4 merged to main. Plan 4 closed out the v1 spec: `walkforward.json`
   artifacts, `pkmn signals`, Streamlit dashboard, README.
@@ -32,6 +32,19 @@ tcgcsv.com). Design spec: `docs/superpowers/specs/2026-06-09-pkmn-quant-design.m
   fills, not recommendations (a paper day where everything clips to zero sends
   no notification); public ledger API `load_events`/`replay`; dashboard Portfolio
   tab has a Real/Paper toggle; headless dashboard tests in `tests/test_dashboard.py`.
+- Plan 8 complete on feat/ml-ranker (270 tests; a fresh `uv run pytest` shows
+  267 passed, 3 skipped — the 3 dashboard tests need
+  `uv run --group dashboard pytest tests/test_dashboard.py`): engine perf
+  (~1.9x, marks cursor + date partition); `research/features.py` (8
+  leakage-bounded features, regression-tested); `strategies/ml_ranker.py`
+  (HistGradientBoostingRegressor trained in-loop behind the anti-look-ahead
+  wall, stateless); one real sklearn 1.9 bug found and fixed (all-NaN feature
+  columns from early folds crash the binner — fixed by fitting/predicting on
+  not-all-null subset, commit ca77f47); scikit-learn added as a main
+  dependency. Walk-forward result: +6.0% stitched OOS, +7.75 CAGR-pt
+  overfitting gap; second-best active strategy, first besides
+  sealed-accumulation with positive OOS return; not close to buy-and-hold
+  sealed (+151.1%). Full findings in `docs/research-findings-2026-07.md`.
 
 ## Commands
 
@@ -62,12 +75,14 @@ uv.lock together).
 - `src/pkmn_quant/engine/` — event-driven backtester: costs, portfolio, data
   view, execution, strategy ABC, metrics, backtest loop. T+1 fills, long-only.
 - `src/pkmn_quant/strategies/` — Strategy implementations: buy_and_hold,
-  sealed_accumulation, dip_buyer, momentum, cost_aware_reversion. All four
-  active strategies are in PORTFOLIO_SAFE_STRATEGIES (support `--portfolio`
-  exit signals against a real ledger and the paper daily loop).
+  sealed_accumulation, dip_buyer, momentum, cost_aware_reversion, ml_ranker
+  (HistGradientBoostingRegressor trained in-loop, stateless). All five active
+  strategies are in PORTFOLIO_SAFE_STRATEGIES (support `--portfolio` exit
+  signals against a real ledger and the paper daily loop).
 - `src/pkmn_quant/research/` — walk-forward layer: folds, seeded optuna search,
   runner/stitcher, strategy registry, markdown report, `walkforward.json`
-  artifacts (the research → live bridge).
+  artifacts (the research → live bridge). `features.py`: 8 leakage-bounded
+  features for ml-ranker (scikit-learn); regression-tested.
 - `src/pkmn_quant/live/` — `pkmn signals`: one on_bar at the latest warehouse
   date using the last fold's params from the latest walk-forward artifact;
   markdown + JSON reports that carry the strategy's OOS record.

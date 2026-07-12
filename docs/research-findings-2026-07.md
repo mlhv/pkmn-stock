@@ -132,6 +132,110 @@ window they were fit on. The gap is computed on CAGR (annualized) so the
 180d IS vs 60d OOS length mismatch does not fabricate a gap; CAGR over 60d
 windows is noisy, so treat the gap as an order-of-magnitude signal.
 
+## Plan 8: ml-ranker — 2026-07-11
+
+Run: `uv run pkmn walkforward --strategy ml-ranker --start 2024-03-01
+--end 2026-06-30 --trials 15`, 11 folds, ~22 min wall clock.
+OOS span: 2024-08-28 .. 2026-06-18.
+
+### Results
+
+| Metric                  | Value         |
+|-------------------------|---------------|
+| Stitched OOS total      | +6.0%         |
+| Stitched CAGR           | +3.3%         |
+| Stitched max drawdown   | −8.4%         |
+| Stitched Sharpe         | 0.95          |
+| Stitched Sortino        | 1.33          |
+| Stitched Calmar         | 0.39          |
+| IS total return (mean)  | +6.0%         |
+| OOS total return (mean) | +0.6%         |
+| IS CAGR (mean)          | +13.0%        |
+| OOS CAGR (mean)         | +5.2%         |
+| Overfitting gap         | +7.75 CAGR pts|
+
+Summary table alongside all strategies:
+
+| Strategy             | Stitched OOS total | Mean OOS CAGR | IS CAGR (mean) | Overfitting gap |
+|----------------------|-------------------:|--------------:|---------------:|----------------:|
+| buy-and-hold sealed  | **+151.1%**        | —             | —              | —               |
+| sealed-accumulation  | +13.6%             | +8.7%         | +13.4%         | +4.8 pts        |
+| **ml-ranker**        | **+6.0%**          | **+5.2%**     | **+13.0%**     | **+7.8 pts**    |
+| dip-buyer            | −9.0%              | −4.8%         | −5.2%          | −0.4 pts        |
+| cost-aware-reversion | −10.2%             | −5.3%         | −3.5%          | +1.7 pts        |
+| xs-momentum          | −25.1%             | −10.1%        | +2.8%          | +12.9 pts       |
+
+### Gap first
+
+The +7.75 CAGR-point IS/OOS gap is the **second-largest gap in the project**
+(xs-momentum's +12.9 pts is worst). IS mean CAGR +13.0% vs OOS mean CAGR
++5.2%: a large share of in-sample performance is noise-fitting.
+
+OOS fold returns are noisy: range −3.2% .. +8.4% across 11 folds; 6 of 11
+positive. One fold (2024-12 .. 2025-02, +8.4%) contributes most of the
+stitched gain — the positive stitched OOS number is not uniformly distributed
+across the backtest period.
+
+### What is positive
+
+ml-ranker is the **first active strategy besides sealed-accumulation with a
+positive stitched OOS return** (+6.0%). Tuned rebalance cadences ran 51-87
+days across folds: the Optuna tuner consistently avoided fast-churn parameter
+regions, consistent with the ~15% round-trip toll that punishes frequent
+trading. The strategy's positive result is conditional on using slow cadences.
+
+### vs the stated goal
+
+The goal was to approach buy-and-hold sealed (+151.1%). ml-ranker does not
+come close: +6.0% vs +151.1%. It is the second-best active strategy overall
+(behind sealed-accumulation +13.6%), but no active strategy approaches holding
+sealed in this regime. The honest verdict: this is a failure against the
+original benchmark target, and a relative success against the other active
+strategies.
+
+### Did it learn "hold sealed"?
+
+Rebuilding the last fold's target on 2026-06-18 with the fold's tuned params
+produced 9 buys: 5 singles, 4 sealed. The strategy uses both card kinds; it
+did not simply rediscover buy-and-hold-sealed, nor did it ignore sealed.
+Allocation breadth is genuine, not a degenerate single-asset collapse.
+
+### sklearn all-NaN bug (research infrastructure finding)
+
+During the initial research run, sklearn 1.9's histogram binner crashed with
+"window shape cannot be larger than input array shape" on all-NaN feature
+columns. Early folds legitimately produce these: `ret_90d` is null everywhere
+when the warehouse is younger than 90 days at the training date — a correct
+consequence of the leakage-safe label design, not a data error. Fixed
+in-strategy by fitting and predicting on the not-all-null feature subset per
+call (commit ca77f47). The leakage-safe architecture surfaced the bug precisely
+because it does not silently fill or forward-fill early history.
+
+### Caveats
+
+- Sharpe/Sortino inflated by mark smoothing (thin markets, carry-forward
+  marks) — same caveat as all other strategies.
+- ~2.4 years, one bull regime for sealed; these results generalize to this
+  regime only.
+- 15 Optuna trials is a small search (TPE uses 10 random startup trials before
+  Bayesian steps). The gap could worsen with a wider search that finds higher
+  IS peaks.
+
+### Live smokes (2026-07-11)
+
+- `pkmn signals --strategy ml-ranker --portfolio`: clean, no recommendations;
+  real ledger empty, $0 cash.
+- `pkmn daily --skip-ingest --paper --strategy ml-ranker`: clean, status ok,
+  n_buys 0 — paper portfolio's newest position opened 2026-07-10, tuned
+  rebalance 65d, not yet due. Honest-count machinery from Plan 7 worked
+  correctly.
+
+### Engine performance (Plan 8 profiling)
+
+180-day backtest wall time: 3.84s → ~2.0s (~1.9x) after adding a marks cursor
+and date partition. The bottleneck was per-day dict building, not parquet
+re-read (parquet read: 0.15s).
+
 ## Method notes / caveats (repeat in README)
 
 - The stitched curve is OOS-only: each fold's parameters are frozen before
