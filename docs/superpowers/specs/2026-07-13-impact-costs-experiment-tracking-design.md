@@ -41,6 +41,14 @@ For an order of `q` units against a daily cap `Q` (the existing
 
 - Buy average fill price: `market + max(mid − market, 0) · q / (2Q)`
 - Sell average fill price: `market − max(market − low, 0) · q / (2Q)`
+- **Depth-aware across orders:** the executor shares one per-asset daily
+  depth counter across all orders (`filled_today`), and impact walks the
+  book from where the last fill stopped. Total impact cash for `q` units
+  after `used` units already filled today:
+  `spread_clamped · q · (2·used + q) / (2Q)` — with `used = 0` this is the
+  average-price formula above times `q`. Consistency requirement: splitting
+  one order into several must not reduce impact, mirroring the existing
+  rule that splitting cannot buy more depth.
 
 Properties (all unit-tested):
 
@@ -80,16 +88,20 @@ Properties (all unit-tested):
   "impact cost you X".
 - Ledger backward compatibility: existing JSONL ledgers (real + paper) have
   no `impact` key; replay treats a missing key as `0.0`. No migration.
-- Live surfaces (`plan_paper_fills` in `live/paper.py`, `pkmn signals`
-  sizing) use the same impact-aware CostModel methods so paper fills and
-  recommendations reflect impact.
+- Live surfaces: `Recommendation` gains optional `mid`/`low` fields
+  (populated by `generate_signals` from the as-of day's actual prints);
+  `plan_paper_fills` in `live/paper.py` uses the same impact-aware
+  CostModel methods so paper fills reflect impact.
 
 ### Defaults and goldens (follows the `warmup_days` precedent)
 
 - Engine-level default: `impact_enabled=False` → all existing goldens and
   tests pass untouched.
-- CLI default (**on**) for `pkmn backtest`, `pkmn walkforward`,
-  `pkmn signals`, `pkmn daily`; `--no-impact` opt-out flag on each.
+- CLI default (**on**) for `pkmn backtest`, `pkmn walkforward`, and
+  `pkmn daily`; `--no-impact` opt-out flag on each. `pkmn signals` gets no
+  flag: it never constructs a CostModel (order quantities come from the
+  strategy; impact enters the live path only via the paper planner inside
+  `pkmn daily`).
 - `tests/test_cli_backtest.py`: the existing golden case passes `--no-impact`
   and keeps its pinned numbers; a NEW golden case runs with impact on against
   seed data extended with `mid`/`low`, with the hand-derived arithmetic in
