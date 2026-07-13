@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Collection
+from dataclasses import dataclass, field
 from datetime import date, timedelta
 from typing import TypedDict
 
@@ -10,6 +11,7 @@ import polars as pl
 
 from pkmn_quant.data.warehouse import Warehouse
 from pkmn_quant.engine.portfolio import Asset
+from pkmn_quant.engine.quotes import Quote
 
 
 class _Cursor(TypedDict):
@@ -50,6 +52,10 @@ class MarketData:
     # carry-forward state as of watermark. Monotone queries (the event loop)
     # advance in O(new change-points); an earlier query resets and replays.
     _cursor: _Cursor
+    # date -> (date, product_id, sub_type, mid, low) frame; resolved lazily
+    # by quotes_on for ordered assets only, so the hot prices_on/marks_on
+    # paths (Plan 8 perf) never pay for it.
+    _quotes_by_day: dict[date, pl.DataFrame] = field(default_factory=dict)
 
     @property
     def days(self) -> list[date]:
@@ -111,6 +117,14 @@ class MarketData:
             else {}
         )
         frame_by_day: dict[date, pl.DataFrame] = {k[0]: v for k, v in frame_by_day_raw.items()}
+        quotes_by_day_raw = (
+            frame.select("date", "product_id", "sub_type", "mid", "low").partition_by(
+                "date", as_dict=True, include_key=True
+            )
+            if frame.height
+            else {}
+        )
+        quotes_by_day: dict[date, pl.DataFrame] = {k[0]: v for k, v in quotes_by_day_raw.items()}
         cursor: _Cursor = {"idx": 0, "watermark": None, "marks": {}}
         return cls(
             frame=frame,
@@ -118,6 +132,7 @@ class MarketData:
             _marks_rows=marks_rows,
             _frame_by_day=frame_by_day,
             _cursor=cursor,
+            _quotes_by_day=quotes_by_day,
         )
 
     def prices_on(self, day: date) -> dict[Asset, float]:
@@ -129,6 +144,26 @@ class MarketData:
             Asset(product_id=int(pid), sub_type=str(st)): float(m)
             for _, pid, st, m in part.iter_rows()
         }
+
+    def quotes_on(self, day: date, assets: Collection[Asset]) -> dict[Asset, Quote]:
+        """mid/low actually printed on `day`, for the requested assets only.
+
+        No carry-forward (same rule as prices_on): a stale quote must not
+        price today's impact. Assets that did not print get no entry.
+        """
+        part = self._quotes_by_day.get(day)
+        if part is None or not assets:
+            return {}
+        wanted = set(assets)
+        out: dict[Asset, Quote] = {}
+        for _, pid, st, mid, low in part.iter_rows():
+            asset = Asset(product_id=int(pid), sub_type=str(st))
+            if asset in wanted:
+                out[asset] = Quote(
+                    mid=float(mid) if mid is not None else None,
+                    low=float(low) if low is not None else None,
+                )
+        return out
 
     def marks_on(self, day: date) -> dict[Asset, float]:
         """Mark-to-market prices on `day`, carrying forward missing assets."""
