@@ -5,8 +5,9 @@ spread/fees from the CostModel, clipped by liquidity, cash, and held quantity.
 Long-only: a sell can never exceed the position; shorts cannot exist.
 
 Design note: Fill.price is always the observable market print; ALL costs are
-explicit in fees (buy side: shipping; sell side: marketplace fee + shipping).
-This keeps the ledger auditable.
+explicit in fees (buy side: shipping; sell side: marketplace fee + shipping)
+and impact (walk-the-spread cost of demanding size). This keeps the ledger
+auditable.
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ from datetime import date
 
 from pkmn_quant.engine.costs import CostModel
 from pkmn_quant.engine.portfolio import Asset, Fill, Portfolio
+from pkmn_quant.engine.quotes import Quote
 
 
 @dataclass(frozen=True)
@@ -37,6 +39,7 @@ class ExecutionSimulator:
         prices: dict[Asset, float],
         portfolio: Portfolio,
         day: date,
+        quotes: dict[Asset, Quote] | None = None,
     ) -> list[Fill]:
         """Fill orders against the day's prices, applying them to the portfolio.
 
@@ -45,6 +48,7 @@ class ExecutionSimulator:
         """
         fills: list[Fill] = []
         filled_today: dict[Asset, int] = {}
+        quotes_map = quotes or {}
         for order in orders:
             market = prices.get(order.asset)
             # market <= 0 should be impossible (quality gates quarantine it),
@@ -55,10 +59,11 @@ class ExecutionSimulator:
             cap_left = self.cost_model.max_daily_qty(market) - used
             if cap_left <= 0:
                 continue
+            quote = quotes_map.get(order.asset)
             fill = (
-                self._fill_buy(order, market, portfolio, day, cap_left)
+                self._fill_buy(order, market, portfolio, day, cap_left, used, quote)
                 if order.quantity > 0
-                else self._fill_sell(order, market, portfolio, day, cap_left)
+                else self._fill_sell(order, market, portfolio, day, cap_left, used, quote)
             )
             if fill is not None:
                 portfolio.apply(fill)
@@ -67,12 +72,26 @@ class ExecutionSimulator:
         return fills
 
     def _fill_buy(
-        self, order: Order, market: float, portfolio: Portfolio, day: date, cap_left: int
+        self,
+        order: Order,
+        market: float,
+        portfolio: Portfolio,
+        day: date,
+        cap_left: int,
+        used: int,
+        quote: Quote | None,
     ) -> Fill | None:
         qty = min(order.quantity, cap_left)
-        # afford: qty * market + shipping_per_line <= cash
+        # afford: qty * market + shipping_per_line + impact(qty) <= cash
         affordable = math.floor((portfolio.cash - self.cost_model.shipping_per_line) / market)
         qty = min(qty, max(affordable, 0))
+        mid = quote.mid if quote is not None else None
+        impact = self.cost_model.buy_impact(market, mid, qty, used)
+        cost = qty * market + self.cost_model.shipping_per_line + impact
+        while qty > 0 and cost > portfolio.cash:
+            qty -= 1
+            impact = self.cost_model.buy_impact(market, mid, qty, used)
+            cost = qty * market + self.cost_model.shipping_per_line + impact
         if qty <= 0:
             return None
         return Fill(
@@ -81,10 +100,18 @@ class ExecutionSimulator:
             quantity=qty,
             price=market,
             fees=self.cost_model.shipping_per_line,
+            impact=impact,
         )
 
     def _fill_sell(
-        self, order: Order, market: float, portfolio: Portfolio, day: date, cap_left: int
+        self,
+        order: Order,
+        market: float,
+        portfolio: Portfolio,
+        day: date,
+        cap_left: int,
+        used: int,
+        quote: Quote | None,
     ) -> Fill | None:
         pos = portfolio.positions.get(order.asset)
         if pos is None:
@@ -93,4 +120,13 @@ class ExecutionSimulator:
         if qty <= 0:
             return None
         fees = qty * market * self.cost_model.fee_rate + self.cost_model.shipping_per_line
-        return Fill(day=day, asset=order.asset, quantity=-qty, price=market, fees=fees)
+        low = quote.low if quote is not None else None
+        impact = self.cost_model.sell_impact(market, low, qty, used)
+        return Fill(
+            day=day,
+            asset=order.asset,
+            quantity=-qty,
+            price=market,
+            fees=fees,
+            impact=impact,
+        )
