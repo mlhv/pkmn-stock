@@ -291,23 +291,24 @@ buy-and-hold sealed is undefeated and its lead widens rather than narrows.
 
 ### The overfitting-gap number needs a second look for ml-ranker
 
-ml-ranker's impact-on overfitting gap is 0.0033 CAGR-pts — nearly zero,
-which would normally read as "no overfitting, trustworthy result." Do not
-read it that way here. The gap is small because **in-sample mean CAGR also
-went negative** (IS mean CAGR −3.39%, OOS mean CAGR −3.72%, vs the flat-cost
-run's IS +13.0% / OOS +5.2%): the strategy stopped finding a fittable edge
-in-sample at all under impact costs, so there was nothing left to overfit.
+ml-ranker's impact-on overfitting gap is 0.33 CAGR-pts — small (about
+1/20th of the flat-cost run's 7.75 pts), which would normally read as
+"little overfitting, trustworthy result." Do not read it that way here. The
+gap is small because **in-sample mean CAGR also went negative** (IS mean
+CAGR −3.39%, OOS mean CAGR −3.72%, vs the flat-cost run's IS +13.0% /
+OOS +5.2%): the strategy stopped finding a fittable edge in-sample at all
+under impact costs, so there was nothing left to overfit.
 A shrinking gap is only good news when it comes from OOS catching up to a
 positive IS; here it comes from IS collapsing to match a negative OOS (IS
 mean total return −1.7%, OOS mean total return −0.7%). Same arithmetic,
 opposite story — flag this pattern whenever an overfitting gap looks
 unusually good.
 
-sealed-accumulation's gap widened under impact: IS mean CAGR +9.07% vs OOS
-mean CAGR −3.16% (gap 0.1222, vs +4.8 pts flat-cost) — the more familiar
-"in-sample optimism, out-of-sample disappointment" shape, worse than before
-because impact now bites every rebalance the optimizer chose thinking it was
-free.
+sealed-accumulation's gap more than doubled under impact: IS mean CAGR
++9.07% vs OOS mean CAGR −3.16% (gap 12.22 pts, vs +4.8 pts flat-cost) — the
+more familiar "in-sample optimism, out-of-sample disappointment" shape,
+markedly worse than before because impact now bites every rebalance the
+optimizer chose thinking it was free.
 
 ### Known display nit: `pkmn runs list`
 
