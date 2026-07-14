@@ -6,6 +6,7 @@ import pytest
 
 from pkmn_quant.live.ledger import (
     LedgerError,
+    _parse_lines,
     append_event,
     append_events,
     ledger_path,
@@ -503,3 +504,42 @@ def test_load_events_then_replay_matches_load_portfolio(tmp_path: Path) -> None:
     pf = replay(events, PRODUCTS)
     ref = load_portfolio(path, PRODUCTS)
     assert pf.cash == ref.cash and pf.positions == ref.positions
+
+
+# ---------------------------------------------------------------------------
+# Task 6: Ledger accepts optional `impact` key
+# ---------------------------------------------------------------------------
+
+
+def test_trade_with_impact_reduces_cash() -> None:
+    events = _parse_lines(
+        [
+            '{"date": "2025-06-01", "kind": "deposit", "amount": 100.0}',
+            '{"date": "2025-06-02", "kind": "buy", "product_id": 1, "sub_type": "Normal",'
+            ' "qty": 2, "price": 10.0, "fees": 1.0, "impact": 3.0}',
+        ]
+    )
+    pf = replay(events, PRODUCTS)
+    assert pf.cash == pytest.approx(100.0 - 20.0 - 1.0 - 3.0)
+
+
+def test_trade_without_impact_key_is_backward_compatible() -> None:
+    events = _parse_lines(
+        [
+            '{"date": "2025-06-01", "kind": "deposit", "amount": 100.0}',
+            '{"date": "2025-06-02", "kind": "buy", "product_id": 1, "sub_type": "Normal",'
+            ' "qty": 2, "price": 10.0, "fees": 1.0}',
+        ]
+    )
+    pf = replay(events, PRODUCTS)
+    assert pf.cash == pytest.approx(79.0)
+
+
+def test_negative_impact_rejected() -> None:
+    with pytest.raises(LedgerError, match="impact"):
+        _parse_lines(
+            [
+                '{"date": "2025-06-02", "kind": "buy", "product_id": 1, "sub_type": "Normal",'
+                ' "qty": 1, "price": 10.0, "fees": 0.0, "impact": -1.0}'
+            ]
+        )

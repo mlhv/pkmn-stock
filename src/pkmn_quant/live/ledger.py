@@ -3,7 +3,8 @@
 The ledger is the single source of truth for what the user actually did;
 marks/valuations are never stored, always computed from the warehouse at
 read time. `price` is per-unit and `fees` is the total non-price cost of
-the event (shipping on buys; marketplace cut + shipping on sells) —
+the event (shipping on buys; marketplace cut + shipping on sells); optional
+`impact` is the walk-the-spread cost recorded by paper fills (default 0) —
 identical semantics to engine Fill, so replay is a direct translation and
 avg-cost/realized-P&L math is the backtester's math by construction.
 
@@ -25,7 +26,9 @@ from pkmn_quant.engine.portfolio import Asset, Fill, Portfolio
 
 KINDS = frozenset({"deposit", "withdraw", "buy", "sell"})
 _DEPOSIT_WITHDRAW_KEYS = frozenset({"date", "kind", "amount"})
-_TRADE_KEYS = frozenset({"date", "kind", "product_id", "sub_type", "qty", "price", "fees"})
+_TRADE_KEYS = frozenset(
+    {"date", "kind", "product_id", "sub_type", "qty", "price", "fees", "impact"}
+)
 
 
 class LedgerError(Exception):
@@ -42,6 +45,7 @@ class LedgerEvent:
     qty: int | None = None
     price: float | None = None
     fees: float | None = None
+    impact: float | None = None
 
 
 @dataclass(frozen=True)
@@ -111,6 +115,7 @@ def _parse_line(line_no: int, raw: str) -> LedgerEvent:
         qty = int(raw_qty)
         price = float(obj["price"])
         fees = float(obj.get("fees", 0.0))
+        impact = float(obj.get("impact", 0.0))
     except (KeyError, TypeError, ValueError) as exc:
         raise fail(f"missing/invalid trade field ({exc!r})") from exc
     if qty <= 0:
@@ -123,8 +128,19 @@ def _parse_line(line_no: int, raw: str) -> LedgerEvent:
         raise fail(f"fees must be finite, got {fees}")
     if fees < 0:
         raise fail(f"fees must be non-negative, got {fees}")
+    if not math.isfinite(impact):
+        raise fail(f"impact must be finite, got {impact}")
+    if impact < 0:
+        raise fail(f"impact must be non-negative, got {impact}")
     return LedgerEvent(
-        line_no=line_no, day=day, kind=kind, asset=asset, qty=qty, price=price, fees=fees
+        line_no=line_no,
+        day=day,
+        kind=kind,
+        asset=asset,
+        qty=qty,
+        price=price,
+        fees=fees,
+        impact=impact,
     )
 
 
@@ -159,7 +175,12 @@ def replay(events: list[LedgerEvent], products: pl.DataFrame) -> Portfolio:
                 raise fail(f"unknown product_id {e.asset.product_id}")
             signed = e.qty if e.kind == "buy" else -e.qty
             fill = Fill(
-                day=e.day, asset=e.asset, quantity=signed, price=e.price, fees=e.fees or 0.0
+                day=e.day,
+                asset=e.asset,
+                quantity=signed,
+                price=e.price,
+                fees=e.fees or 0.0,
+                impact=e.impact or 0.0,
             )
             try:
                 pf.apply(fill)
