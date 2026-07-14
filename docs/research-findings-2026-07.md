@@ -236,6 +236,109 @@ because it does not silently fill or forward-fill early history.
 and date partition. The bottleneck was per-day dict building, not parquet
 re-read (parquet read: 0.15s).
 
+## Plan 9: walk-the-spread impact — 2026-07-14
+
+Runs: `pkmn backtest --start 2024-03-01 --end 2026-06-30` (buy-and-hold
+sealed) and `pkmn walkforward --strategy {sealed-accumulation,ml-ranker}
+--start 2024-03-01 --end 2026-06-30 --trials 15`, all with the impact model
+ON — the new CLI default as of this branch. Buys walk the quoted price from
+`market` toward `mid` (the day's median listing) and sells walk from `market`
+toward `low`, scaled by `qty / (2 * daily_liquidity_cap)`; `--no-impact`
+restores the old flat-cost behavior. Every run recorded to
+`data/runs/registry.jsonl`; run IDs below are the first provenance citations
+from that registry in this document.
+
+### Results: without impact (prior sections) vs with impact
+
+| Strategy             | OOS return, flat-cost (prior) | OOS return, impact ON | Run ID (impact-on)         |
+|-----------------------|------------------------------:|-----------------------:|-----------------------------|
+| buy-and-hold sealed  | +186.0% (backtest total return, 2024-03→2026-06)\* | +183.7% (backtest total return) | `20260714T045104Z-8d084f` |
+| sealed-accumulation  | +13.6% (stitched OOS)         | −7.4% (stitched OOS)   | `20260714T045549Z-e0e52c`  |
+| ml-ranker            | +6.0% (stitched OOS)          | −7.5% (stitched OOS)   | `20260714T051127Z-0bc0fc`  |
+
+\* The +186.0% flat-cost number is the full-period `pkmn backtest` total
+return (2024-03-01 .. 2026-06-30), the same benchmark cited in CLAUDE.md's
+conventions section — not the walk-forward stitched-OOS +151.1% figure from
+the Headline table above (different window, different metric; both are
+buy-and-hold sealed). The impact-on run above is the directly comparable
+apples-to-apples figure: same command, same window, impact toggled.
+
+### Hypothesis verdict: confirmed, strongly
+
+The Plan 9 hypothesis was that impact costs would hurt high-turnover
+strategies more than buy-and-hold, widening buy-and-hold's lead. The data
+confirms this more sharply than expected:
+
+- **Buy-and-hold sealed** trades ~39 times total over the full period (one
+  accumulation trickle, essentially buy-and-hold). Impact cost is a rounding
+  error against a +186% multi-year move: +186.0% → +183.7%, a 2.3-point
+  haircut.
+- **sealed-accumulation** (11 folds, previously +13.6% stitched OOS) flips
+  to **−7.4%**. This strategy's edge was never free of round-trip friction
+  by much margin (+13.6% vs +151.1% benchmark already showed most of the
+  benchmark's edge was being given up to cost); the added walk-the-spread
+  impact on every rebalance was enough to erase what remained and go
+  negative.
+- **ml-ranker** (previously +6.0% stitched OOS, the only other positive
+  active strategy) also flips to **−7.5%**. Both previously-positive active
+  strategies are now negative under impact.
+
+The apparent edge that sealed-accumulation and ml-ranker showed in the
+flat-cost regime was, at least in significant part, an artifact of
+under-costing trades that walk price against the book. Once that friction is
+priced in, **every active strategy in this project is now OOS-negative**;
+buy-and-hold sealed is undefeated and its lead widens rather than narrows.
+
+### The overfitting-gap number needs a second look for ml-ranker
+
+ml-ranker's impact-on overfitting gap is 0.0033 CAGR-pts — nearly zero,
+which would normally read as "no overfitting, trustworthy result." Do not
+read it that way here. The gap is small because **in-sample mean CAGR also
+went negative** (IS mean CAGR −3.39%, OOS mean CAGR −3.72%, vs the flat-cost
+run's IS +13.0% / OOS +5.2%): the strategy stopped finding a fittable edge
+in-sample at all under impact costs, so there was nothing left to overfit.
+A shrinking gap is only good news when it comes from OOS catching up to a
+positive IS; here it comes from IS collapsing to match a negative OOS (IS
+mean total return −1.7%, OOS mean total return −0.7%). Same arithmetic,
+opposite story — flag this pattern whenever an overfitting gap looks
+unusually good.
+
+sealed-accumulation's gap widened under impact: IS mean CAGR +9.07% vs OOS
+mean CAGR −3.16% (gap 0.1222, vs +4.8 pts flat-cost) — the more familiar
+"in-sample optimism, out-of-sample disappointment" shape, worse than before
+because impact now bites every rebalance the optimizer chose thinking it was
+free.
+
+### Known display nit: `pkmn runs list`
+
+`pkmn runs list` prints `-` in the headline-return column for both
+walkforward runs above (e.g. `20260714T051127Z-0bc0fc  walkforward
+ml-ranker  total_return  -  fba77d7`). This is a display bug, not a data
+bug: walkforward results dicts key the headline number as
+`stitched_total_return`, but the CLI's summary column looks up
+`total_return` (the backtest key). The full results dict — including
+`stitched_total_return` — is recorded correctly in
+`data/runs/registry.jsonl`; only the terminal summary column mislabels it.
+Not fixed in this task; noted here and in CLAUDE.md so it doesn't get
+mistaken for missing data.
+
+### Standing caveats (repeated)
+
+- Sharpe/Sortino/Calmar are inflated by mark smoothing (thin markets,
+  carry-forward marks); compare strategies to each other and to buy-and-hold
+  only, not to equities benchmarks.
+- ~2.4 years of data, one bull regime for sealed; these results say nothing
+  about a flat or falling market.
+- 15 Optuna trials/fold is closer to random search than full Bayesian
+  optimization; a wider search could shift these numbers in either
+  direction.
+- **New this plan:** the impact model itself is an assumption, not a
+  calibration. Linear walk from `market` toward `mid` (buys) or `low`
+  (sells), scaled by `qty / (2 * daily_liquidity_cap)`, is a modeling
+  choice — it has not been validated against real observed fill prices.
+  Treat the impact-on numbers as "directionally more realistic than
+  flat-cost," not as a validated forecast of real trading costs.
+
 ## Method notes / caveats (repeat in README)
 
 - The stitched curve is OOS-only: each fold's parameters are frozen before

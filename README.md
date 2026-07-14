@@ -1,45 +1,67 @@
 # pkmn_quant — an event-driven backtester for Pokemon card markets
 
 A quant research system for TCGplayer card prices: custom event-driven
-backtest engine with realistic card-market execution costs, five
-parameterized strategies, optuna walk-forward validation, live signal
-generation, reinvest loop with portfolio ledger and daily scheduling, and a
+backtest engine with realistic card-market execution costs (including a
+walk-the-spread market-impact model), five parameterized strategies, optuna
+walk-forward validation, live signal generation, reinvest loop with
+portfolio ledger and daily scheduling, an experiment registry, and a
 Streamlit results explorer. Python 3.12, polars, scikit-learn, strict mypy,
-267 tests (plus 3 dashboard tests behind an opt-in dependency group), CI.
+306 tests (plus 3 dashboard tests behind an opt-in dependency group), CI.
 
-**The honest headline:** across 2024-08 → 2026-06, none of the five active
-strategies beat buy-and-hold sealed product (+151% out-of-sample). ml-ranker
-is the first active strategy besides sealed-accumulation with a positive
-stitched OOS return (+6.0%), but +6.0% vs +151.1% is not close. The system's
-value is that it can prove results honestly: walk-forward out-of-sample
-testing, transaction-cost realism, and an explicit overfitting measurement.
+**The honest headline:** across 2024-08 → 2026-06, none of the active
+strategies beat buy-and-hold sealed product (+151% out-of-sample,
+flat-cost). With the market-impact cost model on (the current CLI default),
+it gets worse for active strategies: both previously-positive results
+(sealed-accumulation +13.6%, ml-ranker +6.0%) flip negative OOS
+(−7.4%, −7.5%) once trades are priced against the book, while buy-and-hold
+sealed barely moves (+186.0% → +183.7% over the full backtest window). The
+system's value is that it can prove results honestly: walk-forward
+out-of-sample testing, transaction-cost and market-impact realism, an
+explicit overfitting measurement, and an experiment registry that makes
+every number reproducible from its config hash.
 
 ## Results (walk-forward, out-of-sample only)
 
-Numbers from 2026-07-11 runs. Prior numbers remain in the findings doc.
+Two regimes: **flat-cost** (2026-07-11 runs, no market-impact model) and
+**impact-on** (2026-07-14 runs, the walk-the-spread model, now the CLI
+default). Prior numbers and full detail remain in the findings doc; run IDs
+for the impact-on row are in `data/runs/registry.jsonl` and cited in the
+findings doc's Plan 9 section.
 
-| Strategy             | Stitched OOS total | Mean OOS CAGR | Overfitting gap |
-|----------------------|-------------------:|--------------:|----------------:|
-| buy-and-hold sealed  | **+151.1%**        | —             | —               |
-| sealed-accumulation  | +13.6%             | +8.7%         | +4.8 pts        |
-| ml-ranker            | +6.0%              | +5.2%         | +7.8 pts        |
-| dip-buyer            | −9.0%              | −4.8%         | −0.4 pts        |
-| cost-aware-reversion | −10.2%             | −5.3%         | +1.7 pts        |
-| xs-momentum          | −25.1%             | −10.1%        | +12.9 pts       |
+| Strategy             | Stitched OOS, flat-cost | Stitched OOS, impact-on |
+|----------------------|-------------------------:|--------------------------:|
+| buy-and-hold sealed  | **+151.1%**              | *(not re-run walk-forward; full-period backtest +186.0% → +183.7%)* |
+| sealed-accumulation  | +13.6%                   | **−7.4%**                  |
+| ml-ranker            | +6.0%                    | **−7.5%**                  |
+| dip-buyer            | −9.0%                    | *(not re-run under impact)* |
+| cost-aware-reversion | −10.2%                   | *(not re-run under impact)* |
+| xs-momentum          | −25.1%                   | *(not re-run under impact)* |
 
 11 folds each: optimize 180 days in-sample, freeze params, test 60 days
 out-of-sample, roll, stitch the OOS segments. The overfitting gap
-(mean IS CAGR − mean OOS CAGR) is reported on every run. Full findings and
-caveats: [docs/research-findings-2026-07.md](docs/research-findings-2026-07.md).
+(mean IS CAGR − mean OOS CAGR) is reported on every run. Impact costs walk
+the fill price from `market` toward the day's `mid` (buys) or `low` (sells),
+scaled by order size against the daily liquidity cap; opt out per-command
+with `--no-impact`. Full findings and caveats:
+[docs/research-findings-2026-07.md](docs/research-findings-2026-07.md).
 
 ## Why the numbers are believable
 
 - **No look-ahead by construction:** strategies receive a `Context` (history
   up to today, positions, cash) and cannot tell backtest from live mode.
 - **Card-market execution realism:** T+1 fills, ~12.75% sell fees + shipping,
-  integer quantities, per-day liquidity caps tiered by price, no shorting.
-  Round-trip friction is ~15% — most naive strategies lose to it, and the
-  [findings](docs/research-findings-2026-07.md) say so.
+  integer quantities, per-day liquidity caps tiered by price, no shorting,
+  and (on by default for `backtest`/`walkforward`/`daily`, opt out with
+  `--no-impact`) a walk-the-spread market-impact model: buys walk from
+  `market` toward `mid`, sells from `market` toward `low`, scaled by order
+  size against the liquidity cap. Round-trip friction is ~15% before impact
+  — most naive strategies lose to it, and the
+  [findings](docs/research-findings-2026-07.md) say so; with impact on, both
+  previously-positive active strategies flip negative OOS.
+- **Reproducible by construction:** every `backtest`/`walkforward` run
+  appends a record (config hash, git SHA+dirty, data fingerprint, results)
+  to the experiment registry (`data/runs/registry.jsonl`), inspectable via
+  `pkmn runs list`/`pkmn runs show <run-id>`.
 - **Walk-forward only:** the headline equity curve contains zero in-sample
   days. Parameters are chosen by seeded optuna on each in-sample window and
   frozen before touching out-of-sample data.
@@ -67,18 +89,25 @@ caveats: [docs/research-findings-2026-07.md](docs/research-findings-2026-07.md).
         ├── research/    folds -> seeded optuna search -> walk-forward
         │                runner/stitcher -> registry -> reports + artifacts
         │                features.py: 8 leakage-bounded features (scikit-learn)
+        │                runs.py: experiment registry (data/runs/registry.jsonl)
         └── live/        pkmn signals: same Strategy, latest data,
                          recommendations with the strategy's OOS record
+
+    engine/quotes.py: per-day Quote (mid/low) feeding the walk-the-spread
+    market-impact cost model (engine default off, CLI default on)
 
 ## Quickstart
 
     uv sync
-    uv run pytest                # 267 tests (3 dashboard tests skip without --group dashboard)
+    uv run pytest                # 306 tests (3 dashboard tests skip without --group dashboard)
     uv run pkmn ingest --start 2024-02-08 --end 2026-06-30   # ~40 min, ~2.9M rows
-    uv run pkmn backtest --start 2024-03-01 --end 2026-06-30 # benchmark
+    uv run pkmn backtest --start 2024-03-01 --end 2026-06-30 # benchmark (impact model on by default)
+    uv run pkmn backtest --start 2024-03-01 --end 2026-06-30 --no-impact  # flat-cost, no market impact
     uv run pkmn walkforward --strategy sealed-accumulation \
         --start 2024-03-01 --end 2026-06-30 --trials 15      # minutes
     uv run pkmn signals --strategy sealed-accumulation       # today's entries
+    uv run pkmn runs list                                     # experiment registry: recorded runs
+    uv run pkmn runs show <run-id>                            # full record for one run
     uv run pkmn portfolio deposit --amount 1000              # seed the ledger
     uv run pkmn portfolio buy --product-id ... --qty ... --price ...  # record a buy
     uv run pkmn portfolio show                               # positions + P&L
