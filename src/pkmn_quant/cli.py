@@ -23,6 +23,49 @@ DEFAULT_SIGNALS_CASH = 10_000.0
 portfolio_app = typer.Typer(no_args_is_help=True, help="Record and inspect real positions.")
 app.add_typer(portfolio_app, name="portfolio")
 
+runs_app = typer.Typer(no_args_is_help=True, help="Inspect the experiment run registry.")
+app.add_typer(runs_app, name="runs")
+
+
+@runs_app.command("list")
+def runs_list(
+    strategy: str | None = typer.Option(None, help="Filter by strategy name."),
+    root: Path = typer.Option(Path("."), help="Project root holding the data/ directory."),
+) -> None:
+    """Recorded research runs, newest first."""
+    from pkmn_quant.research.runs import load_runs
+
+    records = load_runs(root)
+    if strategy:
+        records = [r for r in records if r.strategy == strategy]
+    if not records:
+        typer.echo("no runs recorded")
+        return
+    for r in reversed(records):
+        sha = (r.git_sha or "no-git")[:7] + ("*" if r.git_dirty else "")
+        ret = r.results.get("total_return")
+        ret_s = f"{ret:+.4f}" if ret is not None else "   -   "
+        typer.echo(f"{r.run_id}  {r.command:<11}  {r.strategy:<24}  total_return {ret_s}  {sha}")
+
+
+@runs_app.command("show")
+def runs_show(
+    run_id: str = typer.Argument(..., help="Run id, or any unique prefix."),
+    root: Path = typer.Option(Path("."), help="Project root holding the data/ directory."),
+) -> None:
+    """Full JSON record of one run."""
+    import dataclasses
+
+    from pkmn_quant.research.runs import load_runs
+
+    matches = [r for r in load_runs(root) if r.run_id.startswith(run_id)]
+    if not matches:
+        raise typer.BadParameter(f"no run matching {run_id!r}; see `pkmn runs list`")
+    if len(matches) > 1:
+        ids = ", ".join(r.run_id for r in matches)
+        raise typer.BadParameter(f"ambiguous run id {run_id!r}: matches {ids}")
+    typer.echo(json.dumps(dataclasses.asdict(matches[0]), indent=2, sort_keys=True))
+
 
 def _portfolio_deps(root: Path, paper: bool = False) -> tuple[Warehouse, pl.DataFrame, Path]:
     """(warehouse, products, ledger file) — shared by the portfolio subcommands.
@@ -270,6 +313,28 @@ def backtest(
     )
     fills_df.write_parquet(run_dir / "fills.parquet")
 
+    from pkmn_quant.research.runs import record_run
+
+    run_id = record_run(
+        root=root,
+        command="backtest",
+        strategy=result.strategy_name,
+        config={
+            "command": "backtest",
+            "start": start,
+            "end": end,
+            "cash": cash,
+            "kind": kind,
+            "warmup_days": 0,
+            "cost_model": cm.as_dict(),
+        },
+        results=result.summary,
+        artifact_path=run_dir,
+        warehouse=wh,
+    )
+    if run_id is not None:
+        typer.echo(f"run recorded: {run_id}")
+
     typer.echo(f"strategy: {result.strategy_name}  ({len(result.fills)} fills)")
     for key, value in result.summary.items():
         typer.echo(f"{key}: {value:.4f}")
@@ -333,9 +398,10 @@ def walkforward(
         spec = SearchSpec(space=entry_checked.space, n_trials=trials, seed=seed)
         return optimize_params(spec, evaluate)
 
+    wh = Warehouse(Paths(root=root))
     cm = CostModel(impact_enabled=impact)
     result = run_walkforward(
-        warehouse=Warehouse(Paths(root=root)),
+        warehouse=wh,
         strategy_factory=entry_checked.factory,
         optimizer=optimizer,
         cost_model=cm,
@@ -355,6 +421,33 @@ def walkforward(
     result.stitched_curve.write_parquet(run_dir / "stitched_equity.parquet")
     (run_dir / "report.md").write_text(render_markdown(result, strategy_name=strategy))
     write_walkforward_json(run_dir, result, strategy_name=strategy)
+
+    from pkmn_quant.research.runs import record_run
+
+    run_id = record_run(
+        root=root,
+        command="walkforward",
+        strategy=strategy,
+        config={
+            "command": "walkforward",
+            "strategy": strategy,
+            "start": start,
+            "end": end,
+            "is_days": is_days,
+            "oos_days": oos_days,
+            "trials": trials,
+            "seed": seed,
+            "cash": cash,
+            "warmup_days": warmup_days,
+            "objective_metric": objective_metric,
+            "cost_model": cm.as_dict(),
+        },
+        results=result.summary,
+        artifact_path=run_dir,
+        warehouse=wh,
+    )
+    if run_id is not None:
+        typer.echo(f"run recorded: {run_id}")
 
     typer.echo(f"strategy: {strategy}  folds: {len(result.folds)}")
     for key, value in result.summary.items():
