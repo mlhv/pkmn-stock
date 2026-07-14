@@ -210,6 +210,11 @@ def backtest(
     end: str = typer.Option(..., help="Backtest end date (YYYY-MM-DD)."),
     cash: float = typer.Option(10_000.0, help="Initial cash."),
     kind: str = typer.Option("sealed", help="Universe for buy-and-hold: sealed|single."),
+    impact: bool = typer.Option(
+        True,
+        "--impact/--no-impact",
+        help="Walk-the-spread market impact on fills (see Plan 9 spec).",
+    ),
     root: Path = typer.Option(Path("."), help="Project root holding the data/ directory."),
 ) -> None:
     """Run the buy-and-hold benchmark backtest over the warehouse."""
@@ -224,10 +229,12 @@ def backtest(
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
 
+    wh = Warehouse(Paths(root=root))
+    cm = CostModel(impact_enabled=impact)
     result = Backtest(
-        warehouse=Warehouse(Paths(root=root)),
+        warehouse=wh,
         strategy=BuyAndHold(kind=kind),
-        cost_model=CostModel(),
+        cost_model=cm,
         start=start_date,
         end=end_date,
         initial_cash=cash,
@@ -247,6 +254,7 @@ def backtest(
                 "quantity": f.quantity,
                 "price": f.price,
                 "fees": f.fees,
+                "impact": f.impact,
             }
             for f in result.fills
         ],
@@ -257,6 +265,7 @@ def backtest(
             "quantity": pl.Int64,
             "price": pl.Float64,
             "fees": pl.Float64,
+            "impact": pl.Float64,
         },
     )
     fills_df.write_parquet(run_dir / "fills.parquet")
@@ -283,6 +292,11 @@ def walkforward(
     ),
     objective_metric: str = typer.Option(
         "total_return", help="Metric optuna maximizes in-sample; see VALID_OBJECTIVE_METRICS."
+    ),
+    impact: bool = typer.Option(
+        True,
+        "--impact/--no-impact",
+        help="Walk-the-spread market impact on fills (see Plan 9 spec).",
     ),
     root: Path = typer.Option(Path("."), help="Project root holding the data/ directory."),
 ) -> None:
@@ -319,11 +333,12 @@ def walkforward(
         spec = SearchSpec(space=entry_checked.space, n_trials=trials, seed=seed)
         return optimize_params(spec, evaluate)
 
+    cm = CostModel(impact_enabled=impact)
     result = run_walkforward(
         warehouse=Warehouse(Paths(root=root)),
         strategy_factory=entry_checked.factory,
         optimizer=optimizer,
-        cost_model=CostModel(),
+        cost_model=cm,
         start=start_date,
         end=end_date,
         is_days=is_days,
