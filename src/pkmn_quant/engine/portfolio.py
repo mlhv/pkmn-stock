@@ -19,7 +19,9 @@ class Fill:
     """An executed trade. quantity > 0 is a buy, < 0 a sell.
 
     `price` is the per-unit execution price (spread already applied);
-    `fees` is the total non-price cost of this fill (fees + shipping).
+    `fees` is the total non-price cost of this fill (fees + shipping);
+    `impact` is the walk-the-spread cost of demanding size, expensed like a
+    fee but reported separately.
     """
 
     day: date
@@ -27,12 +29,15 @@ class Fill:
     quantity: int
     price: float
     fees: float
+    impact: float = 0.0
 
     def __post_init__(self) -> None:
         if self.price <= 0:
             raise ValueError(f"Fill.price must be positive, got {self.price}")
         if self.fees < 0:
             raise ValueError(f"Fill.fees must be non-negative, got {self.fees}")
+        if self.impact < 0:
+            raise ValueError(f"Fill.impact must be non-negative, got {self.impact}")
 
 
 @dataclass
@@ -67,8 +72,8 @@ class Portfolio:
 
     def _buy(self, f: Fill) -> None:
         cost = f.quantity * f.price
-        self.cash -= cost + f.fees
-        self.realized_pnl -= f.fees
+        self.cash -= cost + f.fees + f.impact
+        self.realized_pnl -= f.fees + f.impact
         pos = self.positions.get(f.asset)
         if pos is None:
             self.positions[f.asset] = Position(
@@ -86,8 +91,8 @@ class Portfolio:
             held = pos.quantity if pos else 0
             raise ValueError(f"cannot sell {qty} of {f.asset}: hold {held}")
         proceeds = qty * f.price
-        self.cash += proceeds - f.fees
-        self.realized_pnl += proceeds - qty * pos.avg_cost - f.fees
+        self.cash += proceeds - f.fees - f.impact
+        self.realized_pnl += proceeds - qty * pos.avg_cost - f.fees - f.impact
         pos.quantity -= qty
         if pos.quantity == 0:
             del self.positions[f.asset]

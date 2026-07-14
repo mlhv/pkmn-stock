@@ -3,7 +3,8 @@
 Turns a signal report's recommendations into the batch of ledger event
 dicts that `append_events` can write. Mirrors the backtest executor's
 clipping: sells capped by the liquidity tier; buys capped by liquidity
-AND by what running cash affords after shipping is reserved.
+AND by what running cash affords after shipping AND walk-the-spread
+impact are reserved.
 
 Recommendations are walked in order (strategies emit sells before buys),
 so sell proceeds top up cash before any buy is sized. Recommendations
@@ -57,17 +58,22 @@ def plan_paper_fills(
             qty = min(rec.quantity, cap)
             if qty <= 0:
                 continue
+            impact = costs.sell_impact(mark, rec.low, qty)
             fees = round(qty * mark * costs.fee_rate + costs.shipping_per_line, 2)
-            cash_remaining += qty * mark * (1 - costs.fee_rate) - costs.shipping_per_line
+            cash_remaining += qty * mark * (1 - costs.fee_rate) - costs.shipping_per_line - impact
         else:  # BUY
             # Mirror executor _fill_buy: clip to liquidity cap, then to
             # what cash_remaining can afford after shipping is reserved.
             affordable = math.floor((cash_remaining - costs.shipping_per_line) / mark)
             qty = min(rec.quantity, cap, max(affordable, 0))
+            impact = costs.buy_impact(mark, rec.mid, qty)
+            while qty > 0 and qty * mark + costs.shipping_per_line + impact > cash_remaining:
+                qty -= 1
+                impact = costs.buy_impact(mark, rec.mid, qty)
             if qty <= 0:
                 continue
             fees = costs.shipping_per_line
-            cash_remaining -= qty * mark + costs.shipping_per_line
+            cash_remaining -= qty * mark + costs.shipping_per_line + impact
         batch.append(
             {
                 "date": day.isoformat(),
@@ -77,6 +83,7 @@ def plan_paper_fills(
                 "qty": qty,
                 "price": mark,
                 "fees": fees,
+                "impact": round(impact, 2),
             }
         )
     return batch

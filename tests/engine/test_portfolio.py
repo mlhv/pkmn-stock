@@ -142,3 +142,45 @@ def test_opened_on_fresh_after_close_and_reopen() -> None:
     pf.apply(Fill(day=date(2026, 2, 1), asset=a, quantity=-1, price=12.0, fees=0.0))
     pf.apply(Fill(day=date(2026, 4, 1), asset=a, quantity=1, price=8.0, fees=0.0))
     assert pf.positions[a].opened_on == date(2026, 4, 1)
+
+
+def test_fill_negative_impact_rejected() -> None:
+    with pytest.raises(ValueError, match="impact"):
+        Fill(
+            day=date(2025, 6, 1),
+            asset=Asset(product_id=1, sub_type="Normal"),
+            quantity=1,
+            price=10.0,
+            fees=0.0,
+            impact=-0.01,
+        )
+
+
+def test_buy_impact_reduces_cash_and_realized_pnl() -> None:
+    pf = Portfolio(cash=100.0)
+    pf.apply(
+        Fill(
+            day=date(2025, 6, 1),
+            asset=Asset(product_id=1, sub_type="Normal"),
+            quantity=2,
+            price=10.0,
+            fees=1.0,
+            impact=3.0,
+        )
+    )
+    # cash: 100 - 2*10 - 1 - 3 = 76; impact expensed like a fee.
+    assert pf.cash == pytest.approx(76.0)
+    assert pf.realized_pnl == pytest.approx(-4.0)
+    # avg_cost stays the price: impact is explicit, not smeared into basis.
+    assert pf.positions[Asset(product_id=1, sub_type="Normal")].avg_cost == pytest.approx(10.0)
+
+
+def test_sell_impact_reduces_proceeds() -> None:
+    a = Asset(product_id=1, sub_type="Normal")
+    pf = Portfolio(cash=0.0)
+    pf.apply(Fill(day=date(2025, 6, 1), asset=a, quantity=2, price=10.0, fees=0.0))
+    pf.apply(Fill(day=date(2025, 6, 2), asset=a, quantity=-2, price=12.0, fees=1.0, impact=2.0))
+    # sell cash: +2*12 - 1 - 2 = 21; started 0 - 20 buy = -20 -> 1.0
+    assert pf.cash == pytest.approx(1.0)
+    # realized: proceeds 24 - basis 20 - fees 1 - impact 2 = +1
+    assert pf.realized_pnl == pytest.approx(1.0)

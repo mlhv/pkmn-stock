@@ -23,6 +23,49 @@ DEFAULT_SIGNALS_CASH = 10_000.0
 portfolio_app = typer.Typer(no_args_is_help=True, help="Record and inspect real positions.")
 app.add_typer(portfolio_app, name="portfolio")
 
+runs_app = typer.Typer(no_args_is_help=True, help="Inspect the experiment run registry.")
+app.add_typer(runs_app, name="runs")
+
+
+@runs_app.command("list")
+def runs_list(
+    strategy: str | None = typer.Option(None, help="Filter by strategy name."),
+    root: Path = typer.Option(Path("."), help="Project root holding the data/ directory."),
+) -> None:
+    """Recorded research runs, newest first."""
+    from pkmn_quant.research.runs import load_runs
+
+    records = load_runs(root)
+    if strategy:
+        records = [r for r in records if r.strategy == strategy]
+    if not records:
+        typer.echo("no runs recorded")
+        return
+    for r in reversed(records):
+        sha = (r.git_sha or "no-git")[:7] + ("*" if r.git_dirty else "")
+        ret = r.results.get("total_return", r.results.get("stitched_total_return"))
+        ret_s = f"{ret:+.4f}" if ret is not None else "   -   "
+        typer.echo(f"{r.run_id}  {r.command:<11}  {r.strategy:<24}  total_return {ret_s}  {sha}")
+
+
+@runs_app.command("show")
+def runs_show(
+    run_id: str = typer.Argument(..., help="Run id, or any unique prefix."),
+    root: Path = typer.Option(Path("."), help="Project root holding the data/ directory."),
+) -> None:
+    """Full JSON record of one run."""
+    import dataclasses
+
+    from pkmn_quant.research.runs import load_runs
+
+    matches = [r for r in load_runs(root) if r.run_id.startswith(run_id)]
+    if not matches:
+        raise typer.BadParameter(f"no run matching {run_id!r}; see `pkmn runs list`")
+    if len(matches) > 1:
+        ids = ", ".join(r.run_id for r in matches)
+        raise typer.BadParameter(f"ambiguous run id {run_id!r}: matches {ids}")
+    typer.echo(json.dumps(dataclasses.asdict(matches[0]), indent=2, sort_keys=True))
+
 
 def _portfolio_deps(root: Path, paper: bool = False) -> tuple[Warehouse, pl.DataFrame, Path]:
     """(warehouse, products, ledger file) — shared by the portfolio subcommands.
@@ -210,6 +253,11 @@ def backtest(
     end: str = typer.Option(..., help="Backtest end date (YYYY-MM-DD)."),
     cash: float = typer.Option(10_000.0, help="Initial cash."),
     kind: str = typer.Option("sealed", help="Universe for buy-and-hold: sealed|single."),
+    impact: bool = typer.Option(
+        True,
+        "--impact/--no-impact",
+        help="Walk-the-spread market impact on fills (see Plan 9 spec).",
+    ),
     root: Path = typer.Option(Path("."), help="Project root holding the data/ directory."),
 ) -> None:
     """Run the buy-and-hold benchmark backtest over the warehouse."""
@@ -224,10 +272,12 @@ def backtest(
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
 
+    wh = Warehouse(Paths(root=root))
+    cm = CostModel(impact_enabled=impact)
     result = Backtest(
-        warehouse=Warehouse(Paths(root=root)),
+        warehouse=wh,
         strategy=BuyAndHold(kind=kind),
-        cost_model=CostModel(),
+        cost_model=cm,
         start=start_date,
         end=end_date,
         initial_cash=cash,
@@ -247,6 +297,7 @@ def backtest(
                 "quantity": f.quantity,
                 "price": f.price,
                 "fees": f.fees,
+                "impact": f.impact,
             }
             for f in result.fills
         ],
@@ -257,9 +308,32 @@ def backtest(
             "quantity": pl.Int64,
             "price": pl.Float64,
             "fees": pl.Float64,
+            "impact": pl.Float64,
         },
     )
     fills_df.write_parquet(run_dir / "fills.parquet")
+
+    from pkmn_quant.research.runs import record_run
+
+    run_id = record_run(
+        root=root,
+        command="backtest",
+        strategy=result.strategy_name,
+        config={
+            "command": "backtest",
+            "start": start,
+            "end": end,
+            "cash": cash,
+            "kind": kind,
+            "warmup_days": 0,
+            "cost_model": cm.as_dict(),
+        },
+        results=result.summary,
+        artifact_path=run_dir,
+        warehouse=wh,
+    )
+    if run_id is not None:
+        typer.echo(f"run recorded: {run_id}")
 
     typer.echo(f"strategy: {result.strategy_name}  ({len(result.fills)} fills)")
     for key, value in result.summary.items():
@@ -283,6 +357,11 @@ def walkforward(
     ),
     objective_metric: str = typer.Option(
         "total_return", help="Metric optuna maximizes in-sample; see VALID_OBJECTIVE_METRICS."
+    ),
+    impact: bool = typer.Option(
+        True,
+        "--impact/--no-impact",
+        help="Walk-the-spread market impact on fills (see Plan 9 spec).",
     ),
     root: Path = typer.Option(Path("."), help="Project root holding the data/ directory."),
 ) -> None:
@@ -319,11 +398,13 @@ def walkforward(
         spec = SearchSpec(space=entry_checked.space, n_trials=trials, seed=seed)
         return optimize_params(spec, evaluate)
 
+    wh = Warehouse(Paths(root=root))
+    cm = CostModel(impact_enabled=impact)
     result = run_walkforward(
-        warehouse=Warehouse(Paths(root=root)),
+        warehouse=wh,
         strategy_factory=entry_checked.factory,
         optimizer=optimizer,
-        cost_model=CostModel(),
+        cost_model=cm,
         start=start_date,
         end=end_date,
         is_days=is_days,
@@ -340,6 +421,33 @@ def walkforward(
     result.stitched_curve.write_parquet(run_dir / "stitched_equity.parquet")
     (run_dir / "report.md").write_text(render_markdown(result, strategy_name=strategy))
     write_walkforward_json(run_dir, result, strategy_name=strategy)
+
+    from pkmn_quant.research.runs import record_run
+
+    run_id = record_run(
+        root=root,
+        command="walkforward",
+        strategy=strategy,
+        config={
+            "command": "walkforward",
+            "strategy": strategy,
+            "start": start,
+            "end": end,
+            "is_days": is_days,
+            "oos_days": oos_days,
+            "trials": trials,
+            "seed": seed,
+            "cash": cash,
+            "warmup_days": warmup_days,
+            "objective_metric": objective_metric,
+            "cost_model": cm.as_dict(),
+        },
+        results=result.summary,
+        artifact_path=run_dir,
+        warehouse=wh,
+    )
+    if run_id is not None:
+        typer.echo(f"run recorded: {run_id}")
 
     typer.echo(f"strategy: {strategy}  folds: {len(result.folds)}")
     for key, value in result.summary.items():
@@ -420,6 +528,11 @@ def daily(
         False, "--skip-ingest", help="Skip fetching new price days (tests/offline)."
     ),
     paper: bool = typer.Option(False, "--paper", help="Use the paper ledger."),
+    impact: bool = typer.Option(
+        True,
+        "--impact/--no-impact",
+        help="Walk-the-spread market impact on paper fills.",
+    ),
     root: Path = typer.Option(Path("."), help="Project root holding the data/ directory."),
 ) -> None:
     """The morning loop: ingest missing days, run signals against the ledger,
@@ -430,6 +543,9 @@ def daily(
     strategy trades fake money through the identical pipeline. Every output surface is
     labeled PAPER.  The output directory is ``daily-{date}-paper`` (real runs use
     ``daily-{date}``), and notifications are tagged "(paper)".
+
+    --impact/--no-impact (default: on) toggles walk-the-spread market impact
+    when pricing paper fills, matching the backtester's CostModel flag.
 
     Known optimism vs the backtester:
     - Fills use the carry-forward warehouse mark on the as_of date, not a
@@ -539,7 +655,9 @@ def daily(
         from pkmn_quant.live.ledger import append_events
         from pkmn_quant.live.paper import plan_paper_fills
 
-        batch = plan_paper_fills(report.recommendations, pf.cash, today, CostModel())
+        batch = plan_paper_fills(
+            report.recommendations, pf.cash, today, CostModel(impact_enabled=impact)
+        )
         if batch:
             try:
                 append_events(lpath, batch, products)

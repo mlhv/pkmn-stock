@@ -2,6 +2,8 @@
 
 from datetime import date
 
+import pytest
+
 from pkmn_quant.engine.costs import CostModel
 from pkmn_quant.live.paper import plan_paper_fills
 from pkmn_quant.live.signals import Recommendation
@@ -82,6 +84,60 @@ def test_event_shape_and_fee_arithmetic() -> None:
         "qty": 2,
         "price": 100.0,
         "fees": 26.5,
+        "impact": 0.0,
     }
     assert buy["fees"] == 1.0
     assert buy["date"] == "2026-07-11"
+
+
+def test_buy_fill_records_impact_and_respects_cash() -> None:
+    costs = CostModel(impact_enabled=True)
+    rec = Recommendation(
+        action="BUY",
+        product_id=1,
+        sub_type="Normal",
+        name="Box",
+        quantity=10,
+        market_price=12.0,
+        notional=120.0,
+        mid=16.0,
+        low=None,
+    )
+    batch = plan_paper_fills([rec], cash=100.0, day=date(2026, 7, 13), costs=costs)
+    # Same arithmetic as the executor golden: fill 7, impact 12.25.
+    assert len(batch) == 1
+    assert batch[0]["qty"] == 7
+    assert batch[0]["impact"] == pytest.approx(12.25)
+
+
+def test_sell_fill_records_impact() -> None:
+    costs = CostModel(impact_enabled=True)
+    rec = Recommendation(
+        action="SELL",
+        product_id=1,
+        sub_type="Normal",
+        name="Box",
+        quantity=8,
+        market_price=25.57,
+        notional=204.56,
+        mid=None,
+        low=21.50,
+    )
+    batch = plan_paper_fills([rec], cash=0.0, day=date(2026, 7, 13), costs=costs)
+    assert batch[0]["impact"] == pytest.approx(16.28)
+
+
+def test_no_quote_zero_impact_matches_old_numbers() -> None:
+    costs = CostModel(impact_enabled=True)
+    rec = Recommendation(
+        action="BUY",
+        product_id=1,
+        sub_type="Normal",
+        name="Box",
+        quantity=8,
+        market_price=12.0,
+        notional=96.0,
+    )
+    batch = plan_paper_fills([rec], cash=100.0, day=date(2026, 7, 13), costs=costs)
+    assert batch[0]["qty"] == 8
+    assert batch[0]["impact"] == pytest.approx(0.0)

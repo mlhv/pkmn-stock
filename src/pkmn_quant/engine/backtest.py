@@ -64,7 +64,13 @@ class Backtest:
 
         for day in market.days:
             # 1. Yesterday's orders fill at today's actually-printed prices.
-            fills.extend(simulator.execute(pending, market.prices_on(day), portfolio, day))
+            #    The day partition is built eagerly (from_warehouse); only this
+            #    lookup for quotes (mid/low for impact) is lazy/order-gated,
+            #    so the hot per-day dict paths stay as Plan 8 tuned them.
+            quotes = market.quotes_on(day, [o.asset for o in pending]) if pending else {}
+            fills.extend(
+                simulator.execute(pending, market.prices_on(day), portfolio, day, quotes=quotes)
+            )
             pending = []
 
             # 2. Strategy sees history <= today and emits orders for tomorrow.

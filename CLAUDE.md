@@ -3,7 +3,7 @@
 Algo-trading research system for Pokemon card prices (TCGplayer data via
 tcgcsv.com). Design spec: `docs/superpowers/specs/2026-06-09-pkmn-quant-design.md`.
 
-## Status (2026-07-11)
+## Status (2026-07-14)
 
 - Plans 1-4 merged to main. Plan 4 closed out the v1 spec: `walkforward.json`
   artifacts, `pkmn signals`, Streamlit dashboard, README.
@@ -45,6 +45,21 @@ tcgcsv.com). Design spec: `docs/superpowers/specs/2026-06-09-pkmn-quant-design.m
   overfitting gap; second-best active strategy, first besides
   sealed-accumulation with positive OOS return; not close to buy-and-hold
   sealed (+151.1%). Full findings in `docs/research-findings-2026-07.md`.
+- Plan 9 complete on feat/impact-and-runs (306 tests): walk-the-spread market
+  impact cost model (`engine/quotes.py`) — buys walk from `market` toward
+  `mid`, sells from `market` toward `low`, scaled by `qty/(2*daily_liquidity_
+  cap)`; ON by default for `pkmn backtest`/`walkforward`/`daily`, engine
+  default off, opt out per-command with `--no-impact`. Experiment registry
+  (`research/runs.py`): every backtest/walkforward appends a record (run_id,
+  config hash, git SHA+dirty, data fingerprint, results) to
+  `data/runs/registry.jsonl`, inspectable via `pkmn runs list`/`pkmn runs
+  show`. Impact-on re-run (2026-07-14) confirms the Plan 9 hypothesis
+  strongly: buy-and-hold sealed barely moves (+186.0% flat-cost → +183.7%
+  impact-on backtest total return; ~39 fills total), while BOTH previously-
+  positive active strategies flip negative OOS (sealed-accumulation +13.6% →
+  −7.4% stitched; ml-ranker +6.0% → −7.5% stitched) — their apparent edge was
+  living inside the friction the impact model now prices in. Full findings in
+  `docs/research-findings-2026-07.md` (Plan 9 section).
 
 ## Commands
 
@@ -62,6 +77,9 @@ uv run --group dashboard streamlit run app/dashboard.py  # results explorer
 uv run pkmn portfolio show                               # real positions + P&L
 uv run pkmn daily --skip-ingest                          # the loop, offline
 uv run pkmn daily --skip-ingest --paper                  # paper mode dry-run
+uv run pkmn runs list                                     # experiment registry: recorded runs
+uv run pkmn runs show <run-id>                             # full record for one run
+uv run pkmn backtest --start ... --end ... --no-impact    # flat-cost, skip market-impact model
 ```
 
 All four gates must pass before every commit. CI runs them with
@@ -74,6 +92,9 @@ uv.lock together).
   DuckDB warehouse (`Warehouse.query()` gives SQL over `prices`/`products`).
 - `src/pkmn_quant/engine/` — event-driven backtester: costs, portfolio, data
   view, execution, strategy ABC, metrics, backtest loop. T+1 fills, long-only.
+  `quotes.py`: per-day `Quote` (mid/low) feeding the walk-the-spread market-
+  impact cost model; engine default off, CLI default on, `--no-impact` opts
+  out.
 - `src/pkmn_quant/strategies/` — Strategy implementations: buy_and_hold,
   sealed_accumulation, dip_buyer, momentum, cost_aware_reversion, ml_ranker
   (HistGradientBoostingRegressor trained in-loop, stateless). All five active
@@ -82,7 +103,10 @@ uv.lock together).
 - `src/pkmn_quant/research/` — walk-forward layer: folds, seeded optuna search,
   runner/stitcher, strategy registry, markdown report, `walkforward.json`
   artifacts (the research → live bridge). `features.py`: 8 leakage-bounded
-  features for ml-ranker (scikit-learn); regression-tested.
+  features for ml-ranker (scikit-learn); regression-tested. `runs.py`:
+  experiment registry — every backtest/walkforward appends a record (run_id,
+  config hash, git SHA+dirty, data fingerprint, results) to
+  `data/runs/registry.jsonl`; `pkmn runs list`/`show` inspect it.
 - `src/pkmn_quant/live/` — `pkmn signals`: one on_bar at the latest warehouse
   date using the last fold's params from the latest walk-forward artifact;
   markdown + JSON reports that carry the strategy's OOS record.
@@ -97,7 +121,8 @@ uv.lock together).
   `uv run --group dashboard pytest tests/test_dashboard.py` (skip without the group).
 - `data/` — gitignored. Contains 874 ingested days (2024-02-08..2026-06-30,
   ~2.9M price rows) plus raw archives. Do not delete; re-ingest is ~40 min.
-  `data/portfolio/` holds the gitignored real and paper ledgers.
+  `data/portfolio/` holds the gitignored real and paper ledgers. `data/runs/`
+  holds the gitignored experiment registry (`registry.jsonl`).
 
 ## Conventions and gotchas
 
@@ -110,7 +135,8 @@ uv.lock together).
 - tcgcsv.com 401s httpx's default User-Agent — always use `tcgcsv.make_client()`.
 - Sharpe/Sortino on this data are inflated by mark smoothing (thin markets,
   carry-forward marks). Caveat them in any report; compare strategies against
-  the buy-and-hold benchmark (+186% for sealed, 2024-03→2026-06), not equities.
+  the buy-and-hold benchmark (+186.0% flat-cost / +183.7% impact-on for
+  sealed, 2024-03→2026-06), not equities.
 - Workflow: feature branch per plan; two-stage review per task; STOP after each
   completed task and explain what/why at intern level; wait for the user's
   explicit green light before the next task.

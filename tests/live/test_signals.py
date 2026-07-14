@@ -89,6 +89,21 @@ def test_generates_buy_recommendation(warehouse: Warehouse, tmp_path: Path) -> N
     assert rec.notional == 100.0
 
 
+def test_recommendations_carry_mid_low_quotes(warehouse: Warehouse, tmp_path: Path) -> None:
+    results_dir = tmp_path / "data" / "results"
+    seed_wf_artifact(results_dir)
+    report = generate_signals(
+        warehouse=warehouse,
+        strategy_name="sealed-accumulation",
+        cash=1000.0,
+        results_dir=results_dir,
+    )
+    [rec] = report.recommendations
+    # tests/helpers.price_row seeds mid=2.0, low=1.0 on every printed row.
+    assert rec.mid == 2.0
+    assert rec.low == 1.0
+
+
 def test_no_artifact_raises_clean_error(warehouse: Warehouse, tmp_path: Path) -> None:
     with pytest.raises(SignalsError, match="pkmn walkforward"):
         generate_signals(

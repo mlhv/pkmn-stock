@@ -9,6 +9,7 @@ from pkmn_quant.data.transforms import PRICE_SCHEMA
 from pkmn_quant.data.warehouse import Warehouse
 from pkmn_quant.engine.data import MarketData
 from pkmn_quant.engine.portfolio import Asset
+from pkmn_quant.engine.quotes import Quote
 from tests.helpers import price_row
 
 D1, D2, D3 = date(2025, 6, 1), date(2025, 6, 2), date(2025, 6, 3)
@@ -160,3 +161,32 @@ def test_marks_cursor_multi_asset_same_day(tmp_path: Path) -> None:
     assert md.marks_on(date(2025, 1, 1)) == {Asset(1, "Normal"): 10.0, Asset(2, "Normal"): 50.0}
     assert md.marks_on(date(2025, 1, 2)) == {Asset(1, "Normal"): 10.0, Asset(2, "Normal"): 50.0}
     assert md.marks_on(date(2025, 1, 3)) == {Asset(1, "Normal"): 12.0, Asset(2, "Normal"): 45.0}
+
+
+# ---------------------------------------------------------------------------
+# Quote tests
+# ---------------------------------------------------------------------------
+
+
+def test_quotes_on_returns_requested_assets_only(market: MarketData) -> None:
+    quotes = market.quotes_on(D1, [A1])
+    assert quotes == {A1: Quote(mid=2.0, low=1.0)}
+
+
+def test_quotes_on_no_print_no_entry(market: MarketData) -> None:
+    # A2 does not trade on D2: no quote — impact must fall back to zero
+    # rather than a stale or invented number.
+    assert market.quotes_on(D2, [A1, A2]) == {A1: Quote(mid=2.0, low=1.0)}
+
+
+def test_quotes_on_empty_assets_is_empty(market: MarketData) -> None:
+    assert market.quotes_on(D1, []) == {}
+
+
+def test_quotes_on_null_mid_gives_none(tmp_path: Path) -> None:
+    w = Warehouse(Paths(root=tmp_path))
+    r = row(D1, 1, 10.0)
+    r["mid"] = None
+    w.write_prices(D1, pl.DataFrame([r], schema=PRICE_SCHEMA))
+    md = MarketData.from_warehouse(w, start=D1, end=D1)
+    assert md.quotes_on(D1, [A1]) == {A1: Quote(mid=None, low=1.0)}
