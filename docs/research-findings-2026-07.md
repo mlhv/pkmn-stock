@@ -310,19 +310,6 @@ more familiar "in-sample optimism, out-of-sample disappointment" shape,
 markedly worse than before because impact now bites every rebalance the
 optimizer chose thinking it was free.
 
-### Known display nit: `pkmn runs list`
-
-`pkmn runs list` prints `-` in the headline-return column for both
-walkforward runs above (e.g. `20260714T051127Z-0bc0fc  walkforward
-ml-ranker  total_return  -  fba77d7`). This is a display bug, not a data
-bug: walkforward results dicts key the headline number as
-`stitched_total_return`, but the CLI's summary column looks up
-`total_return` (the backtest key). The full results dict — including
-`stitched_total_return` — is recorded correctly in
-`data/runs/registry.jsonl`; only the terminal summary column mislabels it.
-Not fixed in this task; noted here and in CLAUDE.md so it doesn't get
-mistaken for missing data.
-
 ### Standing caveats (repeated)
 
 - Sharpe/Sortino/Calmar are inflated by mark smoothing (thin markets,

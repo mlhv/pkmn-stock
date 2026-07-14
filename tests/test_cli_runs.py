@@ -4,7 +4,9 @@ from pathlib import Path
 from typer.testing import CliRunner
 
 from pkmn_quant.cli import app
-from pkmn_quant.research.runs import load_runs, registry_path
+from pkmn_quant.config import Paths
+from pkmn_quant.data.warehouse import Warehouse
+from pkmn_quant.research.runs import load_runs, record_run, registry_path
 from tests.test_cli_backtest import run_cli, seed
 
 
@@ -45,3 +47,23 @@ def test_tracking_failure_does_not_fail_backtest(tmp_path: Path) -> None:
     result = run_cli(tmp_path)
     assert result.exit_code == 0, result.output
     assert "run tracking failed" in result.output
+
+
+def test_runs_list_shows_walkforward_headline(tmp_path: Path) -> None:
+    """Walkforward results key the headline number stitched_total_return,
+    not total_return — runs_list must fall back to it instead of showing '-'."""
+    seed(tmp_path)
+    warehouse = Warehouse(Paths(root=tmp_path))
+    record_run(
+        root=tmp_path,
+        command="walkforward",
+        strategy="ml-ranker",
+        config={},
+        results={"stitched_total_return": 0.06},
+        artifact_path=tmp_path / "data" / "results" / "wf",
+        warehouse=warehouse,
+    )
+
+    listed = CliRunner().invoke(app, ["runs", "list", "--root", str(tmp_path)])
+    assert listed.exit_code == 0, listed.output
+    assert "+0.0600" in listed.output

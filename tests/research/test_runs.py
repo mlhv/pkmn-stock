@@ -1,3 +1,4 @@
+import json
 from datetime import date
 from pathlib import Path
 
@@ -77,3 +78,57 @@ def test_recording_failure_warns_but_never_raises(
 
 def test_load_runs_missing_file_is_empty(tmp_path: Path) -> None:
     assert load_runs(tmp_path) == []
+
+
+def _record_dict(**overrides: object) -> dict[str, object]:
+    base: dict[str, object] = {
+        "run_id": "20250601T000000Z-abcdef",
+        "recorded_at": "2025-06-01T00:00:00+00:00",
+        "command": "backtest",
+        "strategy": "buy-and-hold-sealed",
+        "git_sha": None,
+        "git_dirty": True,
+        "config_hash": "deadbeef",
+        "config": {},
+        "data_fingerprint": {},
+        "results": {"total_return": 0.1},
+        "artifact_path": "data/results/x",
+    }
+    base.update(overrides)
+    return base
+
+
+def test_load_runs_ignores_unknown_extra_key(tmp_path: Path) -> None:
+    path = registry_path(tmp_path)
+    path.parent.mkdir(parents=True)
+    record = _record_dict(future_field="added-in-a-later-version")
+    path.write_text(json.dumps(record) + "\n")
+
+    records = load_runs(tmp_path)
+
+    assert len(records) == 1
+    assert records[0].run_id == "20250601T000000Z-abcdef"
+    assert not hasattr(records[0], "future_field")
+
+
+def test_load_runs_skips_corrupt_line_with_warning(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = registry_path(tmp_path)
+    path.parent.mkdir(parents=True)
+    good = _record_dict(run_id="good-1")
+    missing_key = _record_dict(run_id="bad-missing")
+    del missing_key["results"]
+    lines = [
+        json.dumps(good),
+        "{not valid json",
+        json.dumps(missing_key),
+    ]
+    path.write_text("\n".join(lines) + "\n")
+
+    records = load_runs(tmp_path)
+
+    assert [r.run_id for r in records] == ["good-1"]
+    err = capsys.readouterr().err
+    assert "line 2" in err
+    assert "line 3" in err

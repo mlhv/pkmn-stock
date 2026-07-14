@@ -104,7 +104,8 @@ def test_backtest_golden_numbers(tmp_path: Path) -> None:
       D3: no orders. Equity = 3 + 8*15 = 123.
     """
     seed(tmp_path)
-    run_cli(tmp_path, "--no-impact")
+    result = run_cli(tmp_path, "--no-impact")
+    assert result.exit_code == 0, result.output
     out_dir = tmp_path / "data" / "results"
     run_dir = next(iter(out_dir.iterdir()))
     equity = pl.read_parquet(run_dir / "equity.parquet")["equity"].to_list()

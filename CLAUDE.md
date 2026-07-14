@@ -58,10 +58,7 @@ tcgcsv.com). Design spec: `docs/superpowers/specs/2026-06-09-pkmn-quant-design.m
   impact-on backtest total return; ~39 fills total), while BOTH previously-
   positive active strategies flip negative OOS (sealed-accumulation +13.6% →
   −7.4% stitched; ml-ranker +6.0% → −7.5% stitched) — their apparent edge was
-  living inside the friction the impact model now prices in. Known nit:
-  `pkmn runs list` shows `-` for walkforward headline returns (their results
-  dict keys the number `stitched_total_return`, not `total_return`); data is
-  recorded correctly, only the summary column mislabels it. Full findings in
+  living inside the friction the impact model now prices in. Full findings in
   `docs/research-findings-2026-07.md` (Plan 9 section).
 
 ## Commands

@@ -12,6 +12,7 @@ the RUN registry, named to match the `pkmn runs` CLI.
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
 import secrets
@@ -106,21 +107,40 @@ def record_run(
         path = registry_path(root)
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a") as fh:
-            fh.write(json.dumps(record, sort_keys=True) + "\n")
+            fh.write(json.dumps(record, sort_keys=True, default=str) + "\n")
         return run_id
     except Exception as exc:  # bookkeeping must never kill a research run
         print(f"warning: run tracking failed ({exc}); results are unaffected", file=sys.stderr)
         return None
 
 
+_RUN_RECORD_FIELDS = {f.name for f in dataclasses.fields(RunRecord)}
+
+
 def load_runs(root: Path) -> list[RunRecord]:
-    """Parse the registry, oldest first. Missing file = []."""
+    """Parse the registry, oldest first. Missing file = [].
+
+    The registry is append-only and long-lived: future versions may add
+    fields, and a line written by an older/newer version of this module
+    may be missing or carrying extra keys. Unknown keys are ignored;
+    unparsable or incomplete lines are skipped with a one-line warning on
+    stderr (identifying the line number) rather than failing the whole load.
+    """
     path = registry_path(root)
     if not path.is_file():
         return []
     records: list[RunRecord] = []
-    for line in path.read_text().splitlines():
+    for lineno, line in enumerate(path.read_text().splitlines(), start=1):
         if not line.strip():
             continue
-        records.append(RunRecord(**json.loads(line)))
+        try:
+            raw = json.loads(line)
+            known = {k: v for k, v in raw.items() if k in _RUN_RECORD_FIELDS}
+            records.append(RunRecord(**known))
+        except Exception as exc:
+            print(
+                f"warning: skipping unparsable run record at line {lineno}: {exc}",
+                file=sys.stderr,
+            )
+            continue
     return records

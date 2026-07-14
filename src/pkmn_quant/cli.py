@@ -43,7 +43,7 @@ def runs_list(
         return
     for r in reversed(records):
         sha = (r.git_sha or "no-git")[:7] + ("*" if r.git_dirty else "")
-        ret = r.results.get("total_return")
+        ret = r.results.get("total_return", r.results.get("stitched_total_return"))
         ret_s = f"{ret:+.4f}" if ret is not None else "   -   "
         typer.echo(f"{r.run_id}  {r.command:<11}  {r.strategy:<24}  total_return {ret_s}  {sha}")
 
@@ -543,6 +543,9 @@ def daily(
     strategy trades fake money through the identical pipeline. Every output surface is
     labeled PAPER.  The output directory is ``daily-{date}-paper`` (real runs use
     ``daily-{date}``), and notifications are tagged "(paper)".
+
+    --impact/--no-impact (default: on) toggles walk-the-spread market impact
+    when pricing paper fills, matching the backtester's CostModel flag.
 
     Known optimism vs the backtester:
     - Fills use the carry-forward warehouse mark on the as_of date, not a

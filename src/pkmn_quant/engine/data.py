@@ -52,9 +52,10 @@ class MarketData:
     # carry-forward state as of watermark. Monotone queries (the event loop)
     # advance in O(new change-points); an earlier query resets and replays.
     _cursor: _Cursor
-    # date -> (date, product_id, sub_type, mid, low) frame; resolved lazily
-    # by quotes_on for ordered assets only, so the hot prices_on/marks_on
-    # paths (Plan 8 perf) never pay for it.
+    # date -> (date, product_id, sub_type, mid, low) frame; built eagerly in
+    # from_warehouse (~0.08s, measured and accepted). quotes_on's per-day/
+    # per-asset lookup is what's lazy/order-gated — the hot prices_on/marks_on
+    # paths (Plan 8 perf) never pay for that lookup unless there are orders.
     _quotes_by_day: dict[date, pl.DataFrame] = field(default_factory=dict)
 
     @property
@@ -163,6 +164,8 @@ class MarketData:
                     mid=float(mid) if mid is not None else None,
                     low=float(low) if low is not None else None,
                 )
+                if len(out) == len(wanted):
+                    break
         return out
 
     def marks_on(self, day: date) -> dict[Asset, float]:
