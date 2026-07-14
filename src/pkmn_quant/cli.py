@@ -435,6 +435,11 @@ def daily(
         False, "--skip-ingest", help="Skip fetching new price days (tests/offline)."
     ),
     paper: bool = typer.Option(False, "--paper", help="Use the paper ledger."),
+    impact: bool = typer.Option(
+        True,
+        "--impact/--no-impact",
+        help="Walk-the-spread market impact on paper fills.",
+    ),
     root: Path = typer.Option(Path("."), help="Project root holding the data/ directory."),
 ) -> None:
     """The morning loop: ingest missing days, run signals against the ledger,
@@ -554,7 +559,9 @@ def daily(
         from pkmn_quant.live.ledger import append_events
         from pkmn_quant.live.paper import plan_paper_fills
 
-        batch = plan_paper_fills(report.recommendations, pf.cash, today, CostModel())
+        batch = plan_paper_fills(
+            report.recommendations, pf.cash, today, CostModel(impact_enabled=impact)
+        )
         if batch:
             try:
                 append_events(lpath, batch, products)

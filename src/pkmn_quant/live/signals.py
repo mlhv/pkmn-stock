@@ -55,6 +55,10 @@ class Recommendation:
     notional: float
     avg_cost: float | None = None  # SELLs in portfolio mode
     gain_pct: float | None = None
+    # As-printed quotes on the as-of day (None when the asset did not print
+    # that day) — the paper planner's impact inputs.
+    mid: float | None = None
+    low: float | None = None
 
 
 @dataclass(frozen=True)
@@ -144,6 +148,7 @@ def generate_signals(
         marks=market.marks_on(latest),
     )
     orders = strategy.on_bar(ctx)
+    quotes = market.quotes_on(latest, [o.asset for o in orders]) if orders else {}
 
     names = {
         int(r["product_id"]): str(r["name"])
@@ -158,6 +163,7 @@ def generate_signals(
         qty = abs(order.quantity)
         held = portfolio.positions.get(order.asset) if portfolio is not None else None
         avg_cost = held.avg_cost if held is not None and order.quantity < 0 else None
+        quote = quotes.get(order.asset)
         recommendations.append(
             Recommendation(
                 action="BUY" if order.quantity > 0 else "SELL",
@@ -171,6 +177,8 @@ def generate_signals(
                 # avg_cost==0.0 is falsy so the guard also blocks division-by-zero;
                 # the ledger validates price > 0, so 0.0 is unreachable via real data.
                 gain_pct=(mark / avg_cost - 1.0) if avg_cost else None,
+                mid=quote.mid if quote is not None else None,
+                low=quote.low if quote is not None else None,
             )
         )
 
