@@ -32,6 +32,8 @@ if(PKMN_BUILD_TESTS)
   FetchContent_MakeAvailable(catch2)
   add_executable(engine_tests
     tests/test_version.cpp
+    tests/test_insertion_map.cpp
+    tests/test_costs.cpp
   )
   target_link_libraries(engine_tests PRIVATE pkmn_engine_core Catch2::Catch2WithMain)
   include(CTest)
