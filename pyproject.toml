@@ -6,6 +6,7 @@ requires-python = ">=3.12"
 dependencies = [
     "duckdb>=1.1",
     "httpx>=0.27",
+    "numpy>=1.26",
     "optuna>=4.0",
     "polars>=1.10",
     "py7zr>=1.1.0",
@@ -29,11 +30,16 @@ dev = [
 ]
 
 [build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+requires = ["scikit-build-core>=0.10", "nanobind>=2.2"]
+build-backend = "scikit_build_core.build"
 
-[tool.hatch.build.targets.wheel]
-packages = ["src/pkmn_quant"]
+[tool.scikit-build]
+minimum-version = "0.10"
+cmake.version = ">=3.26"
+cmake.build-type = "Release"
+cmake.source-dir = "cpp"
+wheel.packages = ["src/pkmn_quant"]
+build-dir = "build/{wheel_tag}"
 
 [tool.ruff]
 line-length = 100
