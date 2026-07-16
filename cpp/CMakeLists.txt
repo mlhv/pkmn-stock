@@ -10,6 +10,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 add_library(pkmn_engine_core STATIC
   src/pkmn_engine/version.cpp
   src/pkmn_engine/portfolio.cpp
+  src/pkmn_engine/market.cpp
 )
 target_include_directories(pkmn_engine_core PUBLIC src)
 target_compile_options(pkmn_engine_core PUBLIC -ffp-contract=off)
@@ -36,6 +37,7 @@ if(PKMN_BUILD_TESTS)
     tests/test_insertion_map.cpp
     tests/test_costs.cpp
     tests/test_portfolio.cpp
+    tests/test_market.cpp
   )
   target_link_libraries(engine_tests PRIVATE pkmn_engine_core Catch2::Catch2WithMain)
   include(CTest)
