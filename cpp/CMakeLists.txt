@@ -11,6 +11,9 @@ add_library(pkmn_engine_core STATIC
   src/pkmn_engine/version.cpp
   src/pkmn_engine/portfolio.cpp
   src/pkmn_engine/market.cpp
+  src/pkmn_engine/execution.cpp
+  src/pkmn_engine/backtest.cpp
+  src/pkmn_engine/strategies/buy_and_hold.cpp
 )
 target_include_directories(pkmn_engine_core PUBLIC src)
 target_compile_options(pkmn_engine_core PUBLIC -ffp-contract=off)
@@ -38,6 +41,7 @@ if(PKMN_BUILD_TESTS)
     tests/test_costs.cpp
     tests/test_portfolio.cpp
     tests/test_market.cpp
+    tests/test_backtest_golden.cpp
   )
   target_link_libraries(engine_tests PRIVATE pkmn_engine_core Catch2::Catch2WithMain)
   include(CTest)
