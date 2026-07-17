@@ -192,3 +192,96 @@ def test_unknown_strategy_raises_value_error(tmp_path: Path) -> None:
             end=START + timedelta(days=2),
             initial_cash=100.0,
         ).run()
+
+
+@pytest.mark.parametrize("impact", [False, True])
+def test_sealed_accumulation_parity(tmp_path: Path, impact: bool) -> None:
+    from pkmn_quant.strategies.sealed_accumulation import SealedAccumulation
+
+    seed_rich(tmp_path)
+    wh = Warehouse(Paths(root=tmp_path))
+    cm = CostModel(impact_enabled=impact)
+    end = START + timedelta(days=39)
+    params = {
+        "min_age_days": 30,
+        "max_age_days": 400,
+        "min_drawdown": 0.15,
+        "take_profit": 1.1,
+        "max_positions": 5,
+        "budget_frac": 0.4,
+    }
+    py = Backtest(
+        warehouse=wh,
+        strategy=SealedAccumulation(
+            min_age_days=30,
+            max_age_days=400,
+            min_drawdown=0.15,
+            take_profit=1.1,
+            max_positions=5,
+            budget_frac=0.4,
+        ),
+        cost_model=cm,
+        start=START,
+        end=end,
+        initial_cash=1000.0,
+    ).run()
+    cpp = NativeBacktest(
+        warehouse=wh,
+        strategy=NativeStrategySpec(
+            "sealed-accumulation", {k: float(v) for k, v in params.items()}
+        ),
+        cost_model=cm,
+        start=START,
+        end=end,
+        initial_cash=1000.0,
+    ).run()
+    assert len(py.fills) > 0
+    assert_results_equal(py, cpp)
+
+
+@pytest.mark.parametrize("impact", [False, True])
+def test_dip_buyer_parity(tmp_path: Path, impact: bool) -> None:
+    from pkmn_quant.strategies.dip_buyer import DipBuyer
+
+    seed_rich(tmp_path)
+    wh = Warehouse(Paths(root=tmp_path))
+    cm = CostModel(impact_enabled=impact)
+    end = START + timedelta(days=39)
+    py = Backtest(
+        warehouse=wh,
+        strategy=DipBuyer(
+            dip_window_days=5,
+            dip_threshold=0.10,
+            hold_days=7,
+            take_profit=1.05,
+            max_positions=5,
+            budget_frac=0.4,
+            min_price=3.0,
+        ),
+        cost_model=cm,
+        start=START,
+        end=end,
+        initial_cash=1000.0,
+    ).run()
+    cpp = NativeBacktest(
+        warehouse=wh,
+        strategy=NativeStrategySpec(
+            "dip-buyer",
+            {
+                "dip_window_days": 5.0,
+                "dip_threshold": 0.10,
+                "hold_days": 7.0,
+                "take_profit": 1.05,
+                "max_positions": 5.0,
+                "budget_frac": 0.4,
+                "min_price": 3.0,
+            },
+        ),
+        cost_model=cm,
+        start=START,
+        end=end,
+        initial_cash=1000.0,
+    ).run()
+    assert len(py.fills) > 2  # entries AND exits must occur
+    assert any(f.quantity < 0 for f in py.fills)
+    assert_results_equal(py, cpp)

@@ -30,7 +30,9 @@ _KIND_CODES = {"sealed": 0, "single": 1}
 
 # Rule strategies with a native C++ port (factory.cpp). Anything else runs
 # on the C++ engine via the callback bridge. Tasks 7-8 extend this set.
-NATIVE_STRATEGY_NAMES: frozenset[str] = frozenset({"buy-and-hold"})
+NATIVE_STRATEGY_NAMES: frozenset[str] = frozenset(
+    {"buy-and-hold", "sealed-accumulation", "dip-buyer"}
+)
 
 
 def _to_day(d: date) -> int:
