@@ -43,6 +43,27 @@ def _from_day(i: int) -> date:
     return _EPOCH + timedelta(days=int(i))
 
 
+def _kind_code(kind: str | None) -> int:
+    """-1 ("other") for both an unrecognized kind string and None.
+
+    None means a priced asset has no row at all in products.parquet -- a
+    real condition in the warehouse (upstream tcgcsv catalog drift, not
+    stale local data; see docs/research-findings-2026-07.md Plan 10). The
+    Python engine never requires a catalog row: strategies build their
+    universe by filtering/joining against ctx.products, so an uncataloged
+    asset is simply absent from that join. Kind "other" reproduces that
+    exactly here: it fails the `kind == 0`/`kind == 1` checks in the four
+    kind-filtered strategies (buy-and-hold, sealed-accumulation, dip-buyer,
+    xs-momentum) but cost-aware-reversion has no kind filter at all
+    (cost_aware_reversion.py:76-97 scans every asset), so it stays a
+    tradeable candidate there -- dropping the asset instead of tagging it
+    "other" would silently break that parity.
+    """
+    if kind is None:
+        return -1
+    return _KIND_CODES.get(kind, -1)
+
+
 @dataclass(frozen=True)
 class NativeStrategySpec:
     """A strategy the C++ factory can build: registry name + params."""
@@ -103,18 +124,23 @@ class NativeBacktest:
         ev_asset = np.array([asset_index[a] for _, a, _ in events], dtype=np.int32)
         ev_price = np.array([p for _, _, p in events], dtype=np.float64)
 
-        prod_info = {
+        prod_info: dict[int, tuple[str, date | None]] = {
             int(r["product_id"]): (str(r["kind"]), r["released_on"])
             for r in products.iter_rows(named=True)
         }
+        # .get(..., (None, None)): a priced asset absent from products.parquet
+        # is not an error (see _kind_code docstring) -- it gets kind "other"
+        # and no release date, same as the Python engine's implicit handling.
         prod_id = np.array([a.product_id for a in asset_list], dtype=np.int64)
         prod_kind = np.array(
-            [_KIND_CODES.get(prod_info[a.product_id][0], -1) for a in asset_list],
+            [_kind_code(prod_info.get(a.product_id, (None, None))[0]) for a in asset_list],
             dtype=np.int8,
         )
         prod_released = np.array(
             [
-                _to_day(rel) if (rel := prod_info[a.product_id][1]) is not None else _NULL_DAY
+                _to_day(rel)
+                if (rel := prod_info.get(a.product_id, (None, None))[1]) is not None
+                else _NULL_DAY
                 for a in asset_list
             ],
             dtype=np.int32,

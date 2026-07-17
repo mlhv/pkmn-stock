@@ -88,6 +88,52 @@ def seed_rich(root: Path, n_days: int = 40) -> None:
     w.write_products(PRODUCTS)
 
 
+# A priced asset with NO row in the products catalog (Plan 10 finding: the
+# real warehouse has exactly this for 1,845 of 6,493 priced product_ids --
+# upstream tcgcsv catalog drift, not stale local data). NativeBacktest.run()
+# used to do an unconditional prod_info[product_id] lookup and crash with
+# KeyError the instant it saw one; it now tags such assets kind "other" (-1),
+# matching the Python engine's implicit behavior (an uncataloged asset never
+# joins into any products-filtered universe, so it's simply invisible there,
+# but cost-aware-reversion has no kind filter at all and still trades it).
+UNCATALOGED_PID = 99
+UNCATALOGED_BASE = 50.0
+
+
+def seed_rich_with_uncataloged(root: Path, n_days: int = 40) -> None:
+    """seed_rich() plus one extra priced-but-uncataloged asset.
+
+    Same deep-dip/recover price shape as the cataloged assets (via _path),
+    so it exercises cost-aware-reversion's entry logic the same way; never
+    written to products.parquet.
+    """
+    seed_rich(root, n_days)
+    w = Warehouse(Paths(root=root))
+    for i in range(n_days):
+        day = START + timedelta(days=i)
+        if i % 9 == 4:  # matches seed_rich's market-wide gap day
+            continue
+        existing = w.load_day(day)
+        market = round(UNCATALOGED_BASE * _path(i + UNCATALOGED_PID), 2)
+        extra = pl.DataFrame(
+            [
+                {
+                    "date": day,
+                    "product_id": UNCATALOGED_PID,
+                    "sub_type": "Normal",
+                    "low": round(market * 0.9, 2),
+                    "mid": round(market * 1.15, 2),
+                    "high": round(market * 3.0, 2),
+                    "market": market,
+                }
+            ],
+            schema=PRICE_SCHEMA,
+        )
+        w.write_prices(day, pl.concat([existing, extra]))
+    # PRODUCTS deliberately excludes UNCATALOGED_PID; already written by
+    # seed_rich(), not rewritten here.
+
+
 def assert_results_equal(py: Result, cpp: Result) -> None:
     assert py.equity_curve["date"].to_list() == cpp.equity_curve["date"].to_list()
     assert py.equity_curve["equity"].to_list() == cpp.equity_curve["equity"].to_list()
@@ -518,3 +564,93 @@ def test_bridge_ml_ranker_parity(tmp_path: Path) -> None:
         warmup_days=20,
     ).run()
     assert_results_equal(py, cpp)
+
+
+def test_buy_and_hold_parity_with_uncataloged_asset(tmp_path: Path) -> None:
+    """Regression for the Plan 10 real-data finding: a priced asset absent
+    from products.parquet must not crash the C++ bridge. BuyAndHold's kind
+    filter excludes the uncataloged asset in Python (no catalog row -> it
+    never joins into the sealed universe); this proves the C++ side
+    reproduces "excluded, not crashed" bit-for-bit.
+    """
+    seed_rich_with_uncataloged(tmp_path)
+    wh = Warehouse(Paths(root=tmp_path))
+    cm = CostModel(impact_enabled=True)
+    end = START + timedelta(days=39)
+    py = Backtest(
+        warehouse=wh,
+        strategy=BuyAndHold(kind="sealed"),
+        cost_model=cm,
+        start=START,
+        end=end,
+        initial_cash=1000.0,
+    ).run()
+    cpp = NativeBacktest(
+        warehouse=wh,
+        strategy=NativeStrategySpec("buy-and-hold", {}, kind="sealed"),
+        cost_model=cm,
+        start=START,
+        end=end,
+        initial_cash=1000.0,
+    ).run()
+    assert len(py.fills) > 0  # the test must not pass vacuously
+    assert_results_equal(py, cpp)
+    assert not any(f.asset.product_id == UNCATALOGED_PID for f in py.fills)
+    assert not any(f.asset.product_id == UNCATALOGED_PID for f in cpp.fills)
+
+
+def test_cost_aware_reversion_parity_with_uncataloged_asset(tmp_path: Path) -> None:
+    """cost-aware-reversion has no kind filter at all (cost_aware_reversion.py
+    scans every asset in ctx.history, no `if kind ==` guard) -- unlike
+    buy-and-hold above, the uncataloged asset IS a tradeable candidate here.
+    Confirms native.py's kind "other" (-1) tagging keeps it IN the universe
+    (not silently dropped, which would be a quieter but worse divergence
+    than the KeyError it replaced) and that both engines fill it identically.
+    """
+    from pkmn_quant.strategies.cost_aware_reversion import CostAwareReversion
+
+    seed_rich_with_uncataloged(tmp_path)
+    wh = Warehouse(Paths(root=tmp_path))
+    cm = CostModel(impact_enabled=True)
+    end = START + timedelta(days=39)
+    py = Backtest(
+        warehouse=wh,
+        strategy=CostAwareReversion(
+            dip_window_days=10,
+            dip_threshold=0.15,
+            min_edge=0.02,
+            take_profit=1.05,
+            max_hold_days=20,
+            max_positions=5,
+            budget_frac=0.4,
+            min_price=3.0,
+        ),
+        cost_model=cm,
+        start=START,
+        end=end,
+        initial_cash=1000.0,
+    ).run()
+    cpp = NativeBacktest(
+        warehouse=wh,
+        strategy=NativeStrategySpec(
+            "cost-aware-reversion",
+            {
+                "dip_window_days": 10.0,
+                "dip_threshold": 0.15,
+                "min_edge": 0.02,
+                "take_profit": 1.05,
+                "max_hold_days": 20.0,
+                "max_positions": 5.0,
+                "budget_frac": 0.4,
+                "min_price": 3.0,
+            },
+        ),
+        cost_model=cm,
+        start=START,
+        end=end,
+        initial_cash=1000.0,
+    ).run()
+    assert len(py.fills) > 0
+    assert_results_equal(py, cpp)
+    assert any(f.asset.product_id == UNCATALOGED_PID for f in py.fills)
+    assert any(f.asset.product_id == UNCATALOGED_PID for f in cpp.fills)
