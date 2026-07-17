@@ -96,7 +96,7 @@ class CostAwareReversion(Strategy):
                 continue
             candidates.append((-dip, asset, mark))  # deepest dip first
 
-        candidates.sort(key=lambda c: (c[0], c[1].product_id))
+        candidates.sort(key=lambda c: (c[0], c[1].product_id, c[1].sub_type))
         budget = ctx.cash * self.budget_frac
         affordable = [
             (asset, qty) for _, asset, mark in candidates if (qty := math.floor(budget / mark)) > 0

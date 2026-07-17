@@ -4,7 +4,9 @@
 #include <stdexcept>
 
 #include "pkmn_engine/strategies/buy_and_hold.hpp"
+#include "pkmn_engine/strategies/cost_aware_reversion.hpp"
 #include "pkmn_engine/strategies/dip_buyer.hpp"
+#include "pkmn_engine/strategies/momentum.hpp"
 #include "pkmn_engine/strategies/sealed_accumulation.hpp"
 
 namespace pkmn {
@@ -35,6 +37,19 @@ std::unique_ptr<Strategy> make_strategy(const std::string& name, const ParamMap&
             iparam(params, "hold_days", 30), param(params, "take_profit", 1.25),
             iparam(params, "max_positions", 10), param(params, "budget_frac", 0.10),
             param(params, "min_price", 3.0));
+    }
+    if (name == "xs-momentum") {
+        return std::make_unique<CrossSectionalMomentum>(
+            iparam(params, "lookback_days", 60), iparam(params, "top_n", 10),
+            iparam(params, "rebalance_days", 30), param(params, "min_price", 3.0));
+    }
+    if (name == "cost-aware-reversion") {
+        return std::make_unique<CostAwareReversion>(
+            iparam(params, "dip_window_days", 30), param(params, "dip_threshold", 0.25),
+            param(params, "min_edge", 0.05), param(params, "take_profit", 1.25),
+            iparam(params, "max_hold_days", 120), iparam(params, "max_positions", 10),
+            param(params, "budget_frac", 0.10), param(params, "min_price", 3.0),
+            0.1275, 1.0);  // hurdle costs: CostModel() defaults, like the registry
     }
     throw std::invalid_argument("unknown native strategy: " + name);
 }

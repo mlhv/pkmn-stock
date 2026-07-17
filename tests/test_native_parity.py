@@ -285,3 +285,83 @@ def test_dip_buyer_parity(tmp_path: Path, impact: bool) -> None:
     assert len(py.fills) > 2  # entries AND exits must occur
     assert any(f.quantity < 0 for f in py.fills)
     assert_results_equal(py, cpp)
+
+
+@pytest.mark.parametrize("impact", [False, True])
+def test_momentum_parity(tmp_path: Path, impact: bool) -> None:
+    from pkmn_quant.strategies.momentum import CrossSectionalMomentum
+
+    seed_rich(tmp_path)
+    wh = Warehouse(Paths(root=tmp_path))
+    cm = CostModel(impact_enabled=impact)
+    end = START + timedelta(days=39)
+    py = Backtest(
+        warehouse=wh,
+        strategy=CrossSectionalMomentum(lookback_days=10, top_n=3, rebalance_days=5, min_price=3.0),
+        cost_model=cm,
+        start=START,
+        end=end,
+        initial_cash=1000.0,
+    ).run()
+    cpp = NativeBacktest(
+        warehouse=wh,
+        strategy=NativeStrategySpec(
+            "xs-momentum",
+            {"lookback_days": 10.0, "top_n": 3.0, "rebalance_days": 5.0, "min_price": 3.0},
+        ),
+        cost_model=cm,
+        start=START,
+        end=end,
+        initial_cash=1000.0,
+    ).run()
+    assert len(py.fills) > 2
+    assert_results_equal(py, cpp)
+
+
+@pytest.mark.parametrize("impact", [False, True])
+def test_cost_aware_reversion_parity(tmp_path: Path, impact: bool) -> None:
+    from pkmn_quant.strategies.cost_aware_reversion import CostAwareReversion
+
+    seed_rich(tmp_path)
+    wh = Warehouse(Paths(root=tmp_path))
+    cm = CostModel(impact_enabled=impact)
+    end = START + timedelta(days=39)
+    py = Backtest(
+        warehouse=wh,
+        strategy=CostAwareReversion(
+            dip_window_days=10,
+            dip_threshold=0.15,
+            min_edge=0.02,
+            take_profit=1.05,
+            max_hold_days=20,
+            max_positions=5,
+            budget_frac=0.4,
+            min_price=3.0,
+        ),
+        cost_model=cm,
+        start=START,
+        end=end,
+        initial_cash=1000.0,
+    ).run()
+    cpp = NativeBacktest(
+        warehouse=wh,
+        strategy=NativeStrategySpec(
+            "cost-aware-reversion",
+            {
+                "dip_window_days": 10.0,
+                "dip_threshold": 0.15,
+                "min_edge": 0.02,
+                "take_profit": 1.05,
+                "max_hold_days": 20.0,
+                "max_positions": 5.0,
+                "budget_frac": 0.4,
+                "min_price": 3.0,
+            },
+        ),
+        cost_model=cm,
+        start=START,
+        end=end,
+        initial_cash=1000.0,
+    ).run()
+    assert len(py.fills) > 0
+    assert_results_equal(py, cpp)

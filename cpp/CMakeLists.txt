@@ -16,6 +16,8 @@ add_library(pkmn_engine_core STATIC
   src/pkmn_engine/strategies/buy_and_hold.cpp
   src/pkmn_engine/strategies/sealed_accumulation.cpp
   src/pkmn_engine/strategies/dip_buyer.cpp
+  src/pkmn_engine/strategies/momentum.cpp
+  src/pkmn_engine/strategies/cost_aware_reversion.cpp
   src/pkmn_engine/strategies/factory.cpp
 )
 target_include_directories(pkmn_engine_core PUBLIC src)

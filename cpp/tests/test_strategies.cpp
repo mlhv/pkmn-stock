@@ -2,6 +2,7 @@
 
 #include "pkmn_engine/backtest.hpp"
 #include "pkmn_engine/strategies/dip_buyer.hpp"
+#include "pkmn_engine/strategies/momentum.hpp"
 #include "pkmn_engine/strategies/sealed_accumulation.hpp"
 
 using namespace pkmn;
@@ -51,4 +52,29 @@ TEST_CASE("sealed accumulation: age gate excludes too-new and too-old product") 
     auto res = run_backtest(mkt, prods, strat, cm, 1000.0);
     REQUIRE(!res.fills.empty());
     for (const auto& f : res.fills) CHECK(f.asset == 0);
+}
+
+TEST_CASE("momentum: flat portfolio rebalances immediately, holds winners") {
+    // two singles: asset 0 rising, asset 1 falling; top_n=1 must pick 0.
+    std::vector<Day> days;
+    std::vector<PriceRow> rows;
+    std::vector<MarkEvent> events;
+    for (Day d = 100; d <= 110; ++d) {
+        double up = 10.0 + static_cast<double>(d - 100);
+        double down = 20.0 - static_cast<double>(d - 100);
+        days.push_back(d);
+        rows.push_back({d, 0, up, up * 1.2, up * 0.9});
+        rows.push_back({d, 1, down, down * 1.2, down * 0.9});
+        events.push_back({d, 0, up});
+        events.push_back({d, 1, down});
+    }
+    MarketView mkt(2, days, rows, events);
+    ProductTable prods{{3, 4}, {1, 1}, {100, 100}};
+    CostModel cm;
+    CrossSectionalMomentum strat(5, 1, 3, 3.0);
+    auto res = run_backtest(mkt, prods, strat, cm, 100.0);
+    REQUIRE(!res.fills.empty());
+    for (const auto& f : res.fills) {
+        if (f.quantity > 0) CHECK(f.asset == 0);  // only the winner is bought
+    }
 }

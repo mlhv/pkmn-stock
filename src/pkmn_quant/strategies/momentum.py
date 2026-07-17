@@ -88,7 +88,7 @@ class CrossSectionalMomentum(Strategy):
                 continue
             momentum.append((mark / past_price - 1.0, asset, mark))
 
-        momentum.sort(key=lambda m: (-m[0], m[1].product_id))
+        momentum.sort(key=lambda m: (-m[0], m[1].product_id, m[1].sub_type))
         target = {asset: mark for _, asset, mark in momentum[: self.top_n]}
 
         orders: list[Order] = []

@@ -29,9 +29,9 @@ _NULL_DAY = -(2**31)
 _KIND_CODES = {"sealed": 0, "single": 1}
 
 # Rule strategies with a native C++ port (factory.cpp). Anything else runs
-# on the C++ engine via the callback bridge. Tasks 7-8 extend this set.
+# on the C++ engine via the callback bridge.
 NATIVE_STRATEGY_NAMES: frozenset[str] = frozenset(
-    {"buy-and-hold", "sealed-accumulation", "dip-buyer"}
+    {"buy-and-hold", "sealed-accumulation", "dip-buyer", "xs-momentum", "cost-aware-reversion"}
 )
 
 
