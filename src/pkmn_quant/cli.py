@@ -408,6 +408,8 @@ def walkforward(
             f"unknown objective metric {objective_metric!r};"
             f" choose from {sorted(VALID_OBJECTIVE_METRICS)}"
         )
+    if engine not in ("python", "cpp"):
+        raise typer.BadParameter(f"unknown engine {engine!r}; choose python or cpp")
     try:
         start_date = dt.date.fromisoformat(start)
         end_date = dt.date.fromisoformat(end)
