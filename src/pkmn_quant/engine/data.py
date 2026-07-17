@@ -186,3 +186,13 @@ class MarketData:
     def history_until(self, day: date) -> pl.DataFrame:
         """All price rows with date <= day. The engine's anti-look-ahead wall."""
         return self.frame.filter(pl.col("date") <= day)
+
+    def mark_events(self) -> list[tuple[date, Asset, float]]:
+        """Change-point rows feeding marks_on, in exact replay order.
+
+        Public for the native-engine adapter: replaying these through the
+        C++ marks cursor reproduces marks_on including dict insertion order
+        (which buy-and-hold's stable sort observes), without re-deriving
+        polars' row order in a second language.
+        """
+        return list(self._marks_rows)

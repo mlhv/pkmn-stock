@@ -14,6 +14,7 @@ add_library(pkmn_engine_core STATIC
   src/pkmn_engine/execution.cpp
   src/pkmn_engine/backtest.cpp
   src/pkmn_engine/strategies/buy_and_hold.cpp
+  src/pkmn_engine/strategies/factory.cpp
 )
 target_include_directories(pkmn_engine_core PUBLIC src)
 target_compile_options(pkmn_engine_core PUBLIC -ffp-contract=off)

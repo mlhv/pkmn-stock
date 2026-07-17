@@ -1,5 +1,6 @@
 #include "pkmn_engine/portfolio.hpp"
 
+#include <cmath>
 #include <stdexcept>
 #include <string>
 
@@ -52,13 +53,29 @@ void Portfolio::sell_(const Fill& f) {
 }
 
 double Portfolio::equity(const InsertionMap<double>& marks) const {
-    // portfolio.py:100-108: sum() starts at 0 and adds in dict order.
+    // portfolio.py:100-108: sum() over a generator of floats, in dict
+    // (insertion) order. CPython >= 3.12's builtin sum() does not add
+    // left-to-right for floats: it uses Neumaier (improved Kahan-Babuska)
+    // compensated summation, which is more accurate than naive accumulation
+    // and NOT bit-identical to it for >= 3 terms. Naive `value += ...` here
+    // diverges from Python by 1 ULP on real holdings (caught by
+    // test_native_parity.py::test_buy_and_hold_parity_single_universe, a
+    // 5-asset sum) — replicate CPython's exact algorithm instead.
     double value = 0.0;
+    double c = 0.0;  // running compensation for lost low-order bits
     for (const auto& e : positions.entries()) {
         const double* m = marks.find(e.key);
         if (m == nullptr) throw std::out_of_range("no mark for held asset");
-        value += static_cast<double>(e.value.quantity) * *m;
+        double x = static_cast<double>(e.value.quantity) * *m;
+        double t = value + x;
+        if (std::fabs(value) >= std::fabs(x)) {
+            c += (value - t) + x;
+        } else {
+            c += (x - t) + value;
+        }
+        value = t;
     }
+    value += c;
     return cash + value;
 }
 
