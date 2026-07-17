@@ -3,7 +3,7 @@
 Algo-trading research system for Pokemon card prices (TCGplayer data via
 tcgcsv.com). Design spec: `docs/superpowers/specs/2026-06-09-pkmn-quant-design.md`.
 
-## Status (2026-07-14)
+## Status (2026-07-17)
 
 - Plans 1-4 merged to main. Plan 4 closed out the v1 spec: `walkforward.json`
   artifacts, `pkmn signals`, Streamlit dashboard, README.
@@ -60,6 +60,31 @@ tcgcsv.com). Design spec: `docs/superpowers/specs/2026-06-09-pkmn-quant-design.m
   −7.4% stitched; ml-ranker +6.0% → −7.5% stitched) — their apparent edge was
   living inside the friction the impact model now prices in. Full findings in
   `docs/research-findings-2026-07.md` (Plan 9 section).
+- Plan 10 complete on feat/cpp-engine (328 tests + 3 dashboard tests + 23
+  Catch2 tests): a native C++ engine (`cpp/`, nanobind-bound as
+  `pkmn_quant._engine`) with ports of all five strategies, selectable via
+  `--engine cpp` on `pkmn backtest`/`walkforward`; anything else (a raw
+  Python `Strategy`, e.g. ml-ranker) still runs correctly on the C++ event
+  loop through a per-bar callback bridge. Full-data acceptance
+  (`scripts/parity_full.py`, real 874-day warehouse, 2024-03-01..2026-06-30):
+  all five native strategies plus the ml-ranker bridge PASS bit-for-bit
+  (exact equity curve and exact per-fill day/asset/quantity/price/fees/
+  impact). Measured speedup (`scripts/bench_engines.py`, best of 3, full
+  range, impact on; total wall-clock including the one-time polars
+  load/flatten, not engine-loop-only): buy-and-hold 2.4x, sealed-accumulation
+  3.4x, dip-buyer 7.6x. The first full-data run found a real bug the
+  synthetic fixtures never exercised: 1,845 of 6,493 priced product_ids
+  (28%) have no `products.parquet` row (upstream tcgcsv catalog drift, not
+  stale local data) — `NativeBacktest.run()` crashed on it (`KeyError`)
+  where the Python engine silently excludes uncataloged assets from
+  kind-filtered strategies; fixed by tagging missing catalog rows kind
+  "other" (commit `091b663`), which also correctly keeps them tradeable for
+  cost-aware-reversion (no kind filter), with a differential regression test
+  proving both engines agree on inclusion/exclusion bit-for-bit. Research
+  conclusions are unchanged by construction (parity is bit-for-bit); what
+  changed is the cost of producing them and that the C++ loop no longer
+  holds the GIL, which Plan 11 (parallel walk-forward search) depends on.
+  Full findings in `docs/research-findings-2026-07.md` (Plan 10 section).
 
 ## Commands
 
@@ -80,6 +105,10 @@ uv run pkmn daily --skip-ingest --paper                  # paper mode dry-run
 uv run pkmn runs list                                     # experiment registry: recorded runs
 uv run pkmn runs show <run-id>                             # full record for one run
 uv run pkmn backtest --start ... --end ... --no-impact    # flat-cost, skip market-impact model
+uv run pkmn backtest --start ... --end ... --engine cpp   # same result, native C++ engine
+cmake -S cpp -B cpp/build -DPKMN_BUILD_TESTS=ON && cmake --build cpp/build -j && ctest --test-dir cpp/build
+                             # C++ unit tests (Catch2), independent of pytest
+uv run python scripts/parity_full.py                      # full-data bit-for-bit acceptance, both engines
 ```
 
 All four gates must pass before every commit. CI runs them with
@@ -119,6 +148,24 @@ uv.lock together).
   `dashboard`; not mypy'd, not imported by src/ or tests — demo tool only).
   Headless tests in `tests/test_dashboard.py`; run via
   `uv run --group dashboard pytest tests/test_dashboard.py` (skip without the group).
+- `cpp/` — the native engine: `pkmn_engine_core` (event loop, portfolio,
+  execution, cost model, product table, all five strategies — C++20, no
+  Python dependency) plus a nanobind binding module built by
+  scikit-build-core into `pkmn_quant._engine`. `cpp/tests/` is a Catch2
+  suite (23 tests) exercising the core in isolation, independent of pytest;
+  `cmake -S cpp -B cpp/build -DPKMN_BUILD_TESTS=ON && cmake --build
+  cpp/build -j && ctest --test-dir cpp/build` runs it. `src/pkmn_quant/
+  engine/native.py`'s `NativeBacktest` is the Python-side adapter: shapes
+  `MarketData` into flat numpy arrays (once per run — see the "measured
+  speedup" note below on why this bounds the end-to-end gain), crosses the
+  boundary once, and repackages the result into the same `Result` type the
+  Python engine returns, so callers can't tell engines apart. A
+  `NativeStrategySpec` names one of the five native strategies (or falls
+  back to a per-bar Python callback bridge for anything else, e.g.
+  ml-ranker). Parity with the Python engine is bit-for-bit by design
+  (`tests/test_native_parity.py`, `scripts/parity_full.py`) — see the
+  Plan 10 status bullet above for the one real gap the full-warehouse run
+  found and how it was closed.
 - `data/` — gitignored. Contains 874 ingested days (2024-02-08..2026-06-30,
   ~2.9M price rows) plus raw archives. Do not delete; re-ingest is ~40 min.
   `data/portfolio/` holds the gitignored real and paper ledgers. `data/runs/`
@@ -140,3 +187,11 @@ uv.lock together).
 - Workflow: feature branch per plan; two-stage review per task; STOP after each
   completed task and explain what/why at intern level; wait for the user's
   explicit green light before the next task.
+- After editing anything under `cpp/`, `uv sync --reinstall-package
+  pkmn-quant` — `uv sync` alone will not rebuild the extension module from a
+  source change, and a stale `.so` silently keeps running the old C++ code.
+  Never enable fast-math or fp-contract (`-ffast-math`, `-ffp-contract=fast`,
+  MSVC `/fp:fast`) in `cpp/CMakeLists.txt` or anywhere in the build —
+  bit-for-bit parity with the Python engine depends on IEEE-754-exact,
+  non-reassociated floating point; either flag will pass the C++ unit tests
+  and silently break parity on real data.

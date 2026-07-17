@@ -327,6 +327,102 @@ optimizer chose thinking it was free.
   Treat the impact-on numbers as "directionally more realistic than
   flat-cost," not as a validated forecast of real trading costs.
 
+## Plan 10 (2026-07-14): C++ engine — full-data parity + measured speedup
+
+Task 11 (final task of the C++ engine port, spec `2026-06-09` addendum
+`2026-07-14`) ran the acceptance test the whole plan was building toward:
+every strategy, both engines, the real 874-day warehouse
+(2024-02-08..2026-06-30), bit-for-bit.
+
+### Parity acceptance: all six PASS
+
+`uv run python scripts/parity_full.py [--ml]`, full range
+2024-03-01..2026-06-30, 120-day warmup, impact model on, $10,000 initial
+cash — every comparison exact (`==` on the full equity curve and every
+fill's day/asset/quantity/price/fees/impact):
+
+```
+[buy-and-hold] python 9.93s / cpp 3.53s
+PASS  buy-and-hold  (39 fills)
+[sealed-accumulation] python 10.09s / cpp 3.60s
+PASS  sealed-accumulation  (68 fills)
+[dip-buyer] python 24.53s / cpp 3.64s
+PASS  dip-buyer  (460 fills)
+[xs-momentum] python 10.66s / cpp 3.40s
+PASS  xs-momentum  (532 fills)
+[cost-aware-reversion] python 12.11s / cpp 3.69s
+PASS  cost-aware-reversion  (183 fills)
+[ml-ranker (bridge)] python 94.59s / cpp 57.01s
+PASS  ml-ranker (bridge)  (430 fills)
+```
+
+All five native strategies plus the ml-ranker callback bridge (sklearn
+trains in-loop, unmodified Python `Strategy`, per-bar callback into the C++
+engine) match bit-for-bit on real market data, not just the synthetic
+fixtures Tasks 1-10 exercised.
+
+### A real bug the full-data run found (fixed before this acceptance passed)
+
+The first `parity_full.py` run did not produce a PASS/FAIL line at all — it
+crashed with `KeyError: 542095` inside `NativeBacktest.run()` on the very
+first strategy. Root cause: `products.parquet` is missing rows for 1,845 of
+6,493 priced `product_id`s over the backtest window (37,008 price rows,
+present from day 2 of the range onward). This is upstream tcgcsv catalog
+drift, not stale local data — verified two ways: a live re-fetch of every
+currently-tracked group's `/products` endpoint still omits the missing ids,
+and tracing the raw archive path confirms at least one (`542095`,
+`Holofoil`) is priced under a group we already track (`23353`) whose live
+catalog no longer lists it. `NativeBacktest.run()` required a
+`products.parquet` row for every priced asset; the Python reference engine
+never did (strategies build their universe by filtering/joining against
+`ctx.products`, so an uncataloged asset is simply invisible to
+kind-filtered strategies — buy-and-hold, sealed-accumulation, dip-buyer,
+xs-momentum — but still a candidate for cost-aware-reversion, which has no
+kind filter at all). Fixed by tagging a missing catalog row kind "other"
+(-1), the C++ `ProductTable`'s existing sentinel for exactly this case
+(commit `091b663`, plus a differential regression test that seeds one
+extra uncataloged asset and proves both engines exclude it from
+buy-and-hold and include it, bit-for-bit, in cost-aware-reversion). Worth
+recording as a standing warehouse fact, independent of the C++ work: **28%
+of priced product_ids on TCGplayer/tcgcsv have no product-catalog entry**,
+which any future code that assumes catalog completeness needs to handle.
+
+### Measured speedup (best of 3, full 874-day range, impact on)
+
+`uv run python scripts/bench_engines.py`:
+
+| strategy | python (s) | cpp (s) | speedup |
+|---|---|---|---|
+| buy-and-hold | 10.34 | 4.37 | 2.4x |
+| sealed-accumulation | 11.91 | 3.52 | 3.4x |
+| dip-buyer | 27.44 | 3.60 | 7.6x |
+
+Both timings are total wall-clock (`Backtest.run()` / `NativeBacktest.run()`
+end to end), not engine-loop-only — `NativeBacktest` still pays Python/polars
+cost to load and flatten the warehouse into numpy arrays once per run before
+the C++ loop starts, so the measured speedup understates how much faster the
+event loop itself is. That flatten cost is roughly constant per run
+(~3-4s here) while the Python reference engine's per-day polars filtering
+scales with strategy complexity — dip-buyer's daily dip-window scan is the
+most expensive Python path here (27.4s) and shows the largest end-to-end
+speedup (7.6x) for exactly that reason; buy-and-hold's cheap per-day Python
+work (2.4x) is the closest this table gets to isolating the flatten
+overhead.
+
+### What this does and does not change
+
+Research conclusions are **unchanged by construction**: bit-for-bit parity
+means every number in every prior section of this document is identical
+whichever engine produced it — the C++ engine is not a new result, it is
+the same result computed faster. What changed is the cost of producing
+those numbers: a full-range backtest that took the Python engine 10-30s per
+strategy now completes in 3-4s, and — more importantly for what comes
+next — the C++ engine holds the GIL only across the boundary crossing, not
+during the event loop, so walk-forward folds and optuna trials can now run
+across threads instead of only across processes. That's the unlock Plan 11
+(parallel walk-forward search) depends on; this plan didn't need the speed
+for anything the numbers above required, but the next one does.
+
 ## Method notes / caveats (repeat in README)
 
 - The stitched curve is OOS-only: each fold's parameters are frozen before
