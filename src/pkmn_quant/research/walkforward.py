@@ -37,7 +37,7 @@ from datetime import date
 import polars as pl
 
 from pkmn_quant.data.warehouse import Warehouse
-from pkmn_quant.engine.backtest import Backtest
+from pkmn_quant.engine.backtest import Backtest, Result
 from pkmn_quant.engine.costs import CostModel
 from pkmn_quant.engine.metrics import summarize
 from pkmn_quant.engine.strategy import Strategy
@@ -88,6 +88,8 @@ def run_walkforward(
     initial_cash: float,
     objective_metric: str = "total_return",
     warmup_days: int = 0,
+    engine: str = "python",
+    strategy_name: str | None = None,
 ) -> WalkForwardResult:
     """Run walk-forward optimization and return stitched OOS equity curve.
 
@@ -101,50 +103,68 @@ def run_walkforward(
     ``warmup_days`` is passed to all three Backtest runs per fold (evaluate
     closure, IS re-run, OOS run) so the optimizer's view of signal behaviour
     matches the OOS deployment.  See module docstring for full warm-up semantics.
+
+    ``engine="cpp"`` runs every fold on NativeBacktest instead of Backtest.
+    When ``strategy_name`` names one of NATIVE_STRATEGY_NAMES the native
+    factory builds the strategy directly from ``params``; otherwise
+    ``strategy_factory(params)`` is passed to NativeBacktest as-is and runs
+    via the per-bar callback bridge (e.g. ml-ranker). ``strategy_name`` is
+    required when ``engine="cpp"``.
     """
     if objective_metric not in VALID_OBJECTIVE_METRICS:
         raise ValueError(
             f"unknown objective_metric {objective_metric!r};"
             f" choose from {sorted(VALID_OBJECTIVE_METRICS)}"
         )
+    if engine not in ("python", "cpp"):
+        raise ValueError(f"unknown engine {engine!r}; choose python or cpp")
+    if engine == "cpp" and strategy_name is None:
+        raise ValueError("engine='cpp' requires strategy_name")
+
+    if engine == "cpp":
+        from pkmn_quant.engine.native import (
+            NATIVE_STRATEGY_NAMES,
+            NativeBacktest,
+            NativeStrategySpec,
+        )
+
+    def _run(params: Params, window_start: date, window_end: date) -> Result:
+        if engine == "cpp":
+            native = (
+                NativeStrategySpec(strategy_name, {k: float(v) for k, v in params.items()})
+                if strategy_name in NATIVE_STRATEGY_NAMES
+                else strategy_factory(params)  # bridge: e.g. ml-ranker
+            )
+            return NativeBacktest(
+                warehouse=warehouse,
+                strategy=native,
+                cost_model=cost_model,
+                start=window_start,
+                end=window_end,
+                initial_cash=initial_cash,
+                warmup_days=warmup_days,
+            ).run()
+        return Backtest(
+            warehouse=warehouse,
+            strategy=strategy_factory(params),
+            cost_model=cost_model,
+            start=window_start,
+            end=window_end,
+            initial_cash=initial_cash,
+            warmup_days=warmup_days,
+        ).run()
 
     fold_results: list[FoldResult] = []
 
     for fold in make_folds(start, end, is_days=is_days, oos_days=oos_days):
 
         def evaluate(params: Params, _fold: Fold = fold) -> float:
-            result = Backtest(
-                warehouse=warehouse,
-                strategy=strategy_factory(params),
-                cost_model=cost_model,
-                start=_fold.is_start,
-                end=_fold.is_end,
-                initial_cash=initial_cash,
-                warmup_days=warmup_days,
-            ).run()
+            result = _run(params, _fold.is_start, _fold.is_end)
             return float(result.summary[objective_metric])
 
         best = optimizer(fold, evaluate)
-
-        is_result = Backtest(
-            warehouse=warehouse,
-            strategy=strategy_factory(best),
-            cost_model=cost_model,
-            start=fold.is_start,
-            end=fold.is_end,
-            initial_cash=initial_cash,
-            warmup_days=warmup_days,
-        ).run()
-
-        oos_result = Backtest(
-            warehouse=warehouse,
-            strategy=strategy_factory(best),
-            cost_model=cost_model,
-            start=fold.oos_start,
-            end=fold.oos_end,
-            initial_cash=initial_cash,
-            warmup_days=warmup_days,
-        ).run()
+        is_result = _run(best, fold.is_start, fold.is_end)
+        oos_result = _run(best, fold.oos_start, fold.oos_end)
 
         fold_results.append(
             FoldResult(

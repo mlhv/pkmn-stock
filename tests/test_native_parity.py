@@ -413,6 +413,62 @@ def test_bridge_runs_python_strategy_bit_for_bit(tmp_path: Path) -> None:
     assert_results_equal(py, cpp)
 
 
+def test_walkforward_cpp_matches_python(tmp_path: Path) -> None:
+    """Whole-walkforward differential: fixed params (trivial optimizer), both engines."""
+    from pkmn_quant.research.walkforward import run_walkforward
+    from pkmn_quant.strategies.dip_buyer import DipBuyer
+
+    seed_rich(tmp_path, n_days=60)
+    wh = Warehouse(Paths(root=tmp_path))
+    cm = CostModel(impact_enabled=True)
+    fixed: dict[str, float | int] = {
+        "dip_window_days": 5,
+        "dip_threshold": 0.10,
+        "hold_days": 7,
+        "take_profit": 1.05,
+    }
+
+    def factory(p: dict[str, float | int]) -> DipBuyer:
+        return DipBuyer(
+            dip_window_days=int(p["dip_window_days"]),
+            dip_threshold=float(p["dip_threshold"]),
+            hold_days=int(p["hold_days"]),
+            take_profit=float(p["take_profit"]),
+        )
+
+    def optimizer(fold: object, evaluate: object) -> dict[str, float | int]:
+        return dict(fixed)
+
+    py = run_walkforward(
+        warehouse=wh,
+        strategy_factory=factory,
+        optimizer=optimizer,
+        cost_model=cm,
+        start=START,
+        end=START + timedelta(days=59),
+        is_days=20,
+        oos_days=10,
+        initial_cash=1000.0,
+        warmup_days=10,
+    )
+    cpp = run_walkforward(
+        warehouse=wh,
+        strategy_factory=factory,
+        optimizer=optimizer,
+        cost_model=cm,
+        start=START,
+        end=START + timedelta(days=59),
+        is_days=20,
+        oos_days=10,
+        initial_cash=1000.0,
+        warmup_days=10,
+        engine="cpp",
+        strategy_name="dip-buyer",
+    )
+    assert py.stitched_curve["equity"].to_list() == cpp.stitched_curve["equity"].to_list()
+    assert py.summary == cpp.summary
+
+
 def test_bridge_ml_ranker_parity(tmp_path: Path) -> None:
     """ml-ranker (sklearn, random_state=0) runs unmodified via the bridge.
 
