@@ -20,8 +20,13 @@ existing fact and the project's honest-negative-result identity intact.
    the CI badge.
 2. Hero chart: `docs/assets/oos_equity.png`, stitched
    out-of-sample equity curves — buy-and-hold sealed vs active strategies —
-   caption states window (2024-08..2026-06) and cost regime (flat-cost,
-   since that is the regime with stitched OOS curves for all strategies).
+   caption states window (2024-08..2026-06) and per-series cost regime.
+   Each strategy plots its latest local artifact, regime named in the
+   legend label (sealed-accumulation and ml-ranker are impact-on re-runs;
+   dip-buyer, cost-aware-reversion, xs-momentum are flat-cost; the
+   benchmark backtest is flat-cost) — the same mixed-regime presentation
+   the results table already uses. Flat-cost re-runs are NOT performed:
+   they would overwrite the impact-on artifacts in the same result dirs.
    Rendered by `scripts/render_readme_chart.py` from local
    `data/results/*/stitched_equity.parquet` artifacts (data/ is gitignored;
    the PNG is committed, the script makes it reproducible). Chart styling
