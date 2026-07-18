@@ -164,3 +164,25 @@ def test_walkforward_unknown_engine_clean_error(tmp_path: Path) -> None:
     assert result.exit_code != 0
     assert "bogus" in result.output and "Traceback" not in result.output
     assert result.exception is None or isinstance(result.exception, SystemExit)
+
+
+def test_walkforward_negative_workers_clean_error(tmp_path: Path) -> None:
+    result = CliRunner().invoke(
+        app,
+        [
+            "walkforward",
+            "--strategy",
+            "sealed-accumulation",
+            "--start",
+            "2025-06-01",
+            "--end",
+            "2025-06-03",
+            "--workers",
+            "-2",
+            "--root",
+            str(tmp_path),
+        ],
+    )
+    assert result.exit_code != 0
+    assert "workers" in result.output
+    assert "Traceback" not in result.output

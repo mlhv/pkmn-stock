@@ -686,3 +686,164 @@ def test_unknown_kind_raises_value_error(tmp_path: Path) -> None:
             end=START + timedelta(days=2),
             initial_cash=100.0,
         ).run()
+
+
+def test_prepared_market_reuse_is_bit_identical(tmp_path: Path) -> None:
+    """One PreparedMarket across repeated native runs == fresh loads."""
+    from pkmn_quant.engine.prepared import PreparedMarket
+
+    seed_rich(tmp_path)
+    wh = Warehouse(Paths(root=tmp_path))
+    cm = CostModel(impact_enabled=True)
+    end = START + timedelta(days=39)
+    spec = NativeStrategySpec(
+        "dip-buyer",
+        {"dip_window_days": 5.0, "dip_threshold": 0.10, "hold_days": 7.0, "take_profit": 1.05},
+    )
+    fresh = NativeBacktest(
+        warehouse=wh,
+        strategy=spec,
+        cost_model=cm,
+        start=START,
+        end=end,
+        initial_cash=1000.0,
+    ).run()
+    prepared = PreparedMarket.prepare(wh, START, end)
+    first = NativeBacktest(
+        warehouse=wh,
+        strategy=spec,
+        cost_model=cm,
+        start=START,
+        end=end,
+        initial_cash=1000.0,
+        prepared=prepared,
+    ).run()
+    second = NativeBacktest(  # same PreparedMarket again: reuse must not drift
+        warehouse=wh,
+        strategy=spec,
+        cost_model=cm,
+        start=START,
+        end=end,
+        initial_cash=1000.0,
+        prepared=prepared,
+    ).run()
+    assert len(fresh.fills) > 0
+    assert_results_equal(fresh, first)
+    assert_results_equal(fresh, second)
+
+
+def test_prepared_market_bridge_reuse_is_bit_identical(tmp_path: Path) -> None:
+    """The callback bridge sharing one PreparedMarket (sequentially) == fresh."""
+    from pkmn_quant.engine.prepared import PreparedMarket
+    from pkmn_quant.strategies.dip_buyer import DipBuyer
+
+    seed_rich(tmp_path)
+    wh = Warehouse(Paths(root=tmp_path))
+    cm = CostModel(impact_enabled=True)
+    end = START + timedelta(days=39)
+
+    def make() -> DipBuyer:
+        return DipBuyer(
+            dip_window_days=5,
+            dip_threshold=0.10,
+            hold_days=7,
+            take_profit=1.05,
+            max_positions=5,
+            budget_frac=0.4,
+            min_price=3.0,
+        )
+
+    fresh = NativeBacktest(
+        warehouse=wh,
+        strategy=make(),
+        cost_model=cm,
+        start=START,
+        end=end,
+        initial_cash=1000.0,
+    ).run()
+    prepared = PreparedMarket.prepare(wh, START, end)
+    first = NativeBacktest(
+        warehouse=wh,
+        strategy=make(),
+        cost_model=cm,
+        start=START,
+        end=end,
+        initial_cash=1000.0,
+        prepared=prepared,
+    ).run()
+    # second run rewinds the shared marks cursor (day < watermark) — must replay
+    second = NativeBacktest(
+        warehouse=wh,
+        strategy=make(),
+        cost_model=cm,
+        start=START,
+        end=end,
+        initial_cash=1000.0,
+        prepared=prepared,
+    ).run()
+    assert len(fresh.fills) > 0
+    assert_results_equal(fresh, first)
+    assert_results_equal(fresh, second)
+
+
+def test_prepared_market_window_mismatch_raises(tmp_path: Path) -> None:
+    from pkmn_quant.engine.prepared import PreparedMarket
+
+    seed_rich(tmp_path)
+    wh = Warehouse(Paths(root=tmp_path))
+    prepared = PreparedMarket.prepare(wh, START, START + timedelta(days=20))
+    with pytest.raises(ValueError, match="window"):
+        NativeBacktest(
+            warehouse=wh,
+            strategy=NativeStrategySpec("buy-and-hold", {}),
+            cost_model=CostModel(),
+            start=START,
+            end=START + timedelta(days=39),  # different end than prepared
+            initial_cash=100.0,
+            prepared=prepared,
+        ).run()
+
+
+def test_prepare_accepts_preloaded_frame(tmp_path: Path) -> None:
+    """frame=/products= (the walkforward shared-load path) == warehouse loads."""
+    from pkmn_quant.engine.prepared import PreparedMarket
+
+    seed_rich(tmp_path)
+    wh = Warehouse(Paths(root=tmp_path))
+    end = START + timedelta(days=39)
+    a = PreparedMarket.prepare(wh, START, end)
+    b = PreparedMarket.prepare(wh, START, end, frame=wh.load_prices(), products=wh.load_products())
+    assert a.asset_list == b.asset_list
+    assert (a.row_day == b.row_day).all()
+    assert (a.row_market == b.row_market).all()
+    assert (a.ev_price == b.ev_price).all()
+    assert (a.prod_kind == b.prod_kind).all()
+
+
+def test_native_runs_are_thread_safe(tmp_path: Path) -> None:
+    """Two concurrent NativeBacktest runs == their serial results, exactly."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    seed_rich(tmp_path)
+    wh = Warehouse(Paths(root=tmp_path))
+    cm = CostModel(impact_enabled=True)
+    spec = NativeStrategySpec(
+        "dip-buyer",
+        {"dip_window_days": 5.0, "dip_threshold": 0.10, "hold_days": 7.0, "take_profit": 1.05},
+    )
+
+    def run(end_offset: int) -> Result:
+        return NativeBacktest(
+            warehouse=wh,
+            strategy=spec,
+            cost_model=cm,
+            start=START,
+            end=START + timedelta(days=end_offset),
+            initial_cash=1000.0,
+        ).run()
+
+    serial = [run(30), run(39)]
+    with ThreadPoolExecutor(max_workers=2) as ex:
+        threaded = list(ex.map(run, [30, 39]))
+    for s, t in zip(serial, threaded, strict=True):
+        assert_results_equal(s, t)

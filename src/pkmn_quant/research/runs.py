@@ -39,6 +39,7 @@ class RunRecord:
     data_fingerprint: dict[str, Any]
     results: dict[str, float]
     artifact_path: str
+    runtime: dict[str, Any] | None = None
 
 
 def registry_path(root: Path) -> Path:
@@ -85,8 +86,15 @@ def record_run(
     results: dict[str, float],
     artifact_path: Path,
     warehouse: Warehouse,
+    runtime: dict[str, Any] | None = None,
 ) -> str | None:
-    """Append one record; returns run_id, or None after warning. Never raises."""
+    """Append one record; returns run_id, or None after warning. Never raises.
+
+    ``runtime`` holds operational metadata that provably cannot affect
+    results (e.g. worker count) and is therefore excluded from config_hash:
+    identical results must hash identically regardless of how many threads
+    produced them.
+    """
     try:
         now = datetime.now(UTC)
         run_id = now.strftime("%Y%m%dT%H%M%SZ") + "-" + secrets.token_hex(3)
@@ -104,6 +112,8 @@ def record_run(
             "results": results,
             "artifact_path": str(artifact_path),
         }
+        if runtime is not None:
+            record["runtime"] = runtime
         path = registry_path(root)
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a") as fh:

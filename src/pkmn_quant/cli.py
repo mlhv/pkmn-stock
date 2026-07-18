@@ -259,8 +259,8 @@ def backtest(
         help="Walk-the-spread market impact on fills (see Plan 9 spec).",
     ),
     engine: str = typer.Option(
-        "python",
-        help="Backtest engine: python (reference) or cpp (native, parity-tested).",
+        "cpp",
+        help="Backtest engine: cpp (native, default) or python (reference).",
     ),
     root: Path = typer.Option(Path("."), help="Project root holding the data/ directory."),
 ) -> None:
@@ -385,8 +385,12 @@ def walkforward(
         help="Walk-the-spread market impact on fills (see Plan 9 spec).",
     ),
     engine: str = typer.Option(
-        "python",
-        help="Backtest engine: python (reference) or cpp (native, parity-tested).",
+        "cpp",
+        help="Backtest engine: cpp (native, default) or python (reference).",
+    ),
+    workers: int = typer.Option(
+        0,
+        help="Fold-level parallelism: 0 = auto (min(folds, cores)), 1 = serial, N = N threads.",
     ),
     root: Path = typer.Option(Path("."), help="Project root holding the data/ directory."),
 ) -> None:
@@ -412,6 +416,8 @@ def walkforward(
         )
     if engine not in ("python", "cpp"):
         raise typer.BadParameter(f"unknown engine {engine!r}; choose python or cpp")
+    if workers < 0:
+        raise typer.BadParameter(f"workers must be >= 0, got {workers}")
     try:
         start_date = dt.date.fromisoformat(start)
         end_date = dt.date.fromisoformat(end)
@@ -441,6 +447,7 @@ def walkforward(
         warmup_days=warmup_days,
         engine=engine,
         strategy_name=strategy,
+        workers=workers,
     )
 
     run_dir = root / "data" / "results" / f"wf-{strategy}-{start}-{end}"
@@ -475,6 +482,7 @@ def walkforward(
         results=result.summary,
         artifact_path=run_dir,
         warehouse=wh,
+        runtime={"workers": workers},
     )
     if run_id is not None:
         typer.echo(f"run recorded: {run_id}")

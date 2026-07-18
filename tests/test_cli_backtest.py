@@ -167,3 +167,15 @@ def test_backtest_bad_kind_clean_error(tmp_path: Path) -> None:
     result = run_cli(tmp_path, "--kind", "bogus")
     assert result.exit_code != 0
     assert "Traceback" not in result.output
+
+
+def test_default_engine_is_cpp_and_recorded(tmp_path: Path) -> None:
+    """No --engine flag => cpp, recorded in the run config (Plan 11 flip)."""
+    from pkmn_quant.research.runs import load_runs
+
+    seed(tmp_path)
+    result = run_cli(tmp_path)  # no --engine argument
+    assert result.exit_code == 0, result.output
+    runs = load_runs(tmp_path)
+    assert len(runs) == 1
+    assert runs[0].config["engine"] == "cpp"

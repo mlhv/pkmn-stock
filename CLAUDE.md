@@ -3,7 +3,7 @@
 Algo-trading research system for Pokemon card prices (TCGplayer data via
 tcgcsv.com). Design spec: `docs/superpowers/specs/2026-06-09-pkmn-quant-design.md`.
 
-## Status (2026-07-17)
+## Status (2026-07-18)
 
 - Plans 1-4 merged to main. Plan 4 closed out the v1 spec: `walkforward.json`
   artifacts, `pkmn signals`, Streamlit dashboard, README.
@@ -86,11 +86,31 @@ tcgcsv.com). Design spec: `docs/superpowers/specs/2026-06-09-pkmn-quant-design.m
   proving both engines agree on inclusion/exclusion bit-for-bit. Research
   conclusions are unchanged by construction (parity is bit-for-bit); what
   changed is the cost of producing them and that the C++ core has no Python
-  dependency, so Plan 11 (parallel walk-forward search) can release the GIL
-  for the native-strategy path (the callback bridge, which calls back into
-  Python per bar, must keep it held) — today the event loop still holds the
-  GIL throughout; nothing releases it yet. Full findings in
-  `docs/research-findings-2026-07.md` (Plan 10 section).
+  dependency — the native path now releases the GIL (Plan 11); the callback
+  bridge, which calls back into Python per bar, still keeps it held. Full
+  findings in `docs/research-findings-2026-07.md` (Plan 10 section).
+- Plan 11 complete on feat/parallel-walkforward (346 tests + 1 skipped
+  pytest + 25 Catch2 tests): fold-parallel walk-forward — `run_walkforward(
+  ..., workers=)` (`0`=auto `min(folds, cores)`, `1`=serial, `N`=N threads;
+  library default `1`, CLI default `0`); each fold owns its own optuna
+  study and `PreparedMarket` windows sliced from shared read-only frames
+  loaded once, so nothing mutable crosses fold workers; the native engine
+  genuinely releases the GIL during each fold's C++ run (bridged
+  strategies, e.g. ml-ranker, still hold it for the whole per-bar loop).
+  Real-data acceptance (`scripts/bench_walkforward.py`, sealed-accumulation,
+  2024-03-01..2026-06-30, is=180/oos=60/trials=15): cpp serial vs cpp
+  workers=auto is bit-for-bit identical (equity curve, summary, per-fold
+  params) — PASS. Measured wall-clock: python serial 359.5s, cpp serial
+  20.0s (18.0x), cpp workers=auto 20.5s (17.5x) — the 18x win vs status quo
+  is almost entirely the native engine plus the per-run load/prep hoist,
+  not threads; fold-level parallelism itself measured no gain on this
+  workload (11 folds, 8 cores) because each fold's Python-side prep holds
+  the GIL and, at 15 trials/fold, the GIL-released C++ region is too small
+  a fraction of the work for Amdahl's law to pay out here. The acceptance
+  property (provably correct, genuinely concurrent optuna studies, free to
+  enable) is the substantive result, not a wall-clock win on this
+  particular config. Full findings in `docs/research-findings-2026-07.md`
+  (Plan 11 section).
 
 ## Commands
 
@@ -102,7 +122,9 @@ uv run ruff check . && uv run ruff format --check . && uv run mypy
 uv run pkmn ingest --start 2026-07-01 --end 2026-07-31   # extend price history
 uv run pkmn backtest --start 2024-03-01 --end 2026-06-30 # benchmark backtest
 uv run pkmn walkforward --strategy sealed-accumulation \
-    --start 2024-03-01 --end 2026-06-30 --trials 15      # research run
+    --start 2024-03-01 --end 2026-06-30 --trials 15      # research run (cpp, fold-parallel auto)
+uv run pkmn walkforward --strategy sealed-accumulation \
+    --start 2024-03-01 --end 2026-06-30 --trials 15 --workers 1  # serial reference run
 uv run pkmn signals --strategy sealed-accumulation       # live recommendations
 uv run --group dashboard streamlit run app/dashboard.py  # results explorer
 uv run pkmn portfolio show                               # real positions + P&L
@@ -158,7 +180,8 @@ uv.lock together).
   execution, cost model, product table, all five strategies — C++20, no
   Python dependency) plus a nanobind binding module built by
   scikit-build-core into `pkmn_quant._engine`. `cpp/tests/` is a Catch2
-  suite (23 tests) exercising the core in isolation, independent of pytest;
+  suite (25 tests, including a Plan 11 thread-safety smoke test) exercising
+  the core in isolation, independent of pytest;
   `cmake -S cpp -B cpp/build -DPKMN_BUILD_TESTS=ON && cmake --build
   cpp/build -j && ctest --test-dir cpp/build` runs it. `src/pkmn_quant/
   engine/native.py`'s `NativeBacktest` is the Python-side adapter: shapes
@@ -190,6 +213,11 @@ uv.lock together).
   carry-forward marks). Caveat them in any report; compare strategies against
   the buy-and-hold benchmark (+186.0% flat-cost / +183.7% impact-on for
   sealed, 2024-03→2026-06), not equities.
+- Never share one `PreparedMarket` across fold worker threads in
+  `run_walkforward`: each fold builds its own IS/OOS `PreparedMarket`
+  windows from the shared read-only `frame_full`/`products_full` frames —
+  the windows themselves are per-fold and must stay that way for the
+  bit-for-bit serial/parallel equivalence to hold.
 - Workflow: feature branch per plan; two-stage review per task; STOP after each
   completed task and explain what/why at intern level; wait for the user's
   explicit green light before the next task.

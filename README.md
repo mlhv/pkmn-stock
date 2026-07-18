@@ -6,9 +6,9 @@ realistic card-market execution costs (including a walk-the-spread
 market-impact model), five parameterized strategies, optuna walk-forward
 validation, live signal generation, reinvest loop with portfolio ledger and
 daily scheduling, an experiment registry, and a Streamlit results explorer.
-Python 3.12, polars, scikit-learn, C++20/nanobind, strict mypy, 328 tests
-(plus 3 dashboard tests behind an opt-in dependency group) + 23 Catch2
-tests, CI.
+Python 3.12, polars, scikit-learn, C++20/nanobind, strict mypy, 347 tests
+(3 of which are dashboard tests behind an opt-in dependency group, skipped
+as one item without it) + 25 Catch2 tests, CI.
 
 **The honest headline:** across 2024-08 → 2026-06, none of the active
 strategies beat buy-and-hold sealed product (+151% out-of-sample,
@@ -147,16 +147,32 @@ warehouse-wide as of this run — see the findings doc for the two distinct
 causes) and how the C++ engine now handles that, and what the speedup
 unlocks: `docs/research-findings-2026-07.md` (Plan 10 section).
 
+**Fold-level parallelism for `walkforward`:** `--workers` controls it (`0`
+= auto, `min(folds, cores)`; `1` = serial; `N` = `N` threads); both CLI
+defaults are `--engine cpp --workers 0`, so a bare `pkmn walkforward` run is
+already the fast, parallel path. Results are bit-identical at any worker
+count — each fold's optuna study is independent and seeded, and the native
+engine now genuinely releases the GIL during its per-fold run. Measured on
+the real warehouse (`scripts/bench_walkforward.py`, sealed-accumulation,
+same range as above): python-serial 359.5s vs cpp-serial 20.0s vs
+cpp-workers=auto 20.5s — the 18x win is almost entirely the native engine,
+not threads; fold-level parallelism itself measured no gain on this
+workload (see the Plan 11 section of the findings doc for why). Use
+`--engine python --workers 1` for the pre-Plan-11 reference behavior.
+
 ## Quickstart
 
     uv sync
-    uv run pytest                # 328 tests (3 dashboard tests skip without --group dashboard)
+    uv run pytest                # 347 tests (3 dashboard tests skip as 1 item without --group dashboard)
     uv run pkmn ingest --start 2024-02-08 --end 2026-06-30   # ~40 min, ~2.9M rows
     uv run pkmn backtest --start 2024-03-01 --end 2026-06-30 # benchmark (impact model on by default)
     uv run pkmn backtest --start 2024-03-01 --end 2026-06-30 --no-impact  # flat-cost, no market impact
     uv run pkmn backtest --start 2024-03-01 --end 2026-06-30 --engine cpp # same result, native C++ engine
     uv run pkmn walkforward --strategy sealed-accumulation \
-        --start 2024-03-01 --end 2026-06-30 --trials 15      # minutes
+        --start 2024-03-01 --end 2026-06-30 --trials 15      # cpp engine, fold-parallel auto (both defaults)
+    uv run pkmn walkforward --strategy sealed-accumulation \
+        --start 2024-03-01 --end 2026-06-30 --trials 15 \
+        --engine python --workers 1                          # reference behavior: serial, Python engine
     uv run pkmn signals --strategy sealed-accumulation       # today's entries
     uv run pkmn runs list                                     # experiment registry: recorded runs
     uv run pkmn runs show <run-id>                            # full record for one run

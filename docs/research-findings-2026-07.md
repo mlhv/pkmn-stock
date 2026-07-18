@@ -437,6 +437,69 @@ as the Python engine. That capability is the unlock Plan 11 (parallel
 walk-forward search) depends on; this plan didn't need the speed for
 anything the numbers above required, but the next one does.
 
+## Plan 11 (2026-07-17): fold-parallel walk-forward
+
+`uv run python scripts/bench_walkforward.py` — sealed-accumulation,
+2024-03-01..2026-06-30, is-days=180/oos-days=60/trials=15/seed=42, impact
+model on, one run per config (a walkforward is minutes long; best-of-N
+would triple an already-long benchmark):
+
+| config | wall-clock (s) | speedup vs python |
+|---|---|---|
+| python, serial | 359.5 | 1.0x |
+| cpp, serial | 20.0 | 18.0x |
+| cpp, workers=auto | 20.5 | 17.5x |
+
+serial == parallel (bit-for-bit): PASS
+
+Results are **unchanged by construction**: each fold's optuna study is
+independent and seeded, so routing folds through a `ThreadPoolExecutor`
+changes nothing about what gets computed, only the concurrency of computing
+it. That equivalence isn't just asserted — it's the built-in acceptance
+check above (cpp serial vs cpp workers=auto: identical stitched equity
+curve to the float, identical summary dict, identical per-fold params) plus
+the Plan 11 equivalence test suite that runs it continuously in CI.
+
+What changed is wall-clock — but read the table carefully before crediting
+threads for it. The 18.0x win over the pre-Plan-11 status quo (python,
+serial) comes almost entirely from the native C++ engine and the
+once-per-run load / per-fold `PreparedMarket` hoist (Tasks 1-2), not from
+parallelism: fold-level threading itself (cpp serial 20.0s vs cpp
+workers=auto 20.5s, 8 cores available, 11 folds) added **no measured
+gain** on this workload — if anything workers=auto is very slightly slower,
+which is noise from a single run each rather than a real regression (see
+the script docstring on why this bench doesn't do best-of-N). The likely
+mechanism, offered as an explanation rather than a measured profile: each
+fold's Python-side prep (`PreparedMarket.prepare` — polars filtering,
+`iter_rows` interning into flat arrays) runs with the GIL held, and at 15
+trials/fold the GIL-released C++ event-loop region is a small slice of a
+fold's total wall-clock, so Amdahl's law caps the achievable threaded
+speedup near zero for this trial count. The theoretical ceiling is
+`min(folds, cores)`; this run had headroom on both axes (11 folds, 8
+cores) and still didn't realize it, because headroom is necessary but not
+sufficient — the region that actually releases the GIL has to be a
+meaningful fraction of the work being parallelized, and here it isn't.
+
+The substantive result of this plan is the acceptance property, not a
+wall-clock win: fold workers are provably correct under real concurrency
+(bit-identical output, genuinely concurrent optuna studies, no shared
+mutable state — each worker builds its own `PreparedMarket` windows off
+shared read-only frames) and free to enable (no measured regression beyond
+noise). It's worth shipping because it costs nothing and because a
+configuration with a larger GIL-released fraction (more trials/fold, or a
+strategy whose per-bar work dominates prep) would realize more of the
+ceiling this plan only proves is *reachable*, not *exceeded* here.
+Strategies that run via the per-bar Python callback bridge (e.g. ml-ranker)
+hold the GIL for the strategy's entire per-bar loop, not just a short
+engine region, so they gain effectively nothing from `--workers` — for
+those, wall-clock stays bounded by process-level parallelism, same as
+before this plan. Plan 10 (above) described GIL release on the native path
+as a capability a future plan "can" add; it is no longer future — the
+native event loop now genuinely releases the GIL during every fold's C++
+run, which is what makes the bit-for-bit concurrent-optuna result above
+possible at all, even though the wall-clock payoff on this particular
+workload is close to zero.
+
 ## Method notes / caveats (repeat in README)
 
 - The stitched curve is OOS-only: each fold's parameters are frozen before
