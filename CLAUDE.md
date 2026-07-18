@@ -85,9 +85,12 @@ tcgcsv.com). Design spec: `docs/superpowers/specs/2026-06-09-pkmn-quant-design.m
   cost-aware-reversion (no kind filter), with a differential regression test
   proving both engines agree on inclusion/exclusion bit-for-bit. Research
   conclusions are unchanged by construction (parity is bit-for-bit); what
-  changed is the cost of producing them and that the C++ loop no longer
-  holds the GIL, which Plan 11 (parallel walk-forward search) depends on.
-  Full findings in `docs/research-findings-2026-07.md` (Plan 10 section).
+  changed is the cost of producing them and that the C++ core has no Python
+  dependency, so Plan 11 (parallel walk-forward search) can release the GIL
+  for the native-strategy path (the callback bridge, which calls back into
+  Python per bar, must keep it held) — today the event loop still holds the
+  GIL throughout; nothing releases it yet. Full findings in
+  `docs/research-findings-2026-07.md` (Plan 10 section).
 
 ## Commands
 

@@ -2,6 +2,7 @@
 
 #include "pkmn_engine/backtest.hpp"
 #include "pkmn_engine/strategies/dip_buyer.hpp"
+#include "pkmn_engine/strategies/factory.hpp"
 #include "pkmn_engine/strategies/momentum.hpp"
 #include "pkmn_engine/strategies/sealed_accumulation.hpp"
 
@@ -77,4 +78,13 @@ TEST_CASE("momentum: flat portfolio rebalances immediately, holds winners") {
     for (const auto& f : res.fills) {
         if (f.quantity > 0) CHECK(f.asset == 0);  // only the winner is bought
     }
+}
+
+TEST_CASE("make_strategy: stray param key throws, valid params still work") {
+    ParamMap bogus{{"dip_window_days", 7.0}, {"bogus_param", 1.0}};
+    CHECK_THROWS_AS(make_strategy("dip-buyer", bogus, -1), std::invalid_argument);
+
+    ParamMap valid{{"dip_window_days", 7.0}, {"dip_threshold", 0.30}};
+    auto strat = make_strategy("dip-buyer", valid, -1);
+    CHECK(strat != nullptr);
 }

@@ -654,3 +654,35 @@ def test_cost_aware_reversion_parity_with_uncataloged_asset(tmp_path: Path) -> N
     assert_results_equal(py, cpp)
     assert any(f.asset.product_id == UNCATALOGED_PID for f in py.fills)
     assert any(f.asset.product_id == UNCATALOGED_PID for f in cpp.fills)
+
+
+def test_unknown_param_raises_value_error(tmp_path: Path) -> None:
+    """A renamed/added tunable the C++ factory branch doesn't consume must
+    fail loudly, not silently run on defaults (final-review hardening)."""
+    seed_rich(tmp_path, n_days=3)
+    wh = Warehouse(Paths(root=tmp_path))
+    with pytest.raises(ValueError, match="bogus_param"):
+        NativeBacktest(
+            warehouse=wh,
+            strategy=NativeStrategySpec("dip-buyer", {"bogus_param": 1.0}),
+            cost_model=CostModel(),
+            start=START,
+            end=START + timedelta(days=2),
+            initial_cash=100.0,
+        ).run()
+
+
+def test_unknown_kind_raises_value_error(tmp_path: Path) -> None:
+    """An unvalidated --kind must not silently divergence-match the C++
+    uncataloged bucket (final-review hardening)."""
+    seed_rich(tmp_path, n_days=3)
+    wh = Warehouse(Paths(root=tmp_path))
+    with pytest.raises(ValueError, match="kind"):
+        NativeBacktest(
+            warehouse=wh,
+            strategy=NativeStrategySpec("buy-and-hold", {}, kind="bogus"),
+            cost_model=CostModel(),
+            start=START,
+            end=START + timedelta(days=2),
+            initial_cash=100.0,
+        ).run()

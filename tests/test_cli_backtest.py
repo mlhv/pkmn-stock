@@ -157,3 +157,13 @@ def test_backtest_bad_dates_clean_error(tmp_path: Path) -> None:
     )
     assert result.exit_code != 0
     assert "Traceback" not in result.output
+
+
+def test_backtest_bad_kind_clean_error(tmp_path: Path) -> None:
+    """Unvalidated --kind used to silently diverge between engines (Python
+    BuyAndHold filters to an empty universe; C++ maps it to the uncataloged
+    bucket) -- now a clean CLI error, same shape as the bad-dates case."""
+    seed(tmp_path)
+    result = run_cli(tmp_path, "--kind", "bogus")
+    assert result.exit_code != 0
+    assert "Traceback" not in result.output

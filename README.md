@@ -123,7 +123,7 @@ change:
     uv run python scripts/parity_full.py --ml    # + ml-ranker bridge, ~2-3 min (sklearn trains in-loop, twice)
 
 Build prerequisites: `uv sync` builds and installs the extension
-automatically (scikit-build-core + nanobind, CMake ≥3.24 wired through
+automatically (scikit-build-core + nanobind, CMake ≥3.26 wired through
 `pyproject.toml`). For local C++ iteration — editing `cpp/` and running the
 Catch2 suite directly — you need Xcode Command Line Tools (or any C++20
 compiler) and CMake on `PATH`:

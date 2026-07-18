@@ -427,11 +427,15 @@ whichever engine produced it — the C++ engine is not a new result, it is
 the same result computed faster. What changed is the cost of producing
 those numbers: a full-range backtest that took the Python engine 10-30s per
 strategy now completes in 3-4s, and — more importantly for what comes
-next — the C++ engine holds the GIL only across the boundary crossing, not
-during the event loop, so walk-forward folds and optuna trials can now run
-across threads instead of only across processes. That's the unlock Plan 11
-(parallel walk-forward search) depends on; this plan didn't need the speed
-for anything the numbers above required, but the next one does.
+next — the C++ core has no Python dependency, so a future GIL release for
+the native-strategy path (nb::call_guard / gil_scoped_release around the
+event loop, not yet added) would let walk-forward folds and optuna trials
+run across threads instead of only across processes; the callback bridge,
+which calls back into Python per bar, would still need to hold it. Today
+nothing in cpp/ releases the GIL — the event loop holds it throughout, same
+as the Python engine. That capability is the unlock Plan 11 (parallel
+walk-forward search) depends on; this plan didn't need the speed for
+anything the numbers above required, but the next one does.
 
 ## Method notes / caveats (repeat in README)
 

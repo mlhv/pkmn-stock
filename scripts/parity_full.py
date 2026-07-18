@@ -71,7 +71,12 @@ def compare(name: str, py: Result, cpp: Result) -> bool:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--ml", action="store_true", help="include ml-ranker (slow)")
-    parser.add_argument("--impact", action="store_true", default=True)
+    parser.add_argument(
+        "--impact",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="walk-the-spread market impact on fills (default on; --no-impact for flat-cost).",
+    )
     args = parser.parse_args()
 
     wh = Warehouse(Paths(root=Path(".")))

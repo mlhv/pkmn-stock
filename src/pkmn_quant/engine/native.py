@@ -9,7 +9,7 @@ and are repackaged into engine.backtest.Result, so downstream consumers
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import date, timedelta
 
 import numpy as np
@@ -89,7 +89,6 @@ class NativeBacktest:
     end: date
     initial_cash: float
     warmup_days: int = 0
-    _asset_list: list[Asset] = field(default_factory=list, init=False, repr=False)
 
     def run(self) -> Result:
         market = MarketData.from_warehouse(
@@ -108,7 +107,6 @@ class NativeBacktest:
             Asset(product_id=int(pid), sub_type=str(st))
             for pid, st in assets_df.select("product_id", "sub_type").iter_rows()
         ]
-        self._asset_list = asset_list
         asset_index = {a: i for i, a in enumerate(asset_list)}
 
         joined = frame.join(assets_df, on=["product_id", "sub_type"], how="left").sort("date")
@@ -154,6 +152,8 @@ class NativeBacktest:
         if isinstance(self.strategy, NativeStrategySpec):
             name = self.strategy.name
             params = {k: float(v) for k, v in self.strategy.params.items()}
+            if name == "buy-and-hold" and self.strategy.kind not in _KIND_CODES:
+                raise ValueError(f"unknown kind {self.strategy.kind!r}; choose sealed or single")
             universe_kind = _KIND_CODES.get(self.strategy.kind, -1)
             callback = None
             strategy_name = f"buy-and-hold-{self.strategy.kind}" if name == "buy-and-hold" else name

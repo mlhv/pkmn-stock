@@ -10,6 +10,7 @@ speedup is smaller than the engine-loop-only speedup would be.
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from datetime import date
 from pathlib import Path
 
@@ -38,11 +39,11 @@ CASES = [
 ]
 
 
-def best_of(fn: object, reps: int = REPS) -> float:
+def best_of(fn: Callable[[], object], reps: int = REPS) -> float:
     times = []
     for _ in range(reps):
         t0 = time.perf_counter()
-        fn()  # type: ignore[operator]
+        fn()
         times.append(time.perf_counter() - t0)
     return min(times)
 

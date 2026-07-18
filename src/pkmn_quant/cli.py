@@ -275,6 +275,8 @@ def backtest(
         end_date = dt.date.fromisoformat(end)
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
+    if kind not in ("sealed", "single"):
+        raise typer.BadParameter(f"unknown kind {kind!r}; choose sealed or single")
 
     wh = Warehouse(Paths(root=root))
     cm = CostModel(impact_enabled=impact)
