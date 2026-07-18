@@ -63,26 +63,25 @@ class MarketData:
         return list(self._days)
 
     @classmethod
-    def from_warehouse(
+    def from_frame(
         cls,
-        warehouse: Warehouse,
+        prices: pl.DataFrame,
         start: date,
         end: date,
         warmup_days: int = 0,
     ) -> MarketData:
-        """Load prices from ``start - warmup_days`` through ``end``.
+        """Build the view from an already-loaded full price frame.
 
-        ``days`` (the event-loop iteration index) is restricted to [start, end]
-        so no trading occurs during the warm-up period.  ``history_until`` and
-        ``marks_on`` naturally see the warm-up rows because the underlying frame
-        covers the full [start - warmup_days, end] range.
+        ``prices`` is the ``warehouse.load_prices()`` frame (or an equal
+        one); the same ``[start - warmup_days, end]`` filter is applied
+        here, so ``from_frame(load_prices(), ...)`` is byte-identical to
+        ``from_warehouse(...)``. Public so the walk-forward layer can load
+        parquet once and slice per fold instead of re-reading per run.
 
-        ``warmup_days=0`` (the default) preserves the original behaviour exactly.
+        See from_warehouse for the warm-up semantics.
         """
         load_from = start - timedelta(days=warmup_days) if warmup_days > 0 else start
-        frame = warehouse.load_prices().filter(
-            (pl.col("date") >= load_from) & (pl.col("date") <= end)
-        )
+        frame = prices.filter((pl.col("date") >= load_from) & (pl.col("date") <= end))
         # Trading days: only those within [start, end].  Warm-up rows are present
         # in frame (and marks rows) for look-back access but are NOT iterated.
         all_dates = frame["date"].unique().to_list()
@@ -135,6 +134,25 @@ class MarketData:
             _cursor=cursor,
             _quotes_by_day=quotes_by_day,
         )
+
+    @classmethod
+    def from_warehouse(
+        cls,
+        warehouse: Warehouse,
+        start: date,
+        end: date,
+        warmup_days: int = 0,
+    ) -> MarketData:
+        """Load prices from ``start - warmup_days`` through ``end``.
+
+        ``days`` (the event-loop iteration index) is restricted to [start, end]
+        so no trading occurs during the warm-up period.  ``history_until`` and
+        ``marks_on`` naturally see the warm-up rows because the underlying frame
+        covers the full [start - warmup_days, end] range.
+
+        ``warmup_days=0`` (the default) preserves the original behaviour exactly.
+        """
+        return cls.from_frame(warehouse.load_prices(), start, end, warmup_days=warmup_days)
 
     def prices_on(self, day: date) -> dict[Asset, float]:
         """Prices that actually printed on `day` (no carry-forward)."""
