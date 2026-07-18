@@ -818,3 +818,32 @@ def test_prepare_accepts_preloaded_frame(tmp_path: Path) -> None:
     assert (a.row_market == b.row_market).all()
     assert (a.ev_price == b.ev_price).all()
     assert (a.prod_kind == b.prod_kind).all()
+
+
+def test_native_runs_are_thread_safe(tmp_path: Path) -> None:
+    """Two concurrent NativeBacktest runs == their serial results, exactly."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    seed_rich(tmp_path)
+    wh = Warehouse(Paths(root=tmp_path))
+    cm = CostModel(impact_enabled=True)
+    spec = NativeStrategySpec(
+        "dip-buyer",
+        {"dip_window_days": 5.0, "dip_threshold": 0.10, "hold_days": 7.0, "take_profit": 1.05},
+    )
+
+    def run(end_offset: int) -> Result:
+        return NativeBacktest(
+            warehouse=wh,
+            strategy=spec,
+            cost_model=cm,
+            start=START,
+            end=START + timedelta(days=end_offset),
+            initial_cash=1000.0,
+        ).run()
+
+    serial = [run(30), run(39)]
+    with ThreadPoolExecutor(max_workers=2) as ex:
+        threaded = list(ex.map(run, [30, 39]))
+    for s, t in zip(serial, threaded, strict=True):
+        assert_results_equal(s, t)

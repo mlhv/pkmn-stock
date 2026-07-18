@@ -48,8 +48,10 @@ if(PKMN_BUILD_TESTS)
     tests/test_market.cpp
     tests/test_backtest_golden.cpp
     tests/test_strategies.cpp
+    tests/test_concurrency.cpp
   )
-  target_link_libraries(engine_tests PRIVATE pkmn_engine_core Catch2::Catch2WithMain)
+  find_package(Threads REQUIRED)
+  target_link_libraries(engine_tests PRIVATE pkmn_engine_core Catch2::Catch2WithMain Threads::Threads)
   include(CTest)
   list(APPEND CMAKE_MODULE_PATH ${catch2_SOURCE_DIR}/extras)
   include(Catch)

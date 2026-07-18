@@ -87,7 +87,17 @@ nb::object run_backtest_py(
         strategy = make_strategy(strategy_name, pmap, universe_kind);
     }
 
-    BacktestResult res = run_backtest(market, products, *strategy, cm, initial_cash);
+    // Native path: the engine touches no Python objects (all inputs were
+    // copied to std::vectors above), so drop the GIL and let other fold
+    // workers run concurrently. The bridge path re-enters Python every bar
+    // and must keep the GIL.
+    BacktestResult res;
+    if (callback.is_none()) {
+        nb::gil_scoped_release release;
+        res = run_backtest(market, products, *strategy, cm, initial_cash);
+    } else {
+        res = run_backtest(market, products, *strategy, cm, initial_cash);
+    }
 
     nb::list out_days, out_equity, out_fills;
     for (Day d : res.days) out_days.append(d);
