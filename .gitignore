@@ -9,3 +9,6 @@ __pycache__/
 
 # brainstorming visual companion sessions
 .superpowers/
+
+cpp/build/
+build/

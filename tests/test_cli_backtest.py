@@ -90,7 +90,8 @@ def test_backtest_cli_runs_and_writes_results(tmp_path: Path) -> None:
     assert (runs[0] / "fills.parquet").exists()
 
 
-def test_backtest_golden_numbers(tmp_path: Path) -> None:
+@pytest.mark.parametrize("engine", ["python", "cpp"])
+def test_backtest_golden_numbers(tmp_path: Path, engine: str) -> None:
     """Golden regression: any engine change that alters results fails here.
 
     Runs --no-impact: these numbers pin the flat-cost engine.
@@ -104,7 +105,7 @@ def test_backtest_golden_numbers(tmp_path: Path) -> None:
       D3: no orders. Equity = 3 + 8*15 = 123.
     """
     seed(tmp_path)
-    result = run_cli(tmp_path, "--no-impact")
+    result = run_cli(tmp_path, "--no-impact", "--engine", engine)
     assert result.exit_code == 0, result.output
     out_dir = tmp_path / "data" / "results"
     run_dir = next(iter(out_dir.iterdir()))
@@ -119,7 +120,8 @@ def test_backtest_golden_numbers(tmp_path: Path) -> None:
     assert f["impact"] == pytest.approx(0.0)
 
 
-def test_backtest_golden_numbers_with_impact(tmp_path: Path) -> None:
+@pytest.mark.parametrize("engine", ["python", "cpp"])
+def test_backtest_golden_numbers_with_impact(tmp_path: Path, engine: str) -> None:
     """Golden regression for the impact-on engine (CLI default).
 
     Hand-verified arithmetic (CostModel defaults + impact_enabled; $12 price
@@ -134,7 +136,7 @@ def test_backtest_golden_numbers_with_impact(tmp_path: Path) -> None:
       D3: holding -> no orders. Equity = 2.75 + 7*15 = 107.75.
     """
     seed_impact(tmp_path)
-    result = run_cli(tmp_path)
+    result = run_cli(tmp_path, "--engine", engine)
     assert result.exit_code == 0, result.output
     out_dir = tmp_path / "data" / "results"
     run_dir = next(iter(out_dir.iterdir()))
@@ -153,5 +155,15 @@ def test_backtest_bad_dates_clean_error(tmp_path: Path) -> None:
     result = CliRunner().invoke(
         app, ["backtest", "--start", "garbage", "--end", "2025-06-03", "--root", str(tmp_path)]
     )
+    assert result.exit_code != 0
+    assert "Traceback" not in result.output
+
+
+def test_backtest_bad_kind_clean_error(tmp_path: Path) -> None:
+    """Unvalidated --kind used to silently diverge between engines (Python
+    BuyAndHold filters to an empty universe; C++ maps it to the uncataloged
+    bucket) -- now a clean CLI error, same shape as the bad-dates case."""
+    seed(tmp_path)
+    result = run_cli(tmp_path, "--kind", "bogus")
     assert result.exit_code != 0
     assert "Traceback" not in result.output

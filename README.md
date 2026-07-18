@@ -1,12 +1,14 @@
 # pkmn_quant — an event-driven backtester for Pokemon card markets
 
 A quant research system for TCGplayer card prices: custom event-driven
-backtest engine with realistic card-market execution costs (including a
-walk-the-spread market-impact model), five parameterized strategies, optuna
-walk-forward validation, live signal generation, reinvest loop with
-portfolio ledger and daily scheduling, an experiment registry, and a
-Streamlit results explorer. Python 3.12, polars, scikit-learn, strict mypy,
-306 tests (plus 3 dashboard tests behind an opt-in dependency group), CI.
+backtest engine (Python reference + a bit-for-bit-parity C++ engine) with
+realistic card-market execution costs (including a walk-the-spread
+market-impact model), five parameterized strategies, optuna walk-forward
+validation, live signal generation, reinvest loop with portfolio ledger and
+daily scheduling, an experiment registry, and a Streamlit results explorer.
+Python 3.12, polars, scikit-learn, C++20/nanobind, strict mypy, 328 tests
+(plus 3 dashboard tests behind an opt-in dependency group) + 23 Catch2
+tests, CI.
 
 **The honest headline:** across 2024-08 → 2026-06, none of the active
 strategies beat buy-and-hold sealed product (+151% out-of-sample,
@@ -96,13 +98,63 @@ with `--no-impact`. Full findings and caveats:
     engine/quotes.py: per-day Quote (mid/low) feeding the walk-the-spread
     market-impact cost model (engine default off, CLI default on)
 
+## Engines
+
+Two backtest engines produce the identical `Result` (equity curve + fills):
+the Python reference engine (`engine/backtest.py`, always available) and a
+C++ engine (`cpp/`, nanobind-bound as `pkmn_quant._engine`) with native ports
+of all five strategies. Select it per-run with `--engine cpp` on
+`backtest`/`walkforward`; a `NativeStrategySpec` not among the five native
+names (or any raw Python `Strategy` instance) still runs correctly on the
+C++ event loop via a per-bar callback bridge, just without the native
+strategy speedup.
+
+**The parity guarantee is bit-for-bit, not "close enough":** every fill's
+day/asset/quantity/price/fees/impact and every equity-curve value must match
+exactly (`==`), not within a tolerance. This is enforced three ways —
+Catch2 unit tests in `cpp/tests/` for the C++ core in isolation, differential
+tests in `tests/test_native_parity.py` (synthetic fixtures, both engines,
+exact comparison) for every strategy, and `scripts/parity_full.py` for the
+acceptance bar: all five strategies plus the ml-ranker bridge, bit-for-bit,
+over the real 874-day warehouse. Run it yourself after any C++ or strategy
+change:
+
+    uv run python scripts/parity_full.py        # five rule strategies, ~1 min
+    uv run python scripts/parity_full.py --ml    # + ml-ranker bridge, ~2-3 min (sklearn trains in-loop, twice)
+
+Build prerequisites: `uv sync` builds and installs the extension
+automatically (scikit-build-core + nanobind, CMake ≥3.26 wired through
+`pyproject.toml`). For local C++ iteration — editing `cpp/` and running the
+Catch2 suite directly — you need Xcode Command Line Tools (or any C++20
+compiler) and CMake on `PATH`:
+
+    cmake -S cpp -B cpp/build -DPKMN_BUILD_TESTS=ON && cmake --build cpp/build -j
+    ctest --test-dir cpp/build --output-on-failure
+
+**Measured speedup** (best of 3, full 2024-03..2026-06 range, impact model
+on; both numbers are total wall-clock including the one-time polars
+load/flatten the C++ path pays crossing the boundary, not engine-loop-only):
+
+| strategy | python (s) | cpp (s) | speedup |
+|---|---|---|---|
+| buy-and-hold | 10.34 | 4.37 | 2.4x |
+| sealed-accumulation | 11.91 | 3.52 | 3.4x |
+| dip-buyer | 27.44 | 3.60 | 7.6x |
+
+Full acceptance results, the discovery that some priced product_ids have no
+`products.parquet` catalog row (40 within the backtest window; 1,845
+warehouse-wide as of this run — see the findings doc for the two distinct
+causes) and how the C++ engine now handles that, and what the speedup
+unlocks: `docs/research-findings-2026-07.md` (Plan 10 section).
+
 ## Quickstart
 
     uv sync
-    uv run pytest                # 306 tests (3 dashboard tests skip without --group dashboard)
+    uv run pytest                # 328 tests (3 dashboard tests skip without --group dashboard)
     uv run pkmn ingest --start 2024-02-08 --end 2026-06-30   # ~40 min, ~2.9M rows
     uv run pkmn backtest --start 2024-03-01 --end 2026-06-30 # benchmark (impact model on by default)
     uv run pkmn backtest --start 2024-03-01 --end 2026-06-30 --no-impact  # flat-cost, no market impact
+    uv run pkmn backtest --start 2024-03-01 --end 2026-06-30 --engine cpp # same result, native C++ engine
     uv run pkmn walkforward --strategy sealed-accumulation \
         --start 2024-03-01 --end 2026-06-30 --trials 15      # minutes
     uv run pkmn signals --strategy sealed-accumulation       # today's entries

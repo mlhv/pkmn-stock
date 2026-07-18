@@ -96,7 +96,12 @@ class DipBuyer(Strategy):
             if ret <= -self.dip_threshold:
                 candidates.append((ret, asset, mark))
 
-        candidates.sort(key=lambda c: (c[0], c[1].product_id))  # deepest dip first
+        # Deepest dip first; tie-break by (product_id, sub_type) so the order
+        # is fully determined by the key (not by Python's stable-sort
+        # fallback to insertion order, which for a product with two
+        # sub_types depends on polars group_by's non-deterministic,
+        # PYTHONHASHSEED-dependent iteration order — see the native.py port).
+        candidates.sort(key=lambda c: (c[0], c[1].product_id, c[1].sub_type))
         budget = ctx.cash * self.budget_frac
         affordable = [
             (asset, mark, qty)

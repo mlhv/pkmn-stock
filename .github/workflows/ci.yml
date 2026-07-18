@@ -18,3 +18,8 @@ jobs:
       - run: uv run ruff format --check .
       - run: uv run mypy #type checking
       - run: uv run pytest --cov=pkmn_quant --cov-report=term-missing
+      - name: C++ unit tests
+        run: |
+          cmake -S cpp -B cpp/build -DPKMN_BUILD_TESTS=ON -DCMAKE_BUILD_TYPE=Release
+          cmake --build cpp/build -j
+          ctest --test-dir cpp/build --output-on-failure

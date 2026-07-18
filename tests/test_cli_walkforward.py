@@ -142,3 +142,25 @@ def test_walkforward_unknown_objective_metric_clean_error(tmp_path: Path) -> Non
     assert result.exit_code != 0
     assert "sharpe_ratio" in result.output
     assert result.exception is None or isinstance(result.exception, SystemExit)
+
+
+def test_walkforward_unknown_engine_clean_error(tmp_path: Path) -> None:
+    result = CliRunner().invoke(
+        app,
+        [
+            "walkforward",
+            "--strategy",
+            "sealed-accumulation",
+            "--start",
+            "2025-01-01",
+            "--end",
+            "2025-02-09",
+            "--engine",
+            "bogus",
+            "--root",
+            str(tmp_path),
+        ],
+    )
+    assert result.exit_code != 0
+    assert "bogus" in result.output and "Traceback" not in result.output
+    assert result.exception is None or isinstance(result.exception, SystemExit)

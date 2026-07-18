@@ -258,6 +258,10 @@ def backtest(
         "--impact/--no-impact",
         help="Walk-the-spread market impact on fills (see Plan 9 spec).",
     ),
+    engine: str = typer.Option(
+        "python",
+        help="Backtest engine: python (reference) or cpp (native, parity-tested).",
+    ),
     root: Path = typer.Option(Path("."), help="Project root holding the data/ directory."),
 ) -> None:
     """Run the buy-and-hold benchmark backtest over the warehouse."""
@@ -271,17 +275,33 @@ def backtest(
         end_date = dt.date.fromisoformat(end)
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
+    if kind not in ("sealed", "single"):
+        raise typer.BadParameter(f"unknown kind {kind!r}; choose sealed or single")
 
     wh = Warehouse(Paths(root=root))
     cm = CostModel(impact_enabled=impact)
-    result = Backtest(
-        warehouse=wh,
-        strategy=BuyAndHold(kind=kind),
-        cost_model=cm,
-        start=start_date,
-        end=end_date,
-        initial_cash=cash,
-    ).run()
+    if engine == "cpp":
+        from pkmn_quant.engine.native import NativeBacktest, NativeStrategySpec
+
+        result = NativeBacktest(
+            warehouse=wh,
+            strategy=NativeStrategySpec("buy-and-hold", {}, kind=kind),
+            cost_model=cm,
+            start=start_date,
+            end=end_date,
+            initial_cash=cash,
+        ).run()
+    elif engine == "python":
+        result = Backtest(
+            warehouse=wh,
+            strategy=BuyAndHold(kind=kind),
+            cost_model=cm,
+            start=start_date,
+            end=end_date,
+            initial_cash=cash,
+        ).run()
+    else:
+        raise typer.BadParameter(f"unknown engine {engine!r}; choose python or cpp")
 
     run_dir = root / "data" / "results" / f"{result.strategy_name}-{start}-{end}"
     if run_dir.exists():
@@ -325,6 +345,7 @@ def backtest(
             "end": end,
             "cash": cash,
             "kind": kind,
+            "engine": engine,
             "warmup_days": 0,
             "cost_model": cm.as_dict(),
         },
@@ -363,6 +384,10 @@ def walkforward(
         "--impact/--no-impact",
         help="Walk-the-spread market impact on fills (see Plan 9 spec).",
     ),
+    engine: str = typer.Option(
+        "python",
+        help="Backtest engine: python (reference) or cpp (native, parity-tested).",
+    ),
     root: Path = typer.Option(Path("."), help="Project root holding the data/ directory."),
 ) -> None:
     """Walk-forward analysis: optimize in-sample, evaluate out-of-sample."""
@@ -385,6 +410,8 @@ def walkforward(
             f"unknown objective metric {objective_metric!r};"
             f" choose from {sorted(VALID_OBJECTIVE_METRICS)}"
         )
+    if engine not in ("python", "cpp"):
+        raise typer.BadParameter(f"unknown engine {engine!r}; choose python or cpp")
     try:
         start_date = dt.date.fromisoformat(start)
         end_date = dt.date.fromisoformat(end)
@@ -412,6 +439,8 @@ def walkforward(
         initial_cash=cash,
         objective_metric=objective_metric,
         warmup_days=warmup_days,
+        engine=engine,
+        strategy_name=strategy,
     )
 
     run_dir = root / "data" / "results" / f"wf-{strategy}-{start}-{end}"
@@ -441,6 +470,7 @@ def walkforward(
             "warmup_days": warmup_days,
             "objective_metric": objective_metric,
             "cost_model": cm.as_dict(),
+            "engine": engine,
         },
         results=result.summary,
         artifact_path=run_dir,
