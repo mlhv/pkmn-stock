@@ -22,6 +22,10 @@ add_library(pkmn_engine_core STATIC
 )
 target_include_directories(pkmn_engine_core PUBLIC src)
 target_compile_options(pkmn_engine_core PUBLIC -ffp-contract=off)
+# The core links into the _engine shared module; Linux g++ does not emit PIC
+# for static-library objects by default (macOS does), so CI's .so link fails
+# without this.
+set_target_properties(pkmn_engine_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 if(SKBUILD)
   find_package(Python 3.12 COMPONENTS Interpreter Development.Module REQUIRED)
