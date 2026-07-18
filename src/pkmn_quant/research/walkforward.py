@@ -30,9 +30,12 @@ Warm-up semantics (``warmup_days`` parameter):
 
 from __future__ import annotations
 
+import os
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import date
+from typing import TYPE_CHECKING
 
 import polars as pl
 
@@ -42,6 +45,9 @@ from pkmn_quant.engine.costs import CostModel
 from pkmn_quant.engine.metrics import summarize
 from pkmn_quant.engine.strategy import Strategy
 from pkmn_quant.research.folds import Fold, make_folds
+
+if TYPE_CHECKING:
+    from pkmn_quant.engine.prepared import PreparedMarket
 
 # Flat mapping of hyperparameter name -> numeric value (float or int).
 # Matches the Params alias in search.py; kept local to avoid the optuna import.
@@ -90,6 +96,7 @@ def run_walkforward(
     warmup_days: int = 0,
     engine: str = "python",
     strategy_name: str | None = None,
+    workers: int = 1,
 ) -> WalkForwardResult:
     """Run walk-forward optimization and return stitched OOS equity curve.
 
@@ -110,6 +117,21 @@ def run_walkforward(
     ``strategy_factory(params)`` is passed to NativeBacktest as-is and runs
     via the per-bar callback bridge (e.g. ml-ranker). ``strategy_name`` is
     required when ``engine="cpp"``.
+
+    ``workers`` controls fold-level parallelism: ``0`` means auto
+    (``min(n_folds, os.cpu_count() or 1)``), ``1`` (the default) runs the
+    plain serial loop with no executor involved at all, and any value ``> 1``
+    runs each fold on its own thread in a ``ThreadPoolExecutor`` of that
+    size. Negative values raise ``ValueError``. Results are bit-identical
+    at any worker count: each fold's optuna study is independent and seeded,
+    and each fold worker builds its own ``PreparedMarket`` windows from the
+    shared, read-only ``frame_full``/``products_full`` frames loaded once up
+    front — nothing mutable is shared across folds. Only fold-level work is
+    parallelized; trials within a single fold's optimizer always run
+    sequentially. Native-strategy folds release the GIL during the C++ run
+    and genuinely parallelize; folds using the per-bar Python callback
+    bridge (e.g. ml-ranker) are correct under threads but roughly serial,
+    since the callback holds the GIL.
     """
     if objective_metric not in VALID_OBJECTIVE_METRICS:
         raise ValueError(
@@ -121,60 +143,110 @@ def run_walkforward(
     if engine == "cpp" and strategy_name is None:
         raise ValueError("engine='cpp' requires strategy_name")
 
+    if workers < 0:
+        raise ValueError(f"workers must be >= 0, got {workers}")
+
     if engine == "cpp":
         from pkmn_quant.engine.native import (
             NATIVE_STRATEGY_NAMES,
             NativeBacktest,
             NativeStrategySpec,
         )
+        from pkmn_quant.engine.prepared import PreparedMarket
 
-    def _run(params: Params, window_start: date, window_end: date) -> Result:
+        # Load once; fold workers slice windows from these shared,
+        # immutable frames instead of re-reading parquet per backtest.
+        frame_full = warehouse.load_prices()
+        products_full = warehouse.load_products()
+
+    folds = make_folds(start, end, is_days=is_days, oos_days=oos_days)
+
+    def _fold_worker(fold: Fold) -> FoldResult:
+        """One fold end-to-end. Owns everything it touches (its optuna
+        study via `optimizer`, its PreparedMarket windows, per-backtest
+        engine instances) — workers share nothing mutable."""
+        prepared_is: PreparedMarket | None
+        prepared_oos: PreparedMarket | None
         if engine == "cpp":
-            native = (
-                NativeStrategySpec(strategy_name, {k: float(v) for k, v in params.items()})
-                if strategy_name in NATIVE_STRATEGY_NAMES
-                else strategy_factory(params)  # bridge: e.g. ml-ranker
+            prepared_is = PreparedMarket.prepare(
+                warehouse,
+                fold.is_start,
+                fold.is_end,
+                warmup_days=warmup_days,
+                frame=frame_full,
+                products=products_full,
             )
-            return NativeBacktest(
+            prepared_oos = PreparedMarket.prepare(
+                warehouse,
+                fold.oos_start,
+                fold.oos_end,
+                warmup_days=warmup_days,
+                frame=frame_full,
+                products=products_full,
+            )
+        else:
+            prepared_is = prepared_oos = None
+
+        def _run(
+            params: Params, window_start: date, window_end: date, prepared: PreparedMarket | None
+        ) -> Result:
+            if engine == "cpp":
+                native = (
+                    NativeStrategySpec(strategy_name, {k: float(v) for k, v in params.items()})
+                    if strategy_name in NATIVE_STRATEGY_NAMES
+                    else strategy_factory(params)  # bridge: e.g. ml-ranker
+                )
+                return NativeBacktest(
+                    warehouse=warehouse,
+                    strategy=native,
+                    cost_model=cost_model,
+                    start=window_start,
+                    end=window_end,
+                    initial_cash=initial_cash,
+                    warmup_days=warmup_days,
+                    prepared=prepared,
+                ).run()
+            return Backtest(
                 warehouse=warehouse,
-                strategy=native,
+                strategy=strategy_factory(params),
                 cost_model=cost_model,
                 start=window_start,
                 end=window_end,
                 initial_cash=initial_cash,
                 warmup_days=warmup_days,
             ).run()
-        return Backtest(
-            warehouse=warehouse,
-            strategy=strategy_factory(params),
-            cost_model=cost_model,
-            start=window_start,
-            end=window_end,
-            initial_cash=initial_cash,
-            warmup_days=warmup_days,
-        ).run()
 
-    fold_results: list[FoldResult] = []
-
-    for fold in make_folds(start, end, is_days=is_days, oos_days=oos_days):
-
-        def evaluate(params: Params, _fold: Fold = fold) -> float:
-            result = _run(params, _fold.is_start, _fold.is_end)
+        def evaluate(params: Params) -> float:
+            result = _run(params, fold.is_start, fold.is_end, prepared_is)
             return float(result.summary[objective_metric])
 
         best = optimizer(fold, evaluate)
-        is_result = _run(best, fold.is_start, fold.is_end)
-        oos_result = _run(best, fold.oos_start, fold.oos_end)
-
-        fold_results.append(
-            FoldResult(
-                fold=fold,
-                params=best,
-                is_summary=is_result.summary,
-                oos_summary=oos_result.summary,
-                oos_curve=oos_result.equity_curve,
-            )
+        is_result = _run(best, fold.is_start, fold.is_end, prepared_is)
+        oos_result = _run(best, fold.oos_start, fold.oos_end, prepared_oos)
+        return FoldResult(
+            fold=fold,
+            params=best,
+            is_summary=is_result.summary,
+            oos_summary=oos_result.summary,
+            oos_curve=oos_result.equity_curve,
         )
+
+    n_workers = min(len(folds), os.cpu_count() or 1) if workers == 0 else workers
+    if n_workers <= 1 or len(folds) <= 1:
+        # Plain serial loop: the pre-Plan-11 reference path, executor-free.
+        fold_results = [_fold_worker(fold) for fold in folds]
+    else:
+        with ThreadPoolExecutor(max_workers=n_workers) as executor:
+            futures = [executor.submit(_fold_worker, fold) for fold in folds]
+            try:
+                # Collect in FOLD order (not completion order): stitching
+                # depends on chronology, and .result() re-raises the first
+                # in-order failure.
+                fold_results = [future.result() for future in futures]
+            except BaseException:
+                for future in futures:
+                    future.cancel()  # not-yet-started folds never run
+                raise
 
     stitched = _stitch([f.oos_curve for f in fold_results], initial_cash)
     summary = _summarize_folds(fold_results, stitched)
