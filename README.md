@@ -141,10 +141,11 @@ load/flatten the C++ path pays crossing the boundary, not engine-loop-only):
 | sealed-accumulation | 11.91 | 3.52 | 3.4x |
 | dip-buyer | 27.44 | 3.60 | 7.6x |
 
-Full acceptance results, the discovery that ~28% of priced product_ids have
-no `products.parquet` catalog row (and how the C++ engine now handles that),
-and what the speedup unlocks: `docs/research-findings-2026-07.md` (Plan 10
-section).
+Full acceptance results, the discovery that some priced product_ids have no
+`products.parquet` catalog row (40 within the backtest window; 1,845
+warehouse-wide as of this run — see the findings doc for the two distinct
+causes) and how the C++ engine now handles that, and what the speedup
+unlocks: `docs/research-findings-2026-07.md` (Plan 10 section).
 
 ## Quickstart
 

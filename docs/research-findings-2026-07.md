@@ -365,27 +365,37 @@ fixtures Tasks 1-10 exercised.
 
 The first `parity_full.py` run did not produce a PASS/FAIL line at all — it
 crashed with `KeyError: 542095` inside `NativeBacktest.run()` on the very
-first strategy. Root cause: `products.parquet` is missing rows for 1,845 of
-6,493 priced `product_id`s over the backtest window (37,008 price rows,
-present from day 2 of the range onward). This is upstream tcgcsv catalog
-drift, not stale local data — verified two ways: a live re-fetch of every
-currently-tracked group's `/products` endpoint still omits the missing ids,
-and tracing the raw archive path confirms at least one (`542095`,
-`Holofoil`) is priced under a group we already track (`23353`) whose live
-catalog no longer lists it. `NativeBacktest.run()` required a
-`products.parquet` row for every priced asset; the Python reference engine
-never did (strategies build their universe by filtering/joining against
-`ctx.products`, so an uncataloged asset is simply invisible to
-kind-filtered strategies — buy-and-hold, sealed-accumulation, dip-buyer,
-xs-momentum — but still a candidate for cost-aware-reversion, which has no
-kind filter at all). Fixed by tagging a missing catalog row kind "other"
-(-1), the C++ `ProductTable`'s existing sentinel for exactly this case
-(commit `091b663`, plus a differential regression test that seeds one
-extra uncataloged asset and proves both engines exclude it from
-buy-and-hold and include it, bit-for-bit, in cost-aware-reversion). Worth
-recording as a standing warehouse fact, independent of the C++ work: **28%
-of priced product_ids on TCGplayer/tcgcsv have no product-catalog entry**,
-which any future code that assumes catalog completeness needs to handle.
+first strategy. Root cause: `products.parquet` is missing rows for 40 of
+4,687 priced `product_id`s within the backtest window
+(2024-03-01..2026-06-30) — 7,565 price rows, first appearing 2024-03-03.
+This is upstream tcgcsv catalog drift, not stale local data — verified two
+ways: a live re-fetch of every currently-tracked group's `/products`
+endpoint still omits the missing ids, and tracing the raw archive path
+confirms at least one (`542095`, `Holofoil`) is priced under a group we
+already track (`23353`) whose live catalog no longer lists it.
+`NativeBacktest.run()` required a `products.parquet` row for every priced
+asset; the Python reference engine never did (strategies build their
+universe by filtering/joining against `ctx.products`, so an uncataloged
+asset is simply invisible to kind-filtered strategies — buy-and-hold,
+sealed-accumulation, dip-buyer, xs-momentum — but still a candidate for
+cost-aware-reversion, which has no kind filter at all). Fixed by tagging a
+missing catalog row kind "other" (-1), the C++ `ProductTable`'s existing
+sentinel for exactly this case (commit `091b663`, plus a differential
+regression test that seeds one extra uncataloged asset and proves both
+engines exclude it from buy-and-hold and include it, bit-for-bit, in
+cost-aware-reversion).
+
+The gap is much larger warehouse-wide than inside this backtest window: as
+of this run the warehouse has grown past the window to 890 ingested days
+(2024-02-08..2026-07-16), and 1,845 of 6,493 all-time priced `product_id`s
+(28%) have no catalog row — 29,443 of the 37,008 orphan rows (80%) are
+dated 2026-07 alone. That concentration points to a second, distinct cause
+from the 40 in-window drift cases above: the documented Plan 1 limitation
+in `ingest.py` (`refresh_products` only runs once, when `products.parquet`
+is missing — new sets picked up by daily price ingestion afterward are
+never added to the catalog). Worth recording as a standing warehouse fact,
+independent of the C++ work: any future code that assumes catalog
+completeness needs to handle both failure modes.
 
 ### Measured speedup (best of 3, full 874-day range, impact on)
 

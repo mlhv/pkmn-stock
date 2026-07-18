@@ -73,9 +73,12 @@ tcgcsv.com). Design spec: `docs/superpowers/specs/2026-06-09-pkmn-quant-design.m
   range, impact on; total wall-clock including the one-time polars
   load/flatten, not engine-loop-only): buy-and-hold 2.4x, sealed-accumulation
   3.4x, dip-buyer 7.6x. The first full-data run found a real bug the
-  synthetic fixtures never exercised: 1,845 of 6,493 priced product_ids
-  (28%) have no `products.parquet` row (upstream tcgcsv catalog drift, not
-  stale local data) — `NativeBacktest.run()` crashed on it (`KeyError`)
+  synthetic fixtures never exercised: `products.parquet` is missing rows
+  for 40 of 4,687 priced product_ids inside the backtest window (7,565
+  price rows; warehouse-wide, past the window, the gap is far larger —
+  1,845 of 6,493 as of this run, mostly explained by a second, distinct
+  cause: `ingest.py`'s documented one-time catalog fetch never picking up
+  new sets) — `NativeBacktest.run()` crashed on it (`KeyError`)
   where the Python engine silently excludes uncataloged assets from
   kind-filtered strategies; fixed by tagging missing catalog rows kind
   "other" (commit `091b663`), which also correctly keeps them tradeable for
