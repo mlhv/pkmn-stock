@@ -488,6 +488,8 @@ def walkforward(
         warehouse=wh,
         runtime={
             "workers": workers,
+            # len(result.folds) == n_folds in both run_walkforward branches
+            # (one FoldResult per fold), so this equals the run's own resolve.
             "workers_resolved": resolve_workers(workers, len(result.folds)),
         },
     )
