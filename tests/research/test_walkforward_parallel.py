@@ -39,7 +39,7 @@ def optimizer(fold: object, evaluate: object) -> Params:
     return dict(FIXED)
 
 
-def run_wf(root: Path, workers: int, strategy_name: str) -> WalkForwardResult:
+def run_wf(root: Path, workers: int, strategy_name: str, engine: str = "cpp") -> WalkForwardResult:
     return run_walkforward(
         warehouse=Warehouse(Paths(root=root)),
         strategy_factory=factory,
@@ -51,7 +51,7 @@ def run_wf(root: Path, workers: int, strategy_name: str) -> WalkForwardResult:
         oos_days=10,
         initial_cash=1000.0,
         warmup_days=10,
-        engine="cpp",
+        engine=engine,
         strategy_name=strategy_name,
         workers=workers,
     )
@@ -74,6 +74,18 @@ def test_parallel_matches_serial_native(tmp_path: Path) -> None:
     seed_rich(tmp_path, n_days=60)
     serial = run_wf(tmp_path, workers=1, strategy_name="dip-buyer")
     parallel = run_wf(tmp_path, workers=4, strategy_name="dip-buyer")
+    assert len(serial.folds) == 4
+    assert serial.stitched_curve.height > 0
+    assert_wf_equal(serial, parallel)
+
+
+def test_parallel_matches_serial_python_engine(tmp_path: Path) -> None:
+    """The executor dispatch in run_walkforward is engine-agnostic: workers > 1
+    also runs correctly with engine="python" (plain Backtest per fold, no
+    NativeBacktest/PreparedMarket involved at all)."""
+    seed_rich(tmp_path, n_days=60)
+    serial = run_wf(tmp_path, workers=1, strategy_name="dip-buyer", engine="python")
+    parallel = run_wf(tmp_path, workers=4, strategy_name="dip-buyer", engine="python")
     assert len(serial.folds) == 4
     assert serial.stitched_curve.height > 0
     assert_wf_equal(serial, parallel)

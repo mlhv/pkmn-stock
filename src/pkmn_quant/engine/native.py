@@ -71,6 +71,9 @@ class NativeBacktest:
                 self.warehouse, self.start, self.end, warmup_days=self.warmup_days
             )
         elif (p.start, p.end, p.warmup_days) != (self.start, self.end, self.warmup_days):
+            # This guard only checks (start, end, warmup_days) — it cannot
+            # detect a `prepared` built from a different warehouse/data than
+            # the one passed to this run; the caller is responsible for that.
             raise ValueError(
                 "PreparedMarket window mismatch: prepared for "
                 f"({p.start}, {p.end}, warmup={p.warmup_days}), run wants "

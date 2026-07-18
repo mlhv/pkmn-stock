@@ -6,9 +6,9 @@ realistic card-market execution costs (including a walk-the-spread
 market-impact model), five parameterized strategies, optuna walk-forward
 validation, live signal generation, reinvest loop with portfolio ledger and
 daily scheduling, an experiment registry, and a Streamlit results explorer.
-Python 3.12, polars, scikit-learn, C++20/nanobind, strict mypy, 328 tests
-(plus 3 dashboard tests behind an opt-in dependency group) + 23 Catch2
-tests, CI.
+Python 3.12, polars, scikit-learn, C++20/nanobind, strict mypy, 347 tests
+(3 of which are dashboard tests behind an opt-in dependency group, skipped
+as one item without it) + 25 Catch2 tests, CI.
 
 **The honest headline:** across 2024-08 → 2026-06, none of the active
 strategies beat buy-and-hold sealed product (+151% out-of-sample,
@@ -163,7 +163,7 @@ workload (see the Plan 11 section of the findings doc for why). Use
 ## Quickstart
 
     uv sync
-    uv run pytest                # 328 tests (3 dashboard tests skip without --group dashboard)
+    uv run pytest                # 347 tests (3 dashboard tests skip as 1 item without --group dashboard)
     uv run pkmn ingest --start 2024-02-08 --end 2026-06-30   # ~40 min, ~2.9M rows
     uv run pkmn backtest --start 2024-03-01 --end 2026-06-30 # benchmark (impact model on by default)
     uv run pkmn backtest --start 2024-03-01 --end 2026-06-30 --no-impact  # flat-cost, no market impact

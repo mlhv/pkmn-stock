@@ -4,6 +4,11 @@ One run per config (a walkforward is minutes, not microseconds — best-of-N
 would triple an already-long benchmark; treat small deltas as noise).
 Includes the Plan 11 acceptance check: cpp serial and cpp parallel results
 must be exactly equal. Run from the repo root (needs data/).
+
+Run order matters for the reported wall-clock: cpp-parallel runs first on a
+cold page cache, and cpp-serial runs second benefits from the now-warm
+parquet reads — so a small parallel-vs-serial delta should not be over-read
+as evidence that parallelism barely helps.
 """
 
 from __future__ import annotations

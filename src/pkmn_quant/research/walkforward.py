@@ -131,7 +131,10 @@ def run_walkforward(
     sequentially. Native-strategy folds release the GIL during the C++ run
     and genuinely parallelize; folds using the per-bar Python callback
     bridge (e.g. ml-ranker) are correct under threads but roughly serial,
-    since the callback holds the GIL.
+    since the callback holds the GIL. Under ``workers > 1``, ``optimizer``
+    and ``strategy_factory`` are invoked concurrently across fold threads,
+    so both must be reentrant — no shared mutable state — or results across
+    folds can interfere with each other.
     """
     if objective_metric not in VALID_OBJECTIVE_METRICS:
         raise ValueError(
