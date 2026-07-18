@@ -147,6 +147,19 @@ warehouse-wide as of this run — see the findings doc for the two distinct
 causes) and how the C++ engine now handles that, and what the speedup
 unlocks: `docs/research-findings-2026-07.md` (Plan 10 section).
 
+**Fold-level parallelism for `walkforward`:** `--workers` controls it (`0`
+= auto, `min(folds, cores)`; `1` = serial; `N` = `N` threads); both CLI
+defaults are `--engine cpp --workers 0`, so a bare `pkmn walkforward` run is
+already the fast, parallel path. Results are bit-identical at any worker
+count — each fold's optuna study is independent and seeded, and the native
+engine now genuinely releases the GIL during its per-fold run. Measured on
+the real warehouse (`scripts/bench_walkforward.py`, sealed-accumulation,
+same range as above): python-serial 359.5s vs cpp-serial 20.0s vs
+cpp-workers=auto 20.5s — the 18x win is almost entirely the native engine,
+not threads; fold-level parallelism itself measured no gain on this
+workload (see the Plan 11 section of the findings doc for why). Use
+`--engine python --workers 1` for the pre-Plan-11 reference behavior.
+
 ## Quickstart
 
     uv sync
@@ -156,7 +169,10 @@ unlocks: `docs/research-findings-2026-07.md` (Plan 10 section).
     uv run pkmn backtest --start 2024-03-01 --end 2026-06-30 --no-impact  # flat-cost, no market impact
     uv run pkmn backtest --start 2024-03-01 --end 2026-06-30 --engine cpp # same result, native C++ engine
     uv run pkmn walkforward --strategy sealed-accumulation \
-        --start 2024-03-01 --end 2026-06-30 --trials 15      # minutes
+        --start 2024-03-01 --end 2026-06-30 --trials 15      # cpp engine, fold-parallel auto (both defaults)
+    uv run pkmn walkforward --strategy sealed-accumulation \
+        --start 2024-03-01 --end 2026-06-30 --trials 15 \
+        --engine python --workers 1                          # reference behavior: serial, Python engine
     uv run pkmn signals --strategy sealed-accumulation       # today's entries
     uv run pkmn runs list                                     # experiment registry: recorded runs
     uv run pkmn runs show <run-id>                            # full record for one run
