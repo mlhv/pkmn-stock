@@ -9,12 +9,14 @@ CIs/DSR built on these returns inherit that inflation.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Literal
 
 import numpy as np
 import polars as pl
 from numpy.typing import NDArray
+from scipy import stats as sps
 
 from pkmn_quant.engine.metrics import TRADING_DAYS_PER_YEAR
 
@@ -105,3 +107,86 @@ def bootstrap_ci(
         mean_block=mean_block,
         seed=seed,
     )
+
+
+_EULER_GAMMA = 0.5772156649015329
+
+
+def deflated_sharpe(
+    daily_returns: NDArray[np.float64], trial_daily_sharpes: Sequence[float]
+) -> float:
+    """Bailey & Lopez de Prado deflated Sharpe ratio.
+
+    Probability that the candidate's true Sharpe exceeds zero, after
+    correcting for having selected it among ``len(trial_daily_sharpes)``
+    trials (which must include the candidate) with the observed variance
+    of trial Sharpes, and for the return distribution's skew/kurtosis.
+    All Sharpes here are per-day (non-annualized); the formula requires it.
+    Returns nan when not computable (zero-variance returns, degenerate
+    denominator) — surfaces print "n/a" rather than a fake number.
+    """
+    n_trials = len(trial_daily_sharpes)
+    if n_trials < 2:
+        raise ValueError(f"need >= 2 trials for deflation, got {n_trials}")
+    r = np.asarray(daily_returns, dtype=np.float64)
+    n = r.size
+    if n < 3:
+        return float("nan")
+    std = float(r.std(ddof=1))
+    if std == 0.0:
+        return float("nan")
+    sr = float(r.mean()) / std
+    var_trials = float(np.var(np.asarray(trial_daily_sharpes, dtype=np.float64), ddof=1))
+    if var_trials == 0.0:
+        sr0 = 0.0
+    else:
+        sr0 = float(
+            np.sqrt(var_trials)
+            * (
+                (1.0 - _EULER_GAMMA) * sps.norm.ppf(1.0 - 1.0 / n_trials)
+                + _EULER_GAMMA * sps.norm.ppf(1.0 - 1.0 / (n_trials * np.e))
+            )
+        )
+    skew = float(sps.skew(r))
+    kurt = float(sps.kurtosis(r, fisher=False))
+    denom_sq = 1.0 - skew * sr + (kurt - 1.0) / 4.0 * sr**2
+    if denom_sq <= 0.0:
+        return float("nan")
+    z = (sr - sr0) * np.sqrt(n - 1.0) / np.sqrt(denom_sq)
+    return float(sps.norm.cdf(z))
+
+
+def whites_reality_check(
+    excess_returns: NDArray[np.float64],
+    *,
+    n_boot: int = 10_000,
+    mean_block: float = 10.0,
+    seed: int = 42,
+) -> float:
+    """White (2000) Reality Check p-value over a strategy zoo.
+
+    ``excess_returns[k]`` is strategy k's daily return minus the
+    benchmark's on aligned days. One joint index resample per bootstrap
+    draw (same days for every strategy) preserves cross-strategy
+    correlation. Statistic: sqrt(n) * max_k mean(excess_k); bootstrap
+    distribution is recentered per strategy. p-value = fraction of
+    bootstrap maxima >= observed maximum.
+    """
+    x = np.asarray(excess_returns, dtype=np.float64)
+    if x.ndim != 2 or x.shape[0] < 1:
+        raise ValueError(f"need a (n_strategy, n_days) matrix with >= 1 row, got {x.shape}")
+    _, n = x.shape
+    rng = np.random.default_rng(seed)
+    obs_means = x.mean(axis=1)
+    obs_stat = float(np.sqrt(n) * obs_means.max())
+    exceed = 0
+    chunk = 1000
+    done = 0
+    while done < n_boot:
+        m = min(chunk, n_boot - done)
+        idx = stationary_bootstrap_indices(n, m, mean_block, rng)
+        boot_means = x[:, idx].mean(axis=2)  # (n_strategy, m)
+        recentered = np.sqrt(n) * (boot_means - obs_means[:, None])
+        exceed += int((recentered.max(axis=0) >= obs_stat).sum())
+        done += m
+    return exceed / n_boot
