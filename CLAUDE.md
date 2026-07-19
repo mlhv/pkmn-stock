@@ -111,7 +111,7 @@ tcgcsv.com). Design spec: `docs/superpowers/specs/2026-06-09-pkmn-quant-design.m
   enable) is the substantive result, not a wall-clock win on this
   particular config. Full findings in `docs/research-findings-2026-07.md`
   (Plan 11 section).
-- Rigor pack complete on feat/rigor-pack (368 tests + 1 skipped): `research/
+- Rigor pack complete on feat/rigor-pack (369 tests + 1 skipped): `research/
   stats.py` — seeded stationary block bootstrap CIs, deflated Sharpe ratio,
   and White's Reality Check (one joint cross-correlation-preserving resample
   over the whole strategy zoo, not per-strategy); `pkmn evaluate` discovers
