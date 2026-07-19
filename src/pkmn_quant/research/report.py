@@ -51,6 +51,8 @@ def render_markdown(
             f"  (stationary block bootstrap: n_boot={ci.n_boot}, "
             f"mean block {ci.mean_block:g}d, seed {ci.seed})",
             "- CIs inherit the mark-smoothing Sharpe inflation noted above;",
-            "  treat the band as optimistic, not gospel.",
+            "  treat the band as optimistic, not gospel; fold-seam days",
+            "  (mark-carryover, no liquidation costs) are resampled as",
+            "  ordinary days by the bootstrap.",
         ]
     return "\n".join(lines) + "\n"

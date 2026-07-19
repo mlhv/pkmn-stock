@@ -745,7 +745,7 @@ def evaluate(
         help="Benchmark artifact dir containing equity.parquet; "
         "default: auto-locate data/results/buy-and-hold-sealed-*.",
     ),
-    n_boot: int = typer.Option(10_000, help="Bootstrap resamples."),
+    n_boot: int = typer.Option(10_000, min=1, help="Bootstrap resamples."),
     block: float = typer.Option(10.0, help="Mean bootstrap block length, days."),
     seed: int = typer.Option(42, help="Bootstrap seed (results are deterministic)."),
 ) -> None:

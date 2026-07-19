@@ -539,21 +539,24 @@ point-estimate OOS total return, and every 95% CI is wide — three
 while the two impact-on strategies (ml-ranker, sealed-accumulation) have
 CIs that straddle zero, meaning the bootstrap can't rule out a small positive
 return for either at the 95% level even though the point estimate is
-negative. All five deflated Sharpe ratios are far below the conventional
-0.5 "not distinguishable from a lucky monkey" threshold — the highest,
-ml-ranker at 0.010, means only about 1% of a matched population of random
-strategies with the same trial count and return variance would be expected
-to produce a Sharpe this high by chance alone; cost-aware-reversion and
-xs-momentum are effectively zero (0.001 and a value on the order of
-2x10^-7). The Reality Check p-value of 1.0000 is the headline number: it
-says that across the joint, cross-correlation-preserving bootstrap of all
-five strategies at once, the best-performing strategy in every single
-resample beat (or tied) the buy-and-hold benchmark's actual observed
-return zero times out of 10,000 — i.e. buy-and-hold's real result was never
-exceeded by the max of the five candidates under any resampled path. That is
-about as unambiguous a "nothing here beats buy-and-hold, and this isn't a
-multiple-testing artifact of screening five strategies at once" result as
-this framework can produce. It is consistent with, and sharpens, every
+negative. Deflated Sharpe is the probability the candidate's *true* Sharpe
+exceeds zero after correcting for having selected it out of the trial pool;
+all five are far below even the 0.5 coin-flip point, let alone the
+conventional 0.95 confidence bar — the highest, ml-ranker at 0.010, means
+only about a 1% probability that its edge is genuine (equivalently, about
+99% of a matched population of random strategies with the same trial count
+and return variance would be expected to produce a best Sharpe at least
+this high by chance alone); cost-aware-reversion and xs-momentum are
+effectively zero (0.001 and a value on the order of 2x10^-7). The Reality
+Check p-value of 1.0000 is the headline number: the statistic is
+sqrt(n) * max_k mean(excess_k), and the bootstrap distribution against
+which it's compared is recentered to be luck-only (zero-mean) per
+strategy. p = 1.0000 means the observed best excess return sat at or
+below every one of 10,000 luck-only (recentered) resample maxima — the
+best candidate underperforms even a typical best-of-five luck draw. That
+is about as unambiguous a "nothing here beats buy-and-hold, and this isn't
+a multiple-testing artifact of screening five strategies at once" result
+as this framework can produce. It is consistent with, and sharpens, every
 walk-forward re-run since Plan 9: once market impact is priced in, this
 data and this strategy zoo have not found anything that survives contact
 with buy-and-hold sealed.

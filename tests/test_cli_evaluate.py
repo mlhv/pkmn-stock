@@ -112,3 +112,10 @@ def test_evaluate_thin_overlap_errors(tmp_path: Path) -> None:
     result = run_eval(tmp_path)
     assert result.exit_code != 0
     assert "overlap" in result.output
+
+
+def test_evaluate_rejects_zero_n_boot(tmp_path: Path) -> None:
+    seed_everything(tmp_path)
+    result = CliRunner().invoke(app, ["evaluate", "--root", str(tmp_path), "--n-boot", "0"])
+    assert result.exit_code != 0
+    assert "Traceback" not in result.output

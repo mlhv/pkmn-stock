@@ -120,10 +120,13 @@ tcgcsv.com). Design spec: `docs/superpowers/specs/2026-06-09-pkmn-quant-design.m
   Real-data run (registry `20260719T145313Z-dd9f28`, 5 strategies vs
   `buy-and-hold-sealed-2024-03-01-2026-06-30`, 660 aligned days): every
   strategy's OOS total return point estimate is negative (-7.4% to -25.1%),
-  every deflated Sharpe is far under the 0.5 not-distinguishable-from-luck
-  threshold (0.000-0.010), and the joint Reality Check comes back p = 1.0000
-  — the best of the five candidates never beat buy-and-hold's actual return
-  in any of 10,000 resamples. Sharpens the Plan 9 conclusion: mixed cost
+  every deflated Sharpe (probability the true Sharpe exceeds zero after
+  selection correction) is far under even the 0.5 coin-flip point, let
+  alone the conventional 0.95 confidence bar (0.000-0.010), and the joint
+  Reality Check comes back p = 1.0000 — the observed best excess return sat
+  at or below every one of 10,000 luck-only (recentered) resample maxima,
+  i.e. the best candidate underperforms even a typical best-of-five luck
+  draw. Sharpens the Plan 9 conclusion: mixed cost
   regimes across the five artifacts (sealed-accumulation and ml-ranker are
   impact-on re-runs, the other three flat-cost) mean the comparison isn't
   perfectly apples-to-apples, but nothing here is close enough to positive
