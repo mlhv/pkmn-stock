@@ -454,13 +454,20 @@ def walkforward(
         workers=workers,
     )
 
+    from pkmn_quant.research.stats import bootstrap_ci, daily_returns_from_curve
+
+    daily = daily_returns_from_curve(result.stitched_curve)
+    stitched_ci = bootstrap_ci(daily, "total_return") if daily.size >= 2 else None
+
     run_dir = root / "data" / "results" / f"wf-{strategy}-{start}-{end}"
     if run_dir.exists():
         typer.echo(f"warning: overwriting existing results in {run_dir}", err=True)
     run_dir.mkdir(parents=True, exist_ok=True)
     result.stitched_curve.write_parquet(run_dir / "stitched_equity.parquet")
-    (run_dir / "report.md").write_text(render_markdown(result, strategy_name=strategy))
-    write_walkforward_json(run_dir, result, strategy_name=strategy)
+    (run_dir / "report.md").write_text(
+        render_markdown(result, strategy_name=strategy, ci=stitched_ci)
+    )
+    write_walkforward_json(run_dir, result, strategy_name=strategy, ci=stitched_ci)
 
     from pkmn_quant.research.runs import record_run
 

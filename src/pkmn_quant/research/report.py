@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pkmn_quant.research.stats import BootstrapCI
 from pkmn_quant.research.walkforward import WalkForwardResult
 
 
@@ -13,7 +14,9 @@ def format_params(params: dict[str, float | int]) -> str:
     return ", ".join(parts)
 
 
-def render_markdown(result: WalkForwardResult, strategy_name: str) -> str:
+def render_markdown(
+    result: WalkForwardResult, strategy_name: str, ci: BootstrapCI | None = None
+) -> str:
     lines = [
         f"# Walk-forward report: {strategy_name}",
         "",
@@ -38,4 +41,16 @@ def render_markdown(result: WalkForwardResult, strategy_name: str) -> str:
     lines += ["", "## Summary", ""]
     for key, value in result.summary.items():
         lines.append(f"- {key}: {value:.4f}")
+    if ci is not None:
+        lines += [
+            "",
+            "## Rigor",
+            "",
+            f"- stitched OOS total return {ci.point:.2%}, "
+            f"{ci.level:.0%} CI [{ci.lo:.2%}, {ci.hi:.2%}]",
+            f"  (stationary block bootstrap: n_boot={ci.n_boot}, "
+            f"mean block {ci.mean_block:g}d, seed {ci.seed})",
+            "- CIs inherit the mark-smoothing Sharpe inflation noted above;",
+            "  treat the band as optimistic, not gospel.",
+        ]
     return "\n".join(lines) + "\n"
