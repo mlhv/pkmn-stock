@@ -13,6 +13,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
+from pkmn_quant.research.stats import BootstrapCI
 from pkmn_quant.research.walkforward import WalkForwardResult
 
 Params = dict[str, float | int]
@@ -36,7 +37,12 @@ class WalkForwardRun:
     summary: dict[str, float]
 
 
-def write_walkforward_json(run_dir: Path, result: WalkForwardResult, strategy_name: str) -> None:
+def write_walkforward_json(
+    run_dir: Path,
+    result: WalkForwardResult,
+    strategy_name: str,
+    ci: BootstrapCI | None = None,
+) -> None:
     payload = {
         "strategy": strategy_name,
         "folds": [
@@ -53,6 +59,18 @@ def write_walkforward_json(run_dir: Path, result: WalkForwardResult, strategy_na
         ],
         "summary": result.summary,
     }
+    if ci is not None:
+        payload["rigor"] = {
+            "stitched_total_return_ci": {
+                "point": ci.point,
+                "lo": ci.lo,
+                "hi": ci.hi,
+                "level": ci.level,
+                "n_boot": ci.n_boot,
+                "mean_block": ci.mean_block,
+                "seed": ci.seed,
+            }
+        }
     (run_dir / "walkforward.json").write_text(json.dumps(payload, indent=2) + "\n")
 
 

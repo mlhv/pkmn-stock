@@ -500,6 +500,74 @@ run, which is what makes the bit-for-bit concurrent-optuna result above
 possible at all, even though the wall-clock payoff on this particular
 workload is close to zero.
 
+## Rigor pack (2026-07-19): CIs, deflated Sharpe, Reality Check
+
+`uv run pkmn evaluate` (registry run `20260719T145313Z-dd9f28`) discovered
+all five `wf-*` strategy artifacts in `data/results/` (skipping the shorter
+of the two ml-ranker artifacts, `wf-ml-ranker-2024-03-01-2024-09-01`, with a
+stderr note — the longer `wf-ml-ranker-2024-03-01-2026-06-30` was used),
+auto-located the `buy-and-hold-sealed-2024-03-01-2026-06-30` benchmark, and
+ran a seeded stationary block bootstrap (n_boot=10000, mean block 10 days,
+seed 42) over the 660 days common to all curves (2024-08-28..2026-06-18):
+
+| strategy | OOS total return | 95% CI | Sharpe (ann.) | deflated Sharpe |
+|---|---|---|---|---|
+| cost-aware-reversion | -10.18% | [-18.81%, -1.11%] | -1.68 | 0.001 |
+| dip-buyer | -9.02% | [-16.29%, -1.23%] | -1.26 | 0.005 |
+| ml-ranker | -7.52% | [-20.21%, 5.73%] | -0.73 | 0.010 |
+| sealed-accumulation | -7.36% | [-21.27%, 8.16%] | -0.80 | 0.008 |
+| xs-momentum | -25.08% | [-44.62%, -5.20%] | -2.22 | 0.000 |
+
+**White's Reality Check** (best strategy vs benchmark, jointly over all 5
+strategies): p = 1.0000.
+
+Caveat before reading anything else into this table: the five artifacts mix
+cost regimes. sealed-accumulation and ml-ranker are impact-on re-runs
+(`cost_model.impact_enabled: true` in their registry records, per Plan 9);
+dip-buyer, cost-aware-reversion, and xs-momentum are the earlier flat-cost
+artifacts. The three flat-cost strategies' OOS returns are directly
+comparable to each other but not, strictly, to the two impact-on ones or to
+the impact-on buy-and-hold benchmark this run auto-located — the
+comparison is the best available from what's on disk, not an apples-to-
+apples cost-model match. Re-running the flat-cost three under
+`--engine cpp` with impact on (as Plan 9/10 did for the other two) would
+remove this asterisk; that re-run is out of scope here.
+
+With that caveat stated: every one of the five strategies has a negative
+point-estimate OOS total return, and every 95% CI is wide — three
+(cost-aware-reversion, dip-buyer, xs-momentum) sit entirely below zero,
+while the two impact-on strategies (ml-ranker, sealed-accumulation) have
+CIs that straddle zero, meaning the bootstrap can't rule out a small positive
+return for either at the 95% level even though the point estimate is
+negative. Deflated Sharpe is the probability the candidate's *true* Sharpe
+exceeds zero after correcting for having selected it out of the trial pool;
+all five are far below even the 0.5 coin-flip point, let alone the
+conventional 0.95 confidence bar — the highest, ml-ranker at 0.010, means
+only about a 1% probability that its edge is genuine (equivalently, about
+99% of a matched population of random strategies with the same trial count
+and return variance would be expected to produce a best Sharpe at least
+this high by chance alone); cost-aware-reversion and xs-momentum are
+effectively zero (0.001 and a value on the order of 2x10^-7). The Reality
+Check p-value of 1.0000 is the headline number: the statistic is
+sqrt(n) * max_k mean(excess_k), and the bootstrap distribution against
+which it's compared is recentered to be luck-only (zero-mean) per
+strategy. p = 1.0000 means the observed best excess return sat at or
+below every one of 10,000 luck-only (recentered) resample maxima — the
+best candidate underperforms even a typical best-of-five luck draw. That
+is about as unambiguous a "nothing here beats buy-and-hold, and this isn't
+a multiple-testing artifact of screening five strategies at once" result
+as this framework can produce. It is consistent with, and sharpens, every
+walk-forward re-run since Plan 9: once market impact is priced in, this
+data and this strategy zoo have not found anything that survives contact
+with buy-and-hold sealed.
+
+Standing caveat, repeated because it applies to every figure in the table
+above: Sharpe (and anything derived from it — the CIs are on total return,
+not Sharpe, but the deflated Sharpe column is) inherits the mark-smoothing
+inflation documented throughout this file (thin markets, carry-forward
+marks). Treat the deflated Sharpe numbers as optimistic upper bounds, not
+calibrated probabilities.
+
 ## Method notes / caveats (repeat in README)
 
 - The stitched curve is OOS-only: each fold's parameters are frozen before

@@ -226,3 +226,41 @@ def test_walkforward_records_requested_and_resolved_workers(tmp_path: Path) -> N
         "workers": 0,
         "workers_resolved": min(n_folds, os.cpu_count() or 1),
     }
+
+
+def test_walkforward_report_carries_bootstrap_ci(tmp_path: Path) -> None:
+    """report.md gains the CI band + caveat; walkforward.json gains rigor."""
+    import json
+
+    seed_forty_days(tmp_path)
+    result = CliRunner().invoke(
+        app,
+        [
+            "walkforward",
+            "--strategy",
+            "sealed-accumulation",
+            "--start",
+            "2025-01-01",
+            "--end",
+            "2025-02-09",
+            "--is-days",
+            "10",
+            "--oos-days",
+            "10",
+            "--trials",
+            "2",
+            "--cash",
+            "1000",
+            "--root",
+            str(tmp_path),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    run_dir = next((tmp_path / "data" / "results").iterdir())
+    report = (run_dir / "report.md").read_text()
+    assert "95% CI" in report
+    assert "inherit" in report  # the mark-smoothing caveat extension
+    rigor = json.loads((run_dir / "walkforward.json").read_text())["rigor"]
+    ci = rigor["stitched_total_return_ci"]
+    assert ci["lo"] <= ci["point"] <= ci["hi"]
+    assert ci["seed"] == 42
