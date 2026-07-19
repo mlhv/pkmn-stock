@@ -1518,6 +1518,7 @@ dependencies = [
     { name = "polars" },
     { name = "py7zr" },
     { name = "scikit-learn" },
+    { name = "scipy" },
     { name = "typer" },
 ]
 
@@ -1545,6 +1546,7 @@ requires-dist = [
     { name = "polars", specifier = ">=1.10" },
     { name = "py7zr", specifier = ">=1.1.0" },
     { name = "scikit-learn", specifier = ">=1.5" },
+    { name = "scipy", specifier = ">=1.14" },
     { name = "typer", specifier = ">=0.12" },
 ]
 
