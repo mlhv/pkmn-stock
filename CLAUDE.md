@@ -3,7 +3,7 @@
 Algo-trading research system for Pokemon card prices (TCGplayer data via
 tcgcsv.com). Design spec: `docs/superpowers/specs/2026-06-09-pkmn-quant-design.md`.
 
-## Status (2026-07-18)
+## Status (2026-07-19)
 
 - Plans 1-4 merged to main. Plan 4 closed out the v1 spec: `walkforward.json`
   artifacts, `pkmn signals`, Streamlit dashboard, README.
@@ -111,6 +111,24 @@ tcgcsv.com). Design spec: `docs/superpowers/specs/2026-06-09-pkmn-quant-design.m
   enable) is the substantive result, not a wall-clock win on this
   particular config. Full findings in `docs/research-findings-2026-07.md`
   (Plan 11 section).
+- Rigor pack complete on feat/rigor-pack (368 tests + 1 skipped): `research/
+  stats.py` — seeded stationary block bootstrap CIs, deflated Sharpe ratio,
+  and White's Reality Check (one joint cross-correlation-preserving resample
+  over the whole strategy zoo, not per-strategy); `pkmn evaluate` discovers
+  every `wf-*` walkforward artifact plus the matching buy-and-hold benchmark
+  and writes a `data/results/evaluate-<date>/` report + registry record.
+  Real-data run (registry `20260719T145313Z-dd9f28`, 5 strategies vs
+  `buy-and-hold-sealed-2024-03-01-2026-06-30`, 660 aligned days): every
+  strategy's OOS total return point estimate is negative (-7.4% to -25.1%),
+  every deflated Sharpe is far under the 0.5 not-distinguishable-from-luck
+  threshold (0.000-0.010), and the joint Reality Check comes back p = 1.0000
+  — the best of the five candidates never beat buy-and-hold's actual return
+  in any of 10,000 resamples. Sharpens the Plan 9 conclusion: mixed cost
+  regimes across the five artifacts (sealed-accumulation and ml-ranker are
+  impact-on re-runs, the other three flat-cost) mean the comparison isn't
+  perfectly apples-to-apples, but nothing here is close enough to positive
+  for that caveat to matter. Full findings in `docs/research-
+  findings-2026-07.md` (Rigor pack section).
 
 ## Commands
 
@@ -132,6 +150,7 @@ uv run pkmn daily --skip-ingest                          # the loop, offline
 uv run pkmn daily --skip-ingest --paper                  # paper mode dry-run
 uv run pkmn runs list                                     # experiment registry: recorded runs
 uv run pkmn runs show <run-id>                             # full record for one run
+uv run pkmn evaluate                                     # cross-strategy rigor: CIs, DSR, Reality Check
 uv run pkmn backtest --start ... --end ... --no-impact    # flat-cost, skip market-impact model
 uv run pkmn backtest --start ... --end ... --engine cpp   # same result, native C++ engine
 cmake -S cpp -B cpp/build -DPKMN_BUILD_TESTS=ON && cmake --build cpp/build -j && ctest --test-dir cpp/build
@@ -165,6 +184,8 @@ uv.lock together).
   experiment registry — every backtest/walkforward appends a record (run_id,
   config hash, git SHA+dirty, data fingerprint, results) to
   `data/runs/registry.jsonl`; `pkmn runs list`/`show` inspect it.
+  `stats.py`: seeded bootstrap statistics (CIs, deflated Sharpe, Reality
+  Check) feeding `pkmn evaluate` and walkforward reports.
 - `src/pkmn_quant/live/` — `pkmn signals`: one on_bar at the latest warehouse
   date using the last fold's params from the latest walk-forward artifact;
   markdown + JSON reports that carry the strategy's OOS record.
