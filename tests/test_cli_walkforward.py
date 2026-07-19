@@ -186,3 +186,43 @@ def test_walkforward_negative_workers_clean_error(tmp_path: Path) -> None:
     assert result.exit_code != 0
     assert "workers" in result.output
     assert "Traceback" not in result.output
+
+
+def test_walkforward_records_requested_and_resolved_workers(tmp_path: Path) -> None:
+    """The registry runtime field carries both the requested workers value and
+    the thread count it resolved to (auto depends on fold count and machine)."""
+    import os
+
+    from pkmn_quant.research.folds import make_folds
+    from pkmn_quant.research.runs import load_runs
+
+    seed_forty_days(tmp_path)
+    result = CliRunner().invoke(
+        app,
+        [
+            "walkforward",
+            "--strategy",
+            "sealed-accumulation",
+            "--start",
+            "2025-01-01",
+            "--end",
+            "2025-02-09",
+            "--is-days",
+            "10",
+            "--oos-days",
+            "10",
+            "--trials",
+            "2",
+            "--cash",
+            "1000",
+            "--root",
+            str(tmp_path),
+        ],  # no --workers flag: CLI default 0 = auto
+    )
+    assert result.exit_code == 0, result.output
+    n_folds = len(make_folds(date(2025, 1, 1), date(2025, 2, 9), is_days=10, oos_days=10))
+    (record,) = load_runs(tmp_path)
+    assert record.runtime == {
+        "workers": 0,
+        "workers_resolved": min(n_folds, os.cpu_count() or 1),
+    }

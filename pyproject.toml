@@ -28,6 +28,7 @@ dev = [
     "pytest-cov>=6.0",
     "ruff>=0.8",
 ]
+viz = ["matplotlib>=3.9"]
 
 [build-system]
 requires = ["scikit-build-core>=0.10", "nanobind>=2.2"]

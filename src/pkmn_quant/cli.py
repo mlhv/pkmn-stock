@@ -404,7 +404,11 @@ def walkforward(
     from pkmn_quant.research.registry import REGISTRY
     from pkmn_quant.research.report import render_markdown
     from pkmn_quant.research.search import Params, SearchSpec, optimize_params
-    from pkmn_quant.research.walkforward import VALID_OBJECTIVE_METRICS, run_walkforward
+    from pkmn_quant.research.walkforward import (
+        VALID_OBJECTIVE_METRICS,
+        resolve_workers,
+        run_walkforward,
+    )
 
     entry = REGISTRY.get(strategy)
     if entry is None:
@@ -482,7 +486,12 @@ def walkforward(
         results=result.summary,
         artifact_path=run_dir,
         warehouse=wh,
-        runtime={"workers": workers},
+        runtime={
+            "workers": workers,
+            # len(result.folds) == n_folds in both run_walkforward branches
+            # (one FoldResult per fold), so this equals the run's own resolve.
+            "workers_resolved": resolve_workers(workers, len(result.folds)),
+        },
     )
     if run_id is not None:
         typer.echo(f"run recorded: {run_id}")

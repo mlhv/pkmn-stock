@@ -82,6 +82,20 @@ class WalkForwardResult:
     summary: dict[str, float]
 
 
+def resolve_workers(workers: int, n_folds: int) -> int:
+    """Resolved pool-size request for a given ``workers`` value.
+
+    ``0`` (auto) resolves to ``min(n_folds, os.cpu_count() or 1)``; any
+    explicit positive value is used as-is. The result is the size requested
+    from the executor, not a count of threads that ran: with one fold (or
+    zero) the serial path skips the executor entirely, and a pool larger
+    than the fold count idles the extra threads. Single source of the
+    formula for run_walkforward and for the CLI's registry ``runtime``
+    record. ``workers`` must already be validated non-negative.
+    """
+    return min(n_folds, os.cpu_count() or 1) if workers == 0 else workers
+
+
 def run_walkforward(
     warehouse: Warehouse,
     strategy_factory: StrategyFactory,
@@ -234,7 +248,7 @@ def run_walkforward(
             oos_curve=oos_result.equity_curve,
         )
 
-    n_workers = min(len(folds), os.cpu_count() or 1) if workers == 0 else workers
+    n_workers = resolve_workers(workers, len(folds))
     if n_workers <= 1 or len(folds) <= 1:
         # Plain serial loop: the pre-Plan-11 reference path, executor-free.
         fold_results = [_fold_worker(fold) for fold in folds]

@@ -137,6 +137,7 @@ uv run pkmn backtest --start ... --end ... --engine cpp   # same result, native 
 cmake -S cpp -B cpp/build -DPKMN_BUILD_TESTS=ON && cmake --build cpp/build -j && ctest --test-dir cpp/build
                              # C++ unit tests (Catch2), independent of pytest
 uv run python scripts/parity_full.py                      # full-data bit-for-bit acceptance, both engines
+uv run --group viz python scripts/render_readme_chart.py   # regenerate README hero chart from local artifacts
 ```
 
 All four gates must pass before every commit. CI runs them with

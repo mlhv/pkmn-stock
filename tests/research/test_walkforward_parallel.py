@@ -13,7 +13,12 @@ from pkmn_quant.config import Paths
 from pkmn_quant.data.warehouse import Warehouse
 from pkmn_quant.engine.costs import CostModel
 from pkmn_quant.engine.strategy import Strategy
-from pkmn_quant.research.walkforward import Params, WalkForwardResult, run_walkforward
+from pkmn_quant.research.walkforward import (
+    Params,
+    WalkForwardResult,
+    resolve_workers,
+    run_walkforward,
+)
 from pkmn_quant.strategies.dip_buyer import DipBuyer
 from tests.test_native_parity import START, seed_rich
 
@@ -140,3 +145,14 @@ def test_fold_worker_exception_propagates(tmp_path: Path) -> None:
             strategy_name="bridge-test",  # forces factory use -> raises
             workers=4,
         )
+
+
+def test_resolve_workers_auto_caps_at_folds_and_cores() -> None:
+    """0 = auto = min(n_folds, cores); explicit values pass through as-is."""
+    import os
+
+    cores = os.cpu_count() or 1
+    assert resolve_workers(0, n_folds=1) == 1
+    assert resolve_workers(0, n_folds=10_000) == cores
+    assert resolve_workers(1, n_folds=10_000) == 1
+    assert resolve_workers(7, n_folds=2) == 7  # executor may idle threads
