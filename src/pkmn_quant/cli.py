@@ -738,6 +738,184 @@ def daily(
 
 
 @app.command()
+def evaluate(
+    root: Path = typer.Option(Path("."), help="Project root containing data/results/."),
+    benchmark: Path | None = typer.Option(
+        None,
+        help="Benchmark artifact dir containing equity.parquet; "
+        "default: auto-locate data/results/buy-and-hold-sealed-*.",
+    ),
+    n_boot: int = typer.Option(10_000, help="Bootstrap resamples."),
+    block: float = typer.Option(10.0, help="Mean bootstrap block length, days."),
+    seed: int = typer.Option(42, help="Bootstrap seed (results are deterministic)."),
+) -> None:
+    """Cross-strategy rigor: bootstrap CIs, deflated Sharpe, Reality Check.
+
+    Reads every data/results/wf-*/ walk-forward artifact plus the
+    buy-and-hold benchmark curve, aligns them on common dates, and writes
+    an evaluate-<date>/ artifact with report.md + evaluate.json. The
+    Reality Check answers "did ANY strategy beat the benchmark, given how
+    many we tried"; deflated Sharpe corrects each Sharpe for that same
+    selection. Recorded in the experiment registry like every other run.
+    """
+    import numpy as np
+
+    from pkmn_quant.data.warehouse import Warehouse
+    from pkmn_quant.engine.metrics import TRADING_DAYS_PER_YEAR
+    from pkmn_quant.research.runs import record_run
+    from pkmn_quant.research.stats import (
+        bootstrap_ci,
+        daily_returns_from_curve,
+        deflated_sharpe,
+        whites_reality_check,
+    )
+
+    results_dir = root / "data" / "results"
+
+    def fail(msg: str) -> None:
+        typer.echo(f"error: {msg}", err=True)
+        raise typer.Exit(1)
+
+    # -- discover strategy artifacts (longest curve wins per strategy) --
+    curves: dict[str, pl.DataFrame] = {}
+    for d in sorted(results_dir.glob("wf-*")):
+        meta, parquet = d / "walkforward.json", d / "stitched_equity.parquet"
+        if not (meta.exists() and parquet.exists()):
+            continue
+        name = str(json.loads(meta.read_text())["strategy"])
+        frame = pl.read_parquet(parquet)
+        if frame.height < 2:
+            typer.echo(f"skipping {d.name}: curve too short", err=True)
+            continue
+        if name in curves and curves[name].height >= frame.height:
+            typer.echo(f"skipping {d.name}: shorter than another {name} artifact", err=True)
+            continue
+        curves[name] = frame
+    if not curves:
+        fail(f"no walk-forward artifacts found under {results_dir}/wf-*")
+    if len(curves) < 2:
+        fail(f"Reality Check needs >= 2 strategies, found {len(curves)}")
+
+    # -- benchmark --
+    if benchmark is None:
+        candidates = sorted(results_dir.glob("buy-and-hold-sealed-*"))
+        candidates = [c for c in candidates if (c / "equity.parquet").exists()]
+        if not candidates:
+            fail("no buy-and-hold-sealed-* benchmark artifact; pass --benchmark")
+        benchmark = max(candidates, key=lambda c: pl.read_parquet(c / "equity.parquet").height)
+    bench_frame = pl.read_parquet(benchmark / "equity.parquet")
+
+    # -- align on common dates --
+    common = set(bench_frame["date"].to_list())
+    for frame in curves.values():
+        common &= set(frame["date"].to_list())
+    if len(common) < 60:
+        fail(f"date overlap across artifacts is {len(common)} days; need >= 60")
+    dates = sorted(common)
+
+    def aligned_returns(frame: pl.DataFrame) -> np.ndarray:
+        return daily_returns_from_curve(frame.filter(pl.col("date").is_in(dates)))
+
+    bench_r = aligned_returns(bench_frame)
+    strat_r = {name: aligned_returns(frame) for name, frame in sorted(curves.items())}
+
+    # -- metrics --
+    ann = float(np.sqrt(TRADING_DAYS_PER_YEAR))
+    daily_sharpes = {
+        name: (0.0 if r.std(ddof=1) == 0.0 else float(r.mean()) / float(r.std(ddof=1)))
+        for name, r in strat_r.items()
+    }
+    zoo = list(daily_sharpes.values())
+    per_strategy: dict[str, dict[str, object]] = {}
+    for name, r in strat_r.items():
+        ci = bootstrap_ci(r, "total_return", n_boot=n_boot, mean_block=block, seed=seed)
+        dsr = deflated_sharpe(r, zoo)
+        per_strategy[name] = {
+            "total_return": ci.point,
+            "ci": {"point": ci.point, "lo": ci.lo, "hi": ci.hi, "level": ci.level},
+            "sharpe": daily_sharpes[name] * ann,
+            "dsr": None if np.isnan(dsr) else dsr,
+        }
+    excess = np.vstack([strat_r[name] - bench_r for name in sorted(strat_r)])
+    p_value = whites_reality_check(excess, n_boot=n_boot, mean_block=block, seed=seed)
+
+    # -- artifact --
+    out_dir = results_dir / f"evaluate-{dt.date.today().isoformat()}"
+    if out_dir.exists():
+        typer.echo(f"warning: overwriting existing results in {out_dir}", err=True)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "strategies": per_strategy,
+        "reality_check_p": p_value,
+        "benchmark": str(benchmark),
+        "n_days": len(dates),
+        "start": str(dates[0]),
+        "end": str(dates[-1]),
+        "params": {"n_boot": n_boot, "mean_block": block, "seed": seed},
+    }
+    (out_dir / "evaluate.json").write_text(json.dumps(payload, indent=2, default=str))
+
+    lines = [
+        "# Cross-strategy rigor report",
+        "",
+        f"{len(strat_r)} strategies vs benchmark `{benchmark.name}`, "
+        f"{len(dates)} aligned days ({dates[0]} .. {dates[-1]}).",
+        "",
+        "Sharpe (and therefore the CIs and deflated Sharpe built on these",
+        "returns) inherit the mark-smoothing inflation documented in every",
+        "walkforward report; treat all bands as optimistic.",
+        "",
+        "| strategy | OOS total return | 95% CI | Sharpe (ann.) | deflated Sharpe |",
+        "|---|---|---|---|---|",
+    ]
+    for name, s in per_strategy.items():
+        ci_d = s["ci"]
+        assert isinstance(ci_d, dict)
+        dsr_txt = "n/a (zero-variance returns)" if s["dsr"] is None else f"{s['dsr']:.3f}"
+        lines.append(
+            f"| {name} | {s['total_return']:.2%} "
+            f"| [{ci_d['lo']:.2%}, {ci_d['hi']:.2%}] "
+            f"| {s['sharpe']:.2f} | {dsr_txt} |"
+        )
+    lines += [
+        "",
+        f"**White's Reality Check** (best strategy vs benchmark, jointly over "
+        f"{len(strat_r)} strategies): p = {p_value:.4f}",
+        f"(stationary block bootstrap: n_boot={n_boot}, mean block {block:g}d, seed {seed})",
+        "",
+    ]
+    (out_dir / "report.md").write_text("\n".join(lines))
+
+    flat: dict[str, float] = {"reality_check_p": p_value}
+    for name, s in per_strategy.items():
+        flat[f"{name}_total_return"] = float(s["total_return"])  # type: ignore[arg-type]
+        if s["dsr"] is not None:
+            flat[f"{name}_dsr"] = float(s["dsr"])  # type: ignore[arg-type]
+    run_id = record_run(
+        root=root,
+        command="evaluate",
+        strategy=",".join(sorted(strat_r)),
+        config={
+            "command": "evaluate",
+            "strategies": sorted(strat_r),
+            "benchmark": str(benchmark),
+            "n_boot": n_boot,
+            "mean_block": block,
+            "seed": seed,
+            "start": str(dates[0]),
+            "end": str(dates[-1]),
+        },
+        results=flat,
+        artifact_path=out_dir,
+        warehouse=Warehouse(Paths(root=root)),
+    )
+    if run_id is not None:
+        typer.echo(f"run recorded: {run_id}")
+    typer.echo(f"Reality Check p = {p_value:.4f}")
+    typer.echo(f"results written to {out_dir}")
+
+
+@app.command()
 def version() -> None:
     """Print the pkmn-quant version."""
     from pkmn_quant import __version__
