@@ -17,6 +17,8 @@ from datetime import date, timedelta
 
 import polars as pl
 
+from pkmn_quant.engine.costs import CostModel
+
 ID_COLS = ["product_id", "sub_type"]
 # Order matters: the strategy feeds columns to sklearn in this order.
 FEATURE_COLS = [
@@ -191,3 +193,82 @@ def build_features_v2(history: pl.DataFrame, products: pl.DataFrame, as_of: date
         .drop("_high180", "_vol7")
     )
     return f.select(*ID_COLS, "market", "mid", "low", *FEATURE_COLS_V2)
+
+
+def cost_frac_expr(cm: CostModel) -> pl.Expr:
+    """Round-trip cost of one unit as a fraction of `market`, vectorized.
+
+    Identity with the scalar CostModel (pinned by test):
+      (buy_price + buy_impact(qty=1)) - (sell_proceeds - sell_impact(qty=1))
+      = 2*shipping + market*fee_rate + buy_impact + sell_impact
+    Impact terms are zero when disabled, quotes missing, or quotes crossed —
+    mirroring CostModel._impact, never inventing costs from missing data.
+    """
+    market = pl.col("market")
+    cap: pl.Expr = pl.lit(float(cm.fallback_max_qty))
+    for threshold, qty in reversed(cm.liquidity_tiers):
+        cap = pl.when(market < threshold).then(float(qty)).otherwise(cap)
+    buy_spread = pl.col("mid") - market
+    sell_spread = market - pl.col("low")
+    buy_imp = (
+        pl.when(pl.lit(cm.impact_enabled) & (buy_spread > 0))
+        .then(buy_spread / (2.0 * cap))
+        .otherwise(0.0)
+        .fill_null(0.0)
+    )
+    sell_imp = (
+        pl.when(pl.lit(cm.impact_enabled) & (sell_spread > 0))
+        .then(sell_spread / (2.0 * cap))
+        .otherwise(0.0)
+        .fill_null(0.0)
+    )
+    round_trip = 2.0 * cm.shipping_per_line + market * cm.fee_rate + buy_imp + sell_imp
+    return round_trip / market
+
+
+def build_training_frame_v2(
+    history: pl.DataFrame,
+    products: pl.DataFrame,
+    as_of: date,
+    horizon_days: int,
+    train_days: int,
+    stride_days: int,
+    cost_model: CostModel,
+) -> pl.DataFrame:
+    """v1's strided training frame with v2 features and NET labels:
+    label = horizon forward return - round-trip cost fraction at the
+    training date's own prices/quotes. Same leakage bound as v1."""
+    h = history.select("date", *ID_COLS, "market", "low", "mid").filter(pl.col("date") <= as_of)
+    frames: list[pl.DataFrame] = []
+    d = as_of - timedelta(days=horizon_days)
+    lower = as_of - timedelta(days=train_days)
+    while d >= lower:
+        feats = build_features_v2(h, products, d)
+        if feats.height:
+            label_price = _last_price_at_or_before(
+                h.select("date", *ID_COLS, "market"), d + timedelta(days=horizon_days), "_lbl"
+            )
+            frames.append(
+                feats.join(label_price, on=ID_COLS, how="left")
+                .with_columns(
+                    ((pl.col("_lbl") / pl.col("market") - 1.0) - cost_frac_expr(cost_model)).alias(
+                        "label"
+                    ),
+                    pl.lit(d, dtype=pl.Date).alias("date"),
+                )
+                .drop("_lbl")
+                .drop_nulls("label")
+            )
+        d -= timedelta(days=stride_days)
+    if not frames:
+        return pl.DataFrame(
+            schema={
+                "date": pl.Date,
+                "product_id": pl.Int64,
+                "sub_type": pl.Utf8,
+                "market": pl.Float64,
+                **{c: pl.Float64 for c in FEATURE_COLS_V2},
+                "label": pl.Float64,
+            }
+        )
+    return pl.concat(frames).select("date", *ID_COLS, "market", *FEATURE_COLS_V2, "label")

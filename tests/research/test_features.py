@@ -274,3 +274,74 @@ def test_v2_carries_v1_columns_unchanged() -> None:
     for c in FEATURE_COLS:
         a, b = joined[c].to_list(), joined[f"{c}_v2"].to_list()
         assert a == b, c
+
+
+def test_cost_frac_expr_matches_scalar_cost_model() -> None:
+    """The vectorized label cost must equal the scalar CostModel arithmetic:
+    cost = (buy_price + buy_impact) - (sell_proceeds - sell_impact), as a
+    fraction of market, for one unit. Swept across tier edges and quote
+    shapes (present / missing / crossed)."""
+    from pkmn_quant.engine.costs import CostModel
+    from pkmn_quant.research.features import cost_frac_expr
+
+    cm = CostModel(impact_enabled=True)
+    cases = []
+    for market in (0.5, 4.99, 5.0, 49.99, 50.0, 199.99, 200.0, 350.0):
+        for mid, low in (
+            (market * 1.05, market * 0.9),  # normal quotes
+            (None, None),  # missing
+            (market * 0.95, market * 1.1),  # crossed both ways -> zero impact
+        ):
+            cases.append({"market": market, "mid": mid, "low": low})
+    frame = pl.DataFrame(cases).with_columns(cost_frac_expr(cm).alias("frac"))
+    for row in frame.iter_rows(named=True):
+        m, mid, low = row["market"], row["mid"], row["low"]
+        scalar = (
+            (cm.buy_price(m) + cm.buy_impact(m, mid, 1))
+            - (cm.sell_proceeds(m) - cm.sell_impact(m, low, 1))
+        ) / m
+        assert abs(row["frac"] - scalar) < 1e-12, (m, mid, low)
+
+
+def test_cost_frac_hand_derivation() -> None:
+    """market=10, mid=10.5, low=9, defaults (fee 12.75%, ship $1, cap 8 for
+    5<=p<50, impact on): cost = 2*1 + 10*0.1275 + (10.5-10)/16 + (10-9)/16
+    = 2 + 1.275 + 0.03125 + 0.0625 = 3.36875; frac = 0.336875."""
+    from pkmn_quant.engine.costs import CostModel
+    from pkmn_quant.research.features import cost_frac_expr
+
+    f = pl.DataFrame([{"market": 10.0, "mid": 10.5, "low": 9.0}]).with_columns(
+        cost_frac_expr(CostModel(impact_enabled=True)).alias("frac")
+    )
+    assert abs(f["frac"][0] - 0.336875) < 1e-12
+
+
+def test_training_frame_v2_labels_are_net() -> None:
+    """label_v2 == v1 gross label minus that row's cost fraction."""
+    from pkmn_quant.engine.costs import CostModel
+    from pkmn_quant.research.features import (
+        build_training_frame,
+        build_training_frame_v2,
+        cost_frac_expr,
+    )
+
+    cm = CostModel(impact_enabled=True)
+    kw = dict(as_of=date(2025, 2, 9), horizon_days=10, train_days=30, stride_days=10)
+    v1 = build_training_frame(_hist_v2().select("date", *ID_COLS, "market"), _products_v2(), **kw)
+    v2 = build_training_frame_v2(_hist_v2(), _products_v2(), cost_model=cm, **kw)
+    j = v1.join(v2, on=["date", *ID_COLS], suffix="_v2")
+    assert j.height > 0
+    costs = (
+        _hist_v2()
+        .join(j.select("date", *ID_COLS), on=["date", *ID_COLS], how="semi")
+        .with_columns(cost_frac_expr(cm).alias("frac"))
+        .sort("date", "product_id")
+    )
+    jj = j.sort("date", "product_id")
+    for gross, net, frac in zip(
+        jj["label"].to_list(),
+        jj["label_v2"].to_list(),
+        costs["frac"].to_list(),
+        strict=True,
+    ):
+        assert abs(net - (gross - frac)) < 1e-12
