@@ -75,3 +75,44 @@ def test_select_config_falls_back_on_thin_validation() -> None:
 def test_select_config_falls_back_on_thin_training() -> None:
     panel = _panel(30, 1, noise=0.01, seed=13)  # ~26 train rows < min_train_rows
     assert select_config(panel, ["f1", "f2"], horizon_days=7) == DEFAULT_GRID[0]
+
+
+def test_select_config_keeps_best_when_later_config_unscorable(monkeypatch) -> None:
+    """A later grid entry that scores zero validation dates (e.g. constant
+    predictions -> NaN Spearman everywhere) must not discard an earlier,
+    better-scoring config: it should just be skipped."""
+    panel = _panel(30, 25, noise=0.01, seed=21)
+    _, val_dates = purged_date_split(panel["date"].to_list(), horizon_days=7)
+    va = panel.filter(pl.col("date").is_in(val_dates))
+    true_val_labels = va["label"].to_numpy()
+
+    class _StubModel:
+        def __init__(self, kind: str) -> None:
+            self.kind = kind
+
+        def fit(self, X: np.ndarray, y: np.ndarray) -> None:
+            pass
+
+        def predict(self, X: np.ndarray) -> np.ndarray:
+            n = X.shape[0]
+            if self.kind == "weak":
+                return np.random.default_rng(0).normal(0, 1, n)
+            if self.kind == "perfect":
+                return true_val_labels[:n]
+            return np.zeros(n)  # constant prediction -> NaN Spearman everywhere
+
+    def _fake_make_model(config: ModelConfig, min_samples_leaf: int) -> _StubModel:
+        if config == DEFAULT_GRID[0]:
+            return _StubModel("weak")
+        if config == DEFAULT_GRID[1]:
+            return _StubModel("perfect")
+        return _StubModel("constant")
+
+    monkeypatch.setattr("pkmn_quant.research.purged._make_model", _fake_make_model)
+
+    result = select_config(panel, ["f1", "f2"], horizon_days=7)
+    assert result == DEFAULT_GRID[1]
+
+
+def test_purged_date_split_empty_input() -> None:
+    assert purged_date_split([], horizon_days=30) == ([], [])

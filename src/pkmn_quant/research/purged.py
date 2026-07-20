@@ -57,6 +57,8 @@ def purged_date_split(
     no train label window overlaps validation. Empty train signals the
     caller to skip selection."""
     ds = sorted(set(dates))
+    if not ds:
+        return [], []
     n_val = max(1, round(len(ds) * val_frac))
     val = ds[-n_val:]
     cutoff = val[0] - timedelta(days=horizon_days)
@@ -104,8 +106,8 @@ def select_config(
             if rho == rho:  # not NaN (zero-variance cross-sections)
                 scores.append(float(rho))
         if not scores:
-            return grid[0]  # nothing scorable: selection is meaningless
+            continue  # this config is unscorable: skip it, keep best-so-far
         score = sum(scores) / len(scores)
         if score > best_score:  # strictly greater: ties keep the earlier entry
             best, best_score = config, score
-    return best
+    return best if best_score > float("-inf") else grid[0]
