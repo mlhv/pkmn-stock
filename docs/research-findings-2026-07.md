@@ -568,6 +568,138 @@ inflation documented throughout this file (thin markets, carry-forward
 marks). Treat the deflated Sharpe numbers as optimistic upper bounds, not
 calibrated probabilities.
 
+## ml-ranker-v2 (2026-07-20): friction features, net-of-cost labels, purged validation
+
+**Trial accounting:** one declared walkforward, no re-rolls — `uv run pkmn
+walkforward --strategy ml-ranker-v2 --start 2024-03-01 --end 2026-06-30
+--trials 15` (registry run `20260720T033422Z-858699`, artifact
+`data/results/wf-ml-ranker-v2-2024-03-01-2026-06-30/`). The evaluate step
+below is a separate, non-search run over the resulting artifact (registry
+run `20260720T034508Z-241dd9`).
+
+### Walk-forward result
+
+11 folds, same schedule as every other artifact in this file (IS 180d / OOS
+60d / warmup 120d, impact model on):
+
+| metric | value |
+|---|---|
+| stitched_total_return | -14.72% |
+| stitched_cagr | -8.44% |
+| stitched_max_drawdown | -25.87% |
+| stitched_sharpe | -0.58 |
+| stitched_sortino | -0.64 |
+| stitched_calmar | -0.33 |
+| is_total_return_mean | -3.95% |
+| oos_total_return_mean | -1.39% |
+| is_cagr_mean | -7.61% |
+| oos_cagr_mean | -7.02% |
+| overfitting_gap (is_cagr_mean - oos_cagr_mean) | -0.58 pts |
+
+Full per-fold IS/OOS windows and the selected `(horizon_days,
+rebalance_days, top_n, train_days, min_price, min_samples_leaf)` for each of
+the 11 folds are in
+`data/results/wf-ml-ranker-v2-2024-03-01-2026-06-30/report.md`; not
+reproduced here beyond the summary table above.
+
+### Full-zoo evaluate (all six strategies + benchmark)
+
+`uv run pkmn evaluate` (registry run `20260720T034508Z-241dd9`), the same
+seeded stationary block bootstrap as the Rigor pack section above
+(n_boot=10000, mean block 10 days, seed 42), 660 aligned days
+(2024-08-28..2026-06-18), benchmark `buy-and-hold-sealed-2024-03-01-
+2026-06-30`:
+
+| strategy | OOS total return | 95% CI | Sharpe (ann.) | deflated Sharpe |
+|---|---|---|---|---|
+| cost-aware-reversion | -10.18% | [-18.81%, -1.11%] | -1.68 | 0.000 |
+| dip-buyer | -9.02% | [-16.29%, -1.23%] | -1.26 | 0.004 |
+| ml-ranker | -7.52% | [-20.21%, 5.73%] | -0.73 | 0.007 |
+| ml-ranker-v2 | -14.72% | [-43.83%, 25.59%] | -0.58 | 0.017 |
+| sealed-accumulation | -7.36% | [-21.27%, 8.16%] | -0.80 | 0.005 |
+| xs-momentum | -25.08% | [-44.62%, -5.20%] | -2.22 | 0.000 |
+
+**White's Reality Check** (best strategy vs benchmark, jointly over all 6
+strategies): p = 1.0000 — unchanged in substance from the 5-strategy Rigor
+pack run (also 1.0000); adding ml-ranker-v2 to the zoo does not move the
+joint verdict, because its point estimate is the worst of the six impact-
+priced/mixed-regime active strategies, not the best.
+
+Small deflated-Sharpe point-estimate changes versus the Rigor pack table
+above (e.g. ml-ranker 0.010 → 0.007) come from re-running the same seeded
+bootstrap over a 6-strategy panel instead of 5 (the joint resample draws a
+different max-of-K path even with the same seed and same per-strategy
+returns); they are not evidence of anything strategy-specific and are well
+within the width implied by the CIs above.
+
+### Ablation: v2 vs v1, from the actual numbers
+
+Both are impact-on artifacts, so this is an apples-to-apples comparison
+(unlike the mixed-regime caveat that applies to the flat-cost three below).
+
+| | v1 (`ml-ranker`, impact-on) | v2 (`ml-ranker-v2`) |
+|---|---|---|
+| stitched OOS total return | -7.52% | -14.72% |
+| is_cagr_mean | -3.39% | -7.61% |
+| oos_cagr_mean | -3.72% | -7.02% |
+| overfitting_gap (IS - OOS, CAGR pts) | +0.33 pts | -0.58 pts |
+| deflated Sharpe | 0.007-0.010\* | 0.017 |
+
+\* 0.010 in the 5-strategy Rigor pack run, 0.007 in the 6-strategy evaluate
+run above — see the resample-path note directly above; not a real change in
+v1's evaluation, just panel-size noise in the same seeded bootstrap.
+
+**v2 is worse, plainly.** Stitched OOS total return nearly doubles in
+magnitude on the loss side (-7.52% to -14.72%), and OOS CAGR mean roughly
+doubles too (-3.72% to -7.02%). Friction-aware features, net-of-cost
+labels, and purged validation were built to remove a specific failure mode
+(the model chasing gross moves that don't clear round-trip cost, validated
+on a leaky random split) — they did that, but the resulting model finds
+even less of an exploitable edge than v1 did, not more. This is a negative
+result for the v2 hypothesis and should be reported as such, not spun.
+
+**The methodologically interesting finding is the overfitting gap, not the
+return.** v1's impact-on gap was already small in absolute terms (+0.33
+CAGR-pts) but, as the Plan 9 section above documents, that smallness was
+itself misleading: IS mean CAGR was negative (-3.39%) only because the
+whole regime had gone negative under impact, not because the model had
+stopped fooling itself in-sample relative to OOS. v2's gap is smaller
+still and has flipped sign (-0.58 pts, i.e. OOS mean CAGR is very slightly
+better than IS mean CAGR, not worse) — and this time in-sample is
+unambiguously negative and of comparable magnitude to OOS (-7.61% vs
+-7.02%), not artificially depressed by a regime-wide flip. In other words,
+the net-of-cost labels and purged, embargoed validation appear to have done
+their intended job of removing in-sample self-deception: the model is no
+longer telling itself a rosier story in-sample than it can deliver
+out-of-sample. That is a real methodological improvement in honesty of
+the validation, cleanly scoped: it says nothing about whether the
+underlying features carry a tradeable edge, and on this data they do not —
+v2's OOS numbers are worse than v1's on every return metric above. A
+validation procedure that stops the model lying to itself is not the same
+thing as a validation procedure that finds a strategy that works, and this
+run separates those two claims cleanly: honest gap, still no edge.
+
+### Standing caveats (repeated)
+
+- Sharpe/Sortino/Calmar are inflated by mark smoothing (thin markets,
+  carry-forward marks); compare strategies to each other and to
+  buy-and-hold only, not to equities benchmarks.
+- 15 Optuna trials/fold is closer to random search than full Bayesian
+  optimization; a wider search could shift these numbers in either
+  direction.
+- **Mixed-regime caveat, updated:** ml-ranker-v2 and ml-ranker (v1) are both
+  impact-on artifacts now (v1 since Plan 9, v2 by construction — its
+  `label_cost` and the engine's cost model both default to impact-on), so
+  the v1/v2 ablation above is directly comparable. sealed-accumulation is
+  also impact-on (Plan 9). dip-buyer, cost-aware-reversion, and xs-momentum
+  in the full-zoo table above remain flat-cost artifacts from before Plan
+  9 — those three are not directly comparable to the three impact-on
+  strategies or to the impact-on buy-and-hold benchmark; see the Rigor pack
+  section above for the full statement of this caveat.
+- The deflated Sharpe and Reality Check statistics inherit the mark-
+  smoothing Sharpe inflation noted above; treat them as optimistic upper
+  bounds, not calibrated probabilities.
+
 ## Method notes / caveats (repeat in README)
 
 - The stitched curve is OOS-only: each fold's parameters are frozen before
