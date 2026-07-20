@@ -10,6 +10,7 @@ def test_registry_has_all_tunable_strategies() -> None:
         "xs-momentum",
         "cost-aware-reversion",
         "ml-ranker",
+        "ml-ranker-v2",
     }
 
 
