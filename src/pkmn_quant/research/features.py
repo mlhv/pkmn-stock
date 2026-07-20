@@ -128,3 +128,66 @@ def build_training_frame(
             }
         )
     return pl.concat(frames).select("date", *ID_COLS, "market", *FEATURE_COLS, "label")
+
+
+# ---- v2 (ml-ranker-v2): friction-aware feature set -------------------------
+# v1 (FEATURE_COLS/build_features/build_training_frame) is frozen for
+# reproducibility; v2 appends 8 leakage-bounded features. mid/low are carried
+# through the output for the net-of-cost label, but are NOT model inputs.
+
+FEATURE_COLS_V2 = [
+    *FEATURE_COLS,
+    "spread_frac",
+    "mid_gap",
+    "spread_30d_mean",
+    "ret_accel",
+    "drawdown_180d",
+    "vol_ratio",
+    "xs_rank_ret_30d",
+    "days_priced",
+]
+
+
+def build_features_v2(history: pl.DataFrame, products: pl.DataFrame, as_of: date) -> pl.DataFrame:
+    """One row per asset printing on as_of; ID_COLS + market/mid/low +
+    FEATURE_COLS_V2. Same leakage rule as v1: reads only rows <= as_of."""
+    h = history.select("date", *ID_COLS, "market", "low", "mid").filter(pl.col("date") <= as_of)
+    base = build_features(h.select("date", *ID_COLS, "market"), products, as_of)
+    today = h.filter(pl.col("date") == as_of).select(*ID_COLS, "low", "mid")
+    f = base.join(today, on=ID_COLS, how="left").with_columns(
+        ((pl.col("market") - pl.col("low")) / pl.col("market")).alias("spread_frac"),
+        ((pl.col("market") - pl.col("mid")) / pl.col("market")).alias("mid_gap"),
+        (pl.col("ret_7d") - pl.col("ret_30d")).alias("ret_accel"),
+    )
+    spread30 = (
+        h.filter(pl.col("date") > as_of - timedelta(days=30))
+        .group_by(ID_COLS)
+        .agg(
+            ((pl.col("market") - pl.col("low")) / pl.col("market")).mean().alias("spread_30d_mean")
+        )
+    )
+    high180 = (
+        h.filter(pl.col("date") > as_of - timedelta(days=180))
+        .group_by(ID_COLS)
+        .agg(pl.col("market").max().alias("_high180"))
+    )
+    vol7 = (
+        h.filter(pl.col("date") > as_of - timedelta(days=7))
+        .sort("date")
+        .group_by(ID_COLS)
+        .agg(pl.col("market").pct_change().std().alias("_vol7"))
+    )
+    counts = h.group_by(ID_COLS).agg(pl.len().cast(pl.Float64).alias("days_priced"))
+    f = (
+        f.join(spread30, on=ID_COLS, how="left")
+        .join(high180, on=ID_COLS, how="left")
+        .join(vol7, on=ID_COLS, how="left")
+        .join(counts, on=ID_COLS, how="left")
+        .with_columns(
+            (1.0 - pl.col("market") / pl.col("_high180")).alias("drawdown_180d"),
+            (pl.col("_vol7") / pl.col("vol_30d")).alias("vol_ratio"),
+            (pl.col("ret_30d").rank() / pl.col("ret_30d").count()).alias("xs_rank_ret_30d"),
+        )
+        .drop("_high180", "_vol7")
+    )
+    return f.select(*ID_COLS, "market", "mid", "low", *FEATURE_COLS_V2)
