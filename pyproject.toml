@@ -30,6 +30,7 @@ dev = [
     "ruff>=0.8",
 ]
 viz = ["matplotlib>=3.9"]
+api = ["fastapi>=0.115", "uvicorn>=0.32", "httpx>=0.27"]
 
 [build-system]
 requires = ["scikit-build-core>=0.10", "nanobind>=2.2"]
