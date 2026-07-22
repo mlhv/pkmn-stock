@@ -654,7 +654,9 @@ magnitude on the loss side (-7.52% to -14.72%), and OOS CAGR mean roughly
 doubles too (-3.72% to -7.02%). Friction-aware features, net-of-cost
 labels, and purged validation were built to remove a specific failure mode
 (the model chasing gross moves that don't clear round-trip cost, validated
-on a leaky random split) — they did that, but the resulting model finds
+on a leaky random split) — the labels and the `early_stopping=False` closure
+did that (the embargoed grid selection itself stayed inert at the deployed
+params — see the mechanism-honesty note below), but the resulting model finds
 even less of an exploitable edge than v1 did, not more. This is a negative
 result for the v2 hypothesis and should be reported as such, not spun.
 
