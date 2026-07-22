@@ -145,9 +145,15 @@ tcgcsv.com). Design spec: `docs/superpowers/specs/2026-06-09-pkmn-quant-design.m
   mean) is essentially zero and slightly negative (-0.58 CAGR-pts, vs v1's
   +0.33), and this time IS is honestly negative too (-7.61% vs OOS -7.02%)
   rather than the regime-wide-collapse artifact that made v1's small gap
-  misleading — the net-of-cost labels and purged validation appear to have
-  removed in-sample self-deception, but the resulting model still carries
-  no positive edge. Full-zoo `pkmn evaluate` now covers six strategies
+  misleading — the net-of-cost labels and the unconditional
+  `early_stopping=False` appear to have removed in-sample self-deception,
+  but the resulting model still carries no positive edge. Mechanism caveat:
+  the in-loop grid selection was inert in this run — at the per-fold horizons
+  (>= 23d) an OOS rebalance yields too few strided validation dates to clear
+  `min_val_dates`, so `select_config` fell back to `grid[0]` (max_iter=100,
+  lr=0.1) at every OOS rebalance; the measured result ablates the features +
+  net labels + early-stopping closure at that fixed config, and exercising
+  the selection at real scale is a Plan B item. Full-zoo `pkmn evaluate` now covers six strategies
   (registry `20260720T034508Z-241dd9`): joint White's Reality Check
   unchanged at p = 1.0000; ml-ranker-v2's deflated Sharpe (0.017) is the
   highest of the six but still far below the 0.5 coin-flip point. Negative/

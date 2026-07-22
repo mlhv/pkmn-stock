@@ -78,7 +78,14 @@ def select_config(
 ) -> ModelConfig:
     """Pick the grid config with the best mean per-date Spearman rank
     correlation on the purged validation split; grid[0] whenever the data
-    is too thin to validate honestly (never crash, never a random split)."""
+    is too thin to validate honestly (never crash, never a random split).
+
+    ``usable`` columns are re-derived here over the TRAIN split only, so a
+    column that is all-null in the older train split but populated on recent
+    dates is scored out of selection even though the caller's own final fit
+    may include it (callers pass their own usable set for the deployed fit).
+    Deterministic and leakage-free; only the config choice, never the fit,
+    is affected by the divergence."""
     from scipy.stats import spearmanr
 
     train_dates, val_dates = purged_date_split(training["date"].to_list(), horizon_days)
@@ -99,7 +106,7 @@ def select_config(
         model.fit(tr.select(usable).to_numpy(), tr["label"].to_numpy())
         preds = va.with_columns(pl.Series("_pred", model.predict(va.select(usable).to_numpy())))
         scores: list[float] = []
-        for _, day_df in preds.group_by("date"):
+        for _, day_df in preds.group_by("date", maintain_order=True):
             if day_df.height < 3:
                 continue
             rho = spearmanr(day_df["_pred"].to_numpy(), day_df["label"].to_numpy()).statistic

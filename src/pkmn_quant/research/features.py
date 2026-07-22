@@ -187,6 +187,11 @@ def build_features_v2(history: pl.DataFrame, products: pl.DataFrame, as_of: date
         .join(counts, on=ID_COLS, how="left")
         .with_columns(
             (1.0 - pl.col("market") / pl.col("_high180")).alias("drawdown_180d"),
+            # 0.0/0.0 (a 30-day-flat asset) yields NaN, not null, in polars. NaN
+            # evades the null_count-based all-null guard in ml_ranker_v2 (the
+            # sklearn 1.9 all-NaN binner protection from Plan 8). Unreachable in
+            # practice — needs EVERY training row 30-day-flat — so tracked as
+            # backlog rather than normalized to null here.
             (pl.col("_vol7") / pl.col("vol_30d")).alias("vol_ratio"),
             (pl.col("ret_30d").rank() / pl.col("ret_30d").count()).alias("xs_rank_ret_30d"),
         )

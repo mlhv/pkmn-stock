@@ -668,7 +668,9 @@ still and has flipped sign (-0.58 pts, i.e. OOS mean CAGR is very slightly
 better than IS mean CAGR, not worse) — and this time in-sample is
 unambiguously negative and of comparable magnitude to OOS (-7.61% vs
 -7.02%), not artificially depressed by a regime-wide flip. In other words,
-the net-of-cost labels and purged, embargoed validation appear to have done
+the net-of-cost labels and the unconditional `early_stopping=False` (which
+closes sklearn's silent random-split leak that auto-activates above 10,000
+samples — every v2 training frame clears that line) appear to have done
 their intended job of removing in-sample self-deception: the model is no
 longer telling itself a rosier story in-sample than it can deliver
 out-of-sample. That is a real methodological improvement in honesty of
@@ -678,6 +680,23 @@ v2's OOS numbers are worse than v1's on every return metric above. A
 validation procedure that stops the model lying to itself is not the same
 thing as a validation procedure that finds a strategy that works, and this
 run separates those two claims cleanly: honest gap, still no edge.
+
+**What actually operated in this run (mechanism honesty).** The measured
+-14.72% is an ablation of {v2 features + net-of-cost labels + unconditional
+`early_stopping=False`} at the fixed default config `grid[0] =
+ModelConfig(max_iter=100, learning_rate=0.1)` — NOT of the in-loop grid
+selection, which was inert here. At the per-fold selected parameters
+(every fold chose horizon >= 23 days, with stride = horizon), an OOS-segment
+rebalance sees at most ~180 days of history, yielding only 2-7 distinct
+strided training dates; the purged split's 15% validation slice then rounds
+to a single validation date, below `min_val_dates=2`, so `select_config`
+returned its thin-data fallback `grid[0]` at every OOS rebalance of all 11
+folds (fallback by design — never a random split). The grid search could
+only have engaged inside deep-history in-sample trial evaluations with small
+horizons; it never chose a config for a deployed OOS bar. This is a known
+limitation for Plan B: exercising the selection at real scale needs a deeper
+warmup, smaller horizons, or a relaxed `min_val_dates` / finer stride so
+enough validation dates survive the embargo.
 
 ### Standing caveats (repeated)
 
