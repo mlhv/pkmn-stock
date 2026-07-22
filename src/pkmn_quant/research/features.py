@@ -17,6 +17,8 @@ from datetime import date, timedelta
 
 import polars as pl
 
+from pkmn_quant.engine.costs import CostModel
+
 ID_COLS = ["product_id", "sub_type"]
 # Order matters: the strategy feeds columns to sklearn in this order.
 FEATURE_COLS = [
@@ -128,3 +130,150 @@ def build_training_frame(
             }
         )
     return pl.concat(frames).select("date", *ID_COLS, "market", *FEATURE_COLS, "label")
+
+
+# ---- v2 (ml-ranker-v2): friction-aware feature set -------------------------
+# v1 (FEATURE_COLS/build_features/build_training_frame) is frozen for
+# reproducibility; v2 appends 8 leakage-bounded features. mid/low are carried
+# through the output for the net-of-cost label, but are NOT model inputs.
+
+FEATURE_COLS_V2 = [
+    *FEATURE_COLS,
+    "spread_frac",
+    "mid_gap",
+    "spread_30d_mean",
+    "ret_accel",
+    "drawdown_180d",
+    "vol_ratio",
+    "xs_rank_ret_30d",
+    "days_priced",
+]
+
+
+def build_features_v2(history: pl.DataFrame, products: pl.DataFrame, as_of: date) -> pl.DataFrame:
+    """One row per asset printing on as_of; ID_COLS + market/mid/low +
+    FEATURE_COLS_V2. Same leakage rule as v1: reads only rows <= as_of."""
+    h = history.select("date", *ID_COLS, "market", "low", "mid").filter(pl.col("date") <= as_of)
+    base = build_features(h.select("date", *ID_COLS, "market"), products, as_of)
+    today = h.filter(pl.col("date") == as_of).select(*ID_COLS, "low", "mid")
+    f = base.join(today, on=ID_COLS, how="left").with_columns(
+        ((pl.col("market") - pl.col("low")) / pl.col("market")).alias("spread_frac"),
+        ((pl.col("market") - pl.col("mid")) / pl.col("market")).alias("mid_gap"),
+        (pl.col("ret_7d") - pl.col("ret_30d")).alias("ret_accel"),
+    )
+    spread30 = (
+        h.filter(pl.col("date") > as_of - timedelta(days=30))
+        .group_by(ID_COLS)
+        .agg(
+            ((pl.col("market") - pl.col("low")) / pl.col("market")).mean().alias("spread_30d_mean")
+        )
+    )
+    high180 = (
+        h.filter(pl.col("date") > as_of - timedelta(days=180))
+        .group_by(ID_COLS)
+        .agg(pl.col("market").max().alias("_high180"))
+    )
+    vol7 = (
+        h.filter(pl.col("date") > as_of - timedelta(days=7))
+        .sort("date")
+        .group_by(ID_COLS)
+        .agg(pl.col("market").pct_change().std().alias("_vol7"))
+    )
+    counts = h.group_by(ID_COLS).agg(pl.len().cast(pl.Float64).alias("days_priced"))
+    f = (
+        f.join(spread30, on=ID_COLS, how="left")
+        .join(high180, on=ID_COLS, how="left")
+        .join(vol7, on=ID_COLS, how="left")
+        .join(counts, on=ID_COLS, how="left")
+        .with_columns(
+            (1.0 - pl.col("market") / pl.col("_high180")).alias("drawdown_180d"),
+            # 0.0/0.0 (a 30-day-flat asset) yields NaN, not null, in polars. NaN
+            # evades the null_count-based all-null guard in ml_ranker_v2 (the
+            # sklearn 1.9 all-NaN binner protection from Plan 8). Unreachable in
+            # practice — needs EVERY training row 30-day-flat — so tracked as
+            # backlog rather than normalized to null here.
+            (pl.col("_vol7") / pl.col("vol_30d")).alias("vol_ratio"),
+            (pl.col("ret_30d").rank() / pl.col("ret_30d").count()).alias("xs_rank_ret_30d"),
+        )
+        .drop("_high180", "_vol7")
+    )
+    return f.select(*ID_COLS, "market", "mid", "low", *FEATURE_COLS_V2)
+
+
+def cost_frac_expr(cm: CostModel) -> pl.Expr:
+    """Round-trip cost of one unit as a fraction of `market`, vectorized.
+
+    Identity with the scalar CostModel (pinned by test):
+      (buy_price + buy_impact(qty=1)) - (sell_proceeds - sell_impact(qty=1))
+      = 2*shipping + market*fee_rate + buy_impact + sell_impact
+    Impact terms are zero when disabled, quotes missing, or quotes crossed —
+    mirroring CostModel._impact, never inventing costs from missing data.
+    """
+    market = pl.col("market")
+    cap: pl.Expr = pl.lit(float(cm.fallback_max_qty))
+    for threshold, qty in reversed(cm.liquidity_tiers):
+        cap = pl.when(market < threshold).then(float(qty)).otherwise(cap)
+    buy_spread = pl.col("mid") - market
+    sell_spread = market - pl.col("low")
+    buy_imp = (
+        pl.when(pl.lit(cm.impact_enabled) & (buy_spread > 0))
+        .then(buy_spread / (2.0 * cap))
+        .otherwise(0.0)
+        .fill_null(0.0)
+    )
+    sell_imp = (
+        pl.when(pl.lit(cm.impact_enabled) & (sell_spread > 0))
+        .then(sell_spread / (2.0 * cap))
+        .otherwise(0.0)
+        .fill_null(0.0)
+    )
+    round_trip = 2.0 * cm.shipping_per_line + market * cm.fee_rate + buy_imp + sell_imp
+    return round_trip / market
+
+
+def build_training_frame_v2(
+    history: pl.DataFrame,
+    products: pl.DataFrame,
+    as_of: date,
+    horizon_days: int,
+    train_days: int,
+    stride_days: int,
+    cost_model: CostModel,
+) -> pl.DataFrame:
+    """v1's strided training frame with v2 features and NET labels:
+    label = horizon forward return - round-trip cost fraction at the
+    training date's own prices/quotes. Same leakage bound as v1."""
+    h = history.select("date", *ID_COLS, "market", "low", "mid").filter(pl.col("date") <= as_of)
+    frames: list[pl.DataFrame] = []
+    d = as_of - timedelta(days=horizon_days)
+    lower = as_of - timedelta(days=train_days)
+    while d >= lower:
+        feats = build_features_v2(h, products, d)
+        if feats.height:
+            label_price = _last_price_at_or_before(
+                h.select("date", *ID_COLS, "market"), d + timedelta(days=horizon_days), "_lbl"
+            )
+            frames.append(
+                feats.join(label_price, on=ID_COLS, how="left")
+                .with_columns(
+                    ((pl.col("_lbl") / pl.col("market") - 1.0) - cost_frac_expr(cost_model)).alias(
+                        "label"
+                    ),
+                    pl.lit(d, dtype=pl.Date).alias("date"),
+                )
+                .drop("_lbl")
+                .drop_nulls("label")
+            )
+        d -= timedelta(days=stride_days)
+    if not frames:
+        return pl.DataFrame(
+            schema={
+                "date": pl.Date,
+                "product_id": pl.Int64,
+                "sub_type": pl.Utf8,
+                "market": pl.Float64,
+                **{c: pl.Float64 for c in FEATURE_COLS_V2},
+                "label": pl.Float64,
+            }
+        )
+    return pl.concat(frames).select("date", *ID_COLS, "market", *FEATURE_COLS_V2, "label")

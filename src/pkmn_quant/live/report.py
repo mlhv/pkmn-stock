@@ -30,6 +30,10 @@ THESIS = {
     "ml-ranker": "Gradient-boosted model ranks all products by predicted"
     " forward return from trailing features; hold the top names, retrain"
     " each rebalance from history only.",
+    "ml-ranker-v2": "Gradient-boosted model ranks products by predicted"
+    " forward return NET of round-trip cost, using friction/momentum-shape"
+    " features and in-loop purged model selection; hold the top names,"
+    " retrain each rebalance from history only.",
 }
 
 

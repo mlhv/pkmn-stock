@@ -36,7 +36,14 @@ DEFAULT_WARMUP_DAYS = 365
 # ml-ranker satisfies this contract: its rebalance clock uses opened_on from
 # Context and the model is retrained from ctx.history on each due bar.
 PORTFOLIO_SAFE_STRATEGIES = frozenset(
-    {"sealed-accumulation", "dip-buyer", "xs-momentum", "cost-aware-reversion", "ml-ranker"}
+    {
+        "sealed-accumulation",
+        "dip-buyer",
+        "xs-momentum",
+        "cost-aware-reversion",
+        "ml-ranker",
+        "ml-ranker-v2",
+    }
 )
 
 

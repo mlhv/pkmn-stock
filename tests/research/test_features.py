@@ -6,7 +6,14 @@ from itertools import pairwise
 
 import polars as pl
 
-from pkmn_quant.research.features import FEATURE_COLS, build_features, build_training_frame
+from pkmn_quant.research.features import (
+    FEATURE_COLS,
+    FEATURE_COLS_V2,
+    ID_COLS,
+    build_features,
+    build_features_v2,
+    build_training_frame,
+)
 
 
 def _history(rows: list[tuple[date, int, str, float]]) -> pl.DataFrame:
@@ -150,3 +157,191 @@ def test_label_is_forward_return() -> None:
     )
     row = t.filter(pl.col("date") == as_of - timedelta(days=14)).row(0, named=True)
     assert abs(row["label"] - 0.10) < 1e-12
+
+
+def _hist_v2() -> pl.DataFrame:
+    """3 assets, 40 daily rows each, with quotes; asset 3 starts late."""
+    rows = []
+    for i in range(40):
+        d = date(2025, 1, 1) + timedelta(days=i)
+        rows.append(
+            {
+                "date": d,
+                "product_id": 1,
+                "sub_type": "Normal",
+                "market": 10.0 + i * 0.1,
+                "low": 9.0 + i * 0.1,
+                "mid": 10.5 + i * 0.1,
+            }
+        )
+        rows.append(
+            {
+                "date": d,
+                "product_id": 2,
+                "sub_type": "Normal",
+                "market": 50.0 - i * 0.2,
+                "low": 48.0 - i * 0.2,
+                "mid": 51.0 - i * 0.2,
+            }
+        )
+        if i >= 30:
+            rows.append(
+                {
+                    "date": d,
+                    "product_id": 3,
+                    "sub_type": "Normal",
+                    "market": 5.0,
+                    "low": None,
+                    "mid": None,
+                }
+            )
+    return pl.DataFrame(rows)
+
+
+def _products_v2() -> pl.DataFrame:
+    return pl.DataFrame(
+        {
+            "product_id": [1, 2, 3],
+            "group_id": [1, 1, 1],
+            "name": ["A", "B", "C"],
+            "rarity": [None, None, None],
+            "kind": ["sealed", "single", "single"],
+            "released_on": [date(2024, 12, 1)] * 3,
+        }
+    )
+
+
+def test_feature_cols_v2_are_exported() -> None:
+    """FEATURE_COLS_V2 extends FEATURE_COLS with the 8 new v2 features."""
+    assert [
+        *FEATURE_COLS,
+        "spread_frac",
+        "mid_gap",
+        "spread_30d_mean",
+        "ret_accel",
+        "drawdown_180d",
+        "vol_ratio",
+        "xs_rank_ret_30d",
+        "days_priced",
+    ] == FEATURE_COLS_V2
+
+
+def test_v2_formulas_hand_checked() -> None:
+    as_of = date(2025, 2, 9)  # day index 39
+    f = build_features_v2(_hist_v2(), _products_v2(), as_of)
+    r1 = f.filter(pl.col("product_id") == 1).row(0, named=True)
+    m, lo, mid = 13.9, 12.9, 14.4  # asset 1 on day 39
+    assert abs(r1["spread_frac"] - (m - lo) / m) < 1e-12
+    assert abs(r1["mid_gap"] - (m - mid) / m) < 1e-12
+    assert abs(r1["ret_accel"] - (r1["ret_7d"] - r1["ret_30d"])) < 1e-12
+    assert r1["days_priced"] == 40.0
+    r3 = f.filter(pl.col("product_id") == 3).row(0, named=True)
+    assert r3["spread_frac"] is None  # no quotes -> null, not invented
+    assert r3["days_priced"] == 10.0
+    # asset 1 rose, asset 2 fell: cross-sectional rank of ret_30d separates them
+    r2 = f.filter(pl.col("product_id") == 2).row(0, named=True)
+    assert r1["xs_rank_ret_30d"] > r2["xs_rank_ret_30d"]
+    # drawdown: asset 2 is at its 180d low -> big drawdown; asset 1 at high -> 0
+    assert abs(r1["drawdown_180d"]) < 1e-12
+    assert r2["drawdown_180d"] > 0.1
+
+
+def test_v2_leakage_bounded() -> None:
+    """Appending future rows must not change any v2 feature (as_of filter)."""
+    as_of = date(2025, 2, 5)
+    base = build_features_v2(_hist_v2(), _products_v2(), as_of)
+    future = pl.DataFrame(
+        [
+            {
+                "date": date(2025, 3, 1),
+                "product_id": 1,
+                "sub_type": "Normal",
+                "market": 999.0,
+                "low": 990.0,
+                "mid": 999.5,
+            }
+        ]
+    )
+    poisoned = pl.concat([_hist_v2(), future], how="diagonal")
+    assert base.equals(build_features_v2(poisoned, _products_v2(), as_of))
+
+
+def test_v2_carries_v1_columns_unchanged() -> None:
+    as_of = date(2025, 2, 9)
+    v1 = build_features(_hist_v2().select("date", *ID_COLS, "market"), _products_v2(), as_of)
+    v2 = build_features_v2(_hist_v2(), _products_v2(), as_of)
+    joined = v1.join(v2, on=ID_COLS, suffix="_v2")
+    for c in FEATURE_COLS:
+        a, b = joined[c].to_list(), joined[f"{c}_v2"].to_list()
+        assert a == b, c
+
+
+def test_cost_frac_expr_matches_scalar_cost_model() -> None:
+    """The vectorized label cost must equal the scalar CostModel arithmetic:
+    cost = (buy_price + buy_impact) - (sell_proceeds - sell_impact), as a
+    fraction of market, for one unit. Swept across tier edges and quote
+    shapes (present / missing / crossed)."""
+    from pkmn_quant.engine.costs import CostModel
+    from pkmn_quant.research.features import cost_frac_expr
+
+    cm = CostModel(impact_enabled=True)
+    cases = []
+    for market in (0.5, 4.99, 5.0, 49.99, 50.0, 199.99, 200.0, 350.0):
+        for mid, low in (
+            (market * 1.05, market * 0.9),  # normal quotes
+            (None, None),  # missing
+            (market * 0.95, market * 1.1),  # crossed both ways -> zero impact
+        ):
+            cases.append({"market": market, "mid": mid, "low": low})
+    frame = pl.DataFrame(cases).with_columns(cost_frac_expr(cm).alias("frac"))
+    for row in frame.iter_rows(named=True):
+        m, mid, low = row["market"], row["mid"], row["low"]
+        scalar = (
+            (cm.buy_price(m) + cm.buy_impact(m, mid, 1))
+            - (cm.sell_proceeds(m) - cm.sell_impact(m, low, 1))
+        ) / m
+        assert abs(row["frac"] - scalar) < 1e-12, (m, mid, low)
+
+
+def test_cost_frac_hand_derivation() -> None:
+    """market=10, mid=10.5, low=9, defaults (fee 12.75%, ship $1, cap 8 for
+    5<=p<50, impact on): cost = 2*1 + 10*0.1275 + (10.5-10)/16 + (10-9)/16
+    = 2 + 1.275 + 0.03125 + 0.0625 = 3.36875; frac = 0.336875."""
+    from pkmn_quant.engine.costs import CostModel
+    from pkmn_quant.research.features import cost_frac_expr
+
+    f = pl.DataFrame([{"market": 10.0, "mid": 10.5, "low": 9.0}]).with_columns(
+        cost_frac_expr(CostModel(impact_enabled=True)).alias("frac")
+    )
+    assert abs(f["frac"][0] - 0.336875) < 1e-12
+
+
+def test_training_frame_v2_labels_are_net() -> None:
+    """label_v2 == v1 gross label minus that row's cost fraction."""
+    from pkmn_quant.engine.costs import CostModel
+    from pkmn_quant.research.features import (
+        build_training_frame,
+        build_training_frame_v2,
+        cost_frac_expr,
+    )
+
+    cm = CostModel(impact_enabled=True)
+    kw = dict(as_of=date(2025, 2, 9), horizon_days=10, train_days=30, stride_days=10)
+    v1 = build_training_frame(_hist_v2().select("date", *ID_COLS, "market"), _products_v2(), **kw)
+    v2 = build_training_frame_v2(_hist_v2(), _products_v2(), cost_model=cm, **kw)
+    j = v1.join(v2, on=["date", *ID_COLS], suffix="_v2")
+    assert j.height > 0
+    costs = (
+        _hist_v2()
+        .join(j.select("date", *ID_COLS), on=["date", *ID_COLS], how="semi")
+        .with_columns(cost_frac_expr(cm).alias("frac"))
+        .sort("date", "product_id")
+    )
+    jj = j.sort("date", "product_id")
+    for gross, net, frac in zip(
+        jj["label"].to_list(),
+        jj["label_v2"].to_list(),
+        costs["frac"].to_list(),
+        strict=True,
+    ):
+        assert abs(net - (gross - frac)) < 1e-12

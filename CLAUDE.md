@@ -3,7 +3,7 @@
 Algo-trading research system for Pokemon card prices (TCGplayer data via
 tcgcsv.com). Design spec: `docs/superpowers/specs/2026-06-09-pkmn-quant-design.md`.
 
-## Status (2026-07-19)
+## Status (2026-07-20)
 
 - Plans 1-4 merged to main. Plan 4 closed out the v1 spec: `walkforward.json`
   artifacts, `pkmn signals`, Streamlit dashboard, README.
@@ -132,6 +132,33 @@ tcgcsv.com). Design spec: `docs/superpowers/specs/2026-06-09-pkmn-quant-design.m
   perfectly apples-to-apples, but nothing here is close enough to positive
   for that caveat to matter. Full findings in `docs/research-
   findings-2026-07.md` (Rigor pack section).
+- ml-ranker-v2 complete on feat/ml-ranker-v2 (388 tests + 1 skipped):
+  `strategies/ml_ranker_v2.py` — friction/momentum-shape/cross-sectional-
+  rank features (`research/features.py` `FEATURE_COLS_V2`), training labels
+  net of per-row round-trip cost, in-loop purged validation
+  (`research/purged.py`: embargoed most-recent-dates split, fixed
+  `(max_iter, learning_rate)` grid, `early_stopping=False` throughout — the
+  sklearn auto-split is random and leaks under correlated labels); v1
+  (`ml_ranker.py`) frozen as the ablation baseline. One declared walkforward
+  (registry `20260720T033422Z-858699`): stitched OOS total return -14.72%,
+  worse than v1's impact-on -7.52%; overfitting gap (IS CAGR mean - OOS CAGR
+  mean) is essentially zero and slightly negative (-0.58 CAGR-pts, vs v1's
+  +0.33), and this time IS is honestly negative too (-7.61% vs OOS -7.02%)
+  rather than the regime-wide-collapse artifact that made v1's small gap
+  misleading — the net-of-cost labels and the unconditional
+  `early_stopping=False` appear to have removed in-sample self-deception,
+  but the resulting model still carries no positive edge. Mechanism caveat:
+  the in-loop grid selection was inert in this run — at the per-fold horizons
+  (>= 23d) an OOS rebalance yields too few strided validation dates to clear
+  `min_val_dates`, so `select_config` fell back to `grid[0]` (max_iter=100,
+  lr=0.1) at every OOS rebalance; the measured result ablates the features +
+  net labels + early-stopping closure at that fixed config, and exercising
+  the selection at real scale is a Plan B item. Full-zoo `pkmn evaluate` now covers six strategies
+  (registry `20260720T034508Z-241dd9`): joint White's Reality Check
+  unchanged at p = 1.0000; ml-ranker-v2's deflated Sharpe (0.017) is the
+  highest of the six but still far below the 0.5 coin-flip point. Negative/
+  null result, reported plainly. Full findings in
+  `docs/research-findings-2026-07.md` (ml-ranker-v2 section).
 
 ## Commands
 
@@ -177,13 +204,22 @@ uv.lock together).
   out.
 - `src/pkmn_quant/strategies/` — Strategy implementations: buy_and_hold,
   sealed_accumulation, dip_buyer, momentum, cost_aware_reversion, ml_ranker
-  (HistGradientBoostingRegressor trained in-loop, stateless). All five active
-  strategies are in PORTFOLIO_SAFE_STRATEGIES (support `--portfolio` exit
-  signals against a real ledger and the paper daily loop).
+  (HistGradientBoostingRegressor trained in-loop, stateless), ml_ranker_v2
+  (friction/momentum-shape/cross-sectional-rank features, net-of-cost
+  labels, in-loop purged validation via `research/purged.py`; v1 is frozen
+  as the ablation baseline). All six active strategies are in
+  PORTFOLIO_SAFE_STRATEGIES (support `--portfolio` exit signals against a
+  real ledger and the paper daily loop).
 - `src/pkmn_quant/research/` — walk-forward layer: folds, seeded optuna search,
   runner/stitcher, strategy registry, markdown report, `walkforward.json`
   artifacts (the research → live bridge). `features.py`: 8 leakage-bounded
-  features for ml-ranker (scikit-learn); regression-tested. `runs.py`:
+  features for ml-ranker (scikit-learn), plus `FEATURE_COLS_V2`
+  (friction/momentum-shape/cross-sectional-rank) and
+  `build_training_frame_v2` (net-of-cost labels) for ml-ranker-v2;
+  regression-tested. `purged.py`: embargoed, most-recent-dates validation
+  split and deterministic fixed-grid model selection
+  (`select_config`/`_make_model`, `early_stopping=False` always) for
+  ml-ranker-v2's in-loop selection. `runs.py`:
   experiment registry — every backtest/walkforward appends a record (run_id,
   config hash, git SHA+dirty, data fingerprint, results) to
   `data/runs/registry.jsonl`; `pkmn runs list`/`show` inspect it.
