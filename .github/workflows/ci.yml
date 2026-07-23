@@ -13,7 +13,7 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           python-version: "3.12"
-      - run: uv sync --frozen #install exactly the committed lockfile; fail if it's stale vs pyproject
+      - run: uv sync --frozen --group api #install exactly the committed lockfile (+ api group: mypy checks src/pkmn_quant/api and tests/api import fastapi); fail if it's stale vs pyproject
       - run: uv run ruff check . #linting
       - run: uv run ruff format --check .
       - run: uv run mypy #type checking
