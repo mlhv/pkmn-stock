@@ -156,6 +156,29 @@ exit signals against a real ledger and works with the paper daily loop.
 
 </details>
 
+## Web explorer
+
+A read-only research explorer over the experiment registry and walk-forward/
+evaluate artifacts: browse recorded runs, drill into a single walk-forward
+run's folds/equity curve/rigor CI, and compare the full strategy zoo's
+deflated-Sharpe/Reality-Check numbers side by side. Stack: FastAPI
+(`src/pkmn_quant/api/`, 5 endpoints) serving Pydantic-typed JSON, and a
+React/TS single-page app (`web/`, 3 screens) with its own toolchain.
+
+One-command dev (runs both the API and the web dev server together, Ctrl-C
+stops both):
+
+```bash
+make web
+```
+
+![Web explorer screenshot placeholder](docs/assets/web-explorer.png)
+<!-- Screenshot not yet captured; drop a PNG at docs/assets/web-explorer.png. -->
+
+This is a viewer only — read-only, no data writes, and it does not claim any
+strategy beats buy-and-hold. Triggering new runs from the browser is planned
+for a later phase (Plan 2), not implemented here.
+
 ## Engineering practices
 
 - `uv` for everything; `ruff` lint + format; `mypy --strict` on `src/`; pytest + Catch2; CI runs all gates with `uv sync --frozen`.
