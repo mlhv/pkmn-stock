@@ -8,7 +8,18 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException, Query
 
 from pkmn_quant.api import data
-from pkmn_quant.api.models import RunDetail, RunSummary
+from pkmn_quant.api.models import (
+    ConfidenceInterval,
+    EquityPoint,
+    EvaluateResponse,
+    FoldRow,
+    RigorCI,
+    RunDetail,
+    RunSummary,
+    StrategyInfo,
+    StrategyStat,
+    WalkForwardResponse,
+)
 
 
 def create_app(root: Path) -> FastAPI:
@@ -51,6 +62,52 @@ def create_app(root: Path) -> FastAPI:
             data_fingerprint=r.data_fingerprint,
             runtime=r.runtime,
         )
+
+    @app.get("/api/walkforward/{run_id}", response_model=WalkForwardResponse)
+    def get_walkforward(run_id: str) -> WalkForwardResponse:
+        try:
+            raw = data.load_walkforward(root, run_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from None
+        rigor = raw.get("rigor", {}).get("stitched_total_return_ci")
+        return WalkForwardResponse(
+            run_id=run_id,
+            strategy=raw["strategy"],
+            summary=raw["summary"],
+            folds=[FoldRow(**f) for f in raw["folds"]],
+            rigor=RigorCI(**rigor) if rigor else None,
+            equity_curve=[EquityPoint(**p) for p in raw["equity_curve"]],
+        )
+
+    @app.get("/api/evaluate/{run_id}", response_model=EvaluateResponse)
+    def get_evaluate(run_id: str) -> EvaluateResponse:
+        try:
+            raw = data.load_evaluate(root, run_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from None
+        return EvaluateResponse(
+            run_id=run_id,
+            reality_check_p=raw["reality_check_p"],
+            benchmark=raw["benchmark"],
+            n_days=raw["n_days"],
+            start=raw["start"],
+            end=raw["end"],
+            params=raw["params"],
+            strategies=[
+                StrategyStat(
+                    strategy=name,
+                    total_return=s["total_return"],
+                    ci=ConfidenceInterval(**s["ci"]),
+                    sharpe=s["sharpe"],
+                    dsr=s["dsr"],
+                )
+                for name, s in sorted(raw["strategies"].items())
+            ],
+        )
+
+    @app.get("/api/strategies", response_model=list[StrategyInfo])
+    def get_strategies() -> list[StrategyInfo]:
+        return [StrategyInfo(**s) for s in data.strategy_catalog()]
 
     return app
 
