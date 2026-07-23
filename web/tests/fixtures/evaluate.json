@@ -1,0 +1,14 @@
+{
+  "run_id": "20260702T000000Z-bbb222", "reality_check_p": 1.0,
+  "benchmark": "data/results/buy-and-hold-sealed-x", "n_days": 660,
+  "start": "2024-08-28", "end": "2026-06-18",
+  "params": {"n_boot": 10000, "mean_block": 10.0, "seed": 42},
+  "strategies": [
+    {"strategy": "ml-ranker", "total_return": -0.075,
+     "ci": {"point": -0.075, "lo": -0.20, "hi": 0.057, "level": 0.95},
+     "sharpe": -0.73, "dsr": 0.007},
+    {"strategy": "sealed-accumulation", "total_return": -0.07,
+     "ci": {"point": -0.07, "lo": -0.21, "hi": 0.08, "level": 0.95},
+     "sharpe": -0.8, "dsr": 0.008}
+  ]
+}

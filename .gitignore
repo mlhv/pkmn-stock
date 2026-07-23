@@ -12,3 +12,6 @@ __pycache__/
 
 cpp/build/
 build/
+
+web/node_modules
+web/dist

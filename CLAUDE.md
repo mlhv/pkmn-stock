@@ -159,6 +159,21 @@ tcgcsv.com). Design spec: `docs/superpowers/specs/2026-06-09-pkmn-quant-design.m
   highest of the six but still far below the 0.5 coin-flip point. Negative/
   null result, reported plainly. Full findings in
   `docs/research-findings-2026-07.md` (ml-ranker-v2 section).
+- Web explorer complete on feat/web-explorer (401 tests + 1 skipped Python;
+  8 web tests via `npm run check`): a read-only FastAPI + React/TS research
+  explorer — `src/pkmn_quant/api/` (5 endpoints: runs list/detail,
+  walkforward detail, evaluate, strategies) serving Pydantic-typed JSON, and
+  `web/` (3 screens: runs browser, walk-forward detail with fold table/
+  equity curve/rigor CI, cross-strategy rigor compare). The committed
+  `web/tests/fixtures/*.json` are the cross-language contract: `tests/api/
+  test_contract.py` validates each fixture against its Pydantic response
+  model (`RunSummary`/`WalkForwardResponse`/`EvaluateResponse`), so the
+  Python and TypeScript sides cannot silently drift. `make web` runs the API
+  and the web dev server together for one-command local dev; CI gained a
+  second `web` job (Node 20, `npm ci && npm run check && npm run build`)
+  alongside the existing `checks` job. This is a viewer only — no run-
+  triggering yet (planned Plan 2), no data writes, no strategy claimed to
+  beat buy-and-hold.
 
 ## Commands
 
@@ -187,6 +202,7 @@ cmake -S cpp -B cpp/build -DPKMN_BUILD_TESTS=ON && cmake --build cpp/build -j &&
                              # C++ unit tests (Catch2), independent of pytest
 uv run python scripts/parity_full.py                      # full-data bit-for-bit acceptance, both engines
 uv run --group viz python scripts/render_readme_chart.py   # regenerate README hero chart from local artifacts
+make web                                                  # run the API + web dev server together
 ```
 
 All four gates must pass before every commit. CI runs them with
@@ -260,6 +276,18 @@ uv.lock together).
   ~2.9M price rows) plus raw archives. Do not delete; re-ingest is ~40 min.
   `data/portfolio/` holds the gitignored real and paper ledgers. `data/runs/`
   holds the gitignored experiment registry (`registry.jsonl`).
+- `src/pkmn_quant/api/` — FastAPI read-only research explorer API (dependency
+  group `api`): `models.py` has the Pydantic response models (also the
+  cross-language contract checked by `tests/api/test_contract.py`); 5
+  endpoints over the experiment registry and walkforward/evaluate artifacts.
+  Run standalone with `uv run --group api uvicorn pkmn_quant.api:app --port
+  8000`, or via `make web` alongside the frontend dev server.
+- `web/` — React/TypeScript SPA (Vite), its own toolchain (`web/package.json`,
+  `web/package-lock.json` committed) independent of the `uv`/Python gates:
+  3 screens (runs browser, walk-forward detail, cross-strategy rigor
+  compare) consuming the API above. `npm run check` (tsc --noEmit + vitest,
+  8 tests) and `npm run build` (production build) gate it; CI runs both in
+  a dedicated `web` job alongside the Python `checks` job.
 
 ## Conventions and gotchas
 

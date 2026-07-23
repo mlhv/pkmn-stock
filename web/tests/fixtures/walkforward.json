@@ -1,0 +1,15 @@
+{
+  "run_id": "20260701T000000Z-aaa111", "strategy": "sealed-accumulation",
+  "summary": {"stitched_total_return": -0.02, "stitched_cagr": -0.05, "overfitting_gap": 0.12},
+  "folds": [
+    {"is_start": "2025-01-01", "is_end": "2025-01-20", "oos_start": "2025-01-21",
+     "oos_end": "2025-01-31", "params": {"top_n": 8},
+     "is_summary": {"total_return": 0.05}, "oos_summary": {"total_return": -0.01}}
+  ],
+  "rigor": {"point": -0.02, "lo": -0.09, "hi": 0.04, "level": 0.95,
+            "n_boot": 10000, "mean_block": 10.0, "seed": 42},
+  "equity_curve": [
+    {"date": "2025-01-01", "equity": 1000.0}, {"date": "2025-01-02", "equity": 1001.0},
+    {"date": "2025-01-03", "equity": 1002.5}, {"date": "2025-01-04", "equity": 1001.8}
+  ]
+}
