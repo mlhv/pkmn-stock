@@ -1,4 +1,47 @@
+import json
+from pathlib import Path
+
 from fastapi.testclient import TestClient
+
+from pkmn_quant.api import create_app
+
+
+def _seed_run_with_empty_artifact_dir(root: Path, run_id: str, command: str) -> None:
+    """A registry record whose artifact directory exists but is missing the
+    expected file(s) inside it (e.g. pruned/partial artifact) — the dir-exists
+    check in `_artifact_dir` passes, but the subsequent file read must not."""
+    art = root / "data" / "results" / f"{command}-empty-{run_id}"
+    art.mkdir(parents=True, exist_ok=True)
+    reg = root / "data" / "runs" / "registry.jsonl"
+    reg.parent.mkdir(parents=True, exist_ok=True)
+    record = {
+        "run_id": run_id,
+        "recorded_at": "2026-07-03T00:00:00+00:00",
+        "command": command,
+        "strategy": "sealed-accumulation",
+        "git_sha": "abc1234",
+        "git_dirty": False,
+        "config_hash": "deadbeef",
+        "config": {},
+        "data_fingerprint": {},
+        "results": {},
+        "artifact_path": str(art),
+    }
+    reg.write_text(json.dumps(record, sort_keys=True) + "\n")
+
+
+def test_walkforward_missing_artifact_file_is_404_not_500(tmp_path: Path) -> None:
+    _seed_run_with_empty_artifact_dir(tmp_path, "20260703T000000Z-ccc333", "walkforward")
+    resp = TestClient(create_app(tmp_path)).get("/api/walkforward/20260703T000000Z-ccc333")
+    assert resp.status_code == 404
+    assert "detail" in resp.json()
+
+
+def test_evaluate_missing_artifact_file_is_404_not_500(tmp_path: Path) -> None:
+    _seed_run_with_empty_artifact_dir(tmp_path, "20260703T000000Z-ddd444", "evaluate")
+    resp = TestClient(create_app(tmp_path)).get("/api/evaluate/20260703T000000Z-ddd444")
+    assert resp.status_code == 404
+    assert "detail" in resp.json()
 
 
 def test_walkforward_detail(client: TestClient) -> None:

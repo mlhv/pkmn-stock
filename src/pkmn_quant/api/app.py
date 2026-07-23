@@ -47,8 +47,8 @@ def create_app(root: Path) -> FastAPI:
     def get_run(run_id: str) -> RunDetail:
         try:
             r = data.get_run(root, run_id)
-        except KeyError:
-            raise HTTPException(status_code=404, detail=f"unknown run_id: {run_id}") from None
+        except data.NotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from None
         return RunDetail(
             run_id=r.run_id,
             recorded_at=r.recorded_at,
@@ -67,7 +67,7 @@ def create_app(root: Path) -> FastAPI:
     def get_walkforward(run_id: str) -> WalkForwardResponse:
         try:
             raw = data.load_walkforward(root, run_id)
-        except KeyError as exc:
+        except data.NotFound as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from None
         rigor = raw.get("rigor", {}).get("stitched_total_return_ci")
         return WalkForwardResponse(
@@ -83,7 +83,7 @@ def create_app(root: Path) -> FastAPI:
     def get_evaluate(run_id: str) -> EvaluateResponse:
         try:
             raw = data.load_evaluate(root, run_id)
-        except KeyError as exc:
+        except data.NotFound as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from None
         return EvaluateResponse(
             run_id=run_id,
