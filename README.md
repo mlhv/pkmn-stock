@@ -172,8 +172,7 @@ stops both):
 make web
 ```
 
-![Web explorer screenshot placeholder](docs/assets/web-explorer.png)
-<!-- Screenshot not yet captured; drop a PNG at docs/assets/web-explorer.png. -->
+![Web explorer — walk-forward detail: stitched OOS equity curve, block-bootstrap CI, and the mark-smoothing caveat](docs/assets/web-explorer.png)
 
 This is a viewer only — read-only, no data writes, and it does not claim any
 strategy beats buy-and-hold. Triggering new runs from the browser is planned
