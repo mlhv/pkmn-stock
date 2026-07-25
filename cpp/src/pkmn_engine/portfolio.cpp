@@ -53,6 +53,18 @@ void Portfolio::sell_(const Fill& f) {
     if (pos->quantity == 0) positions.erase(f.asset);
 }
 
+void Portfolio::seed(const std::vector<SeedPosition>& holdings) {
+    for (const auto& s : holdings) {
+        if (s.quantity <= 0)
+            throw std::invalid_argument("seed quantity must be positive");
+        if (s.avg_cost < 0.0)
+            throw std::invalid_argument("seed avg_cost must be non-negative");
+        if (positions.contains(s.asset))
+            throw std::invalid_argument("duplicate seed asset");
+        positions.set(s.asset, Position{s.quantity, s.avg_cost, s.opened_on});
+    }
+}
+
 double Portfolio::equity(const InsertionMap<double>& marks) const {
     // portfolio.py:100-108: sum() over a generator of floats, in dict
     // (insertion) order. Naive `value += ...` here diverges from Python by

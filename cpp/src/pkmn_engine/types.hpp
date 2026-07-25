@@ -43,6 +43,17 @@ struct Position {
     Day opened_on;
 };
 
+// A pre-existing holding installed before bar one (Plan 2a initial
+// holdings). Unlike a Fill it moves no cash: quantity and avg_cost are the
+// starting position and its cost basis; opened_on dates the holding for
+// duration-gated strategies.
+struct SeedPosition {
+    AssetId asset;
+    std::int64_t quantity;
+    double avg_cost;
+    Day opened_on;
+};
+
 // Insertion-ordered map with dense int keys — Python dict semantics:
 // iteration in first-insertion order, re-assignment keeps position,
 // erase + re-insert moves to the back. O(1) find/set; erase is O(n)
