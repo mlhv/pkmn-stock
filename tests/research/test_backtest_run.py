@@ -91,6 +91,25 @@ def test_resolve_params_rejects_out_of_bounds() -> None:
         resolve_params("sealed-accumulation", {"min_drawdown": 0.99})
 
 
+def test_resolve_params_accepts_string_params_in_range() -> None:
+    # The CLI (`--param k=v`) passes every value as a string; this is the
+    # coercion path that path relies on, pinned separately from the
+    # numeric-input tests above.
+    p = resolve_params("sealed-accumulation", {"min_age_days": "90.0", "take_profit": "2.0"})
+    assert p["min_age_days"] == 90 and isinstance(p["min_age_days"], int)
+    assert p["take_profit"] == 2.0 and isinstance(p["take_profit"], float)
+
+
+def test_resolve_params_rejects_out_of_bounds_string() -> None:
+    with pytest.raises(ValueError, match="out of range"):
+        resolve_params("sealed-accumulation", {"min_drawdown": "0.99"})
+
+
+def test_resolve_params_rejects_non_numeric_string() -> None:
+    with pytest.raises(ValueError, match="min_drawdown"):
+        resolve_params("sealed-accumulation", {"min_drawdown": "abc"})
+
+
 def test_resolve_params_buy_and_hold_takes_none() -> None:
     assert resolve_params("buy-and-hold", {}) == {}
     with pytest.raises(ValueError, match="no tunable"):

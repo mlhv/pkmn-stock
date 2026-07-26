@@ -58,8 +58,13 @@ def resolve_params(strategy_name: str, params: dict[str, ParamValue]) -> Params:
     out: Params = {}
     for spec in entry.params:
         raw = params.get(spec.name, spec.default)
-        # int(float(raw)) handles str/float/int uniformly ("2.0" -> 2).
-        val: float | int = int(float(raw)) if spec.kind == "int" else float(raw)
+        try:
+            # int(float(raw)) handles str/float/int uniformly ("2.0" -> 2).
+            val: float | int = int(float(raw)) if spec.kind == "int" else float(raw)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"{spec.name}={raw!r} is not a valid {spec.kind} value for {strategy_name}: {exc}"
+            ) from exc
         if not (spec.low <= val <= spec.high):
             raise ValueError(
                 f"{spec.name}={val} out of range [{spec.low}, {spec.high}] for {strategy_name}"
