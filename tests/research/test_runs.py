@@ -11,6 +11,7 @@ from pkmn_quant.data.warehouse import Warehouse
 from pkmn_quant.research.runs import (
     config_hash,
     load_runs,
+    new_run_id,
     record_run,
     registry_path,
 )
@@ -31,6 +32,13 @@ def test_config_hash_is_key_order_independent() -> None:
     b = {"trials": 15, "end": "2026-06-30", "start": "2024-03-01"}
     assert config_hash(a) == config_hash(b)
     assert config_hash(a) != config_hash({**a, "trials": 16})
+
+
+def test_new_run_id_format() -> None:
+    rid = new_run_id()
+    # "<YYYYMMDD>T<HHMMSS>Z-<6 hex>"
+    assert rid[8] == "T" and rid[15] == "Z" and rid[16] == "-"
+    assert len(rid) == 23
 
 
 def test_record_and_load_round_trip(tmp_path: Path, warehouse: Warehouse) -> None:
@@ -56,6 +64,21 @@ def test_record_and_load_round_trip(tmp_path: Path, warehouse: Warehouse) -> Non
     # tmp_path is not a git repo -> unknown sha, treated as dirty.
     assert r.git_sha is None
     assert r.git_dirty is True
+
+
+def test_record_run_uses_supplied_run_id(tmp_path: Path, warehouse: Warehouse) -> None:
+    rid = record_run(
+        root=tmp_path,
+        command="backtest",
+        strategy="buy-and-hold-sealed",
+        config={"x": 1},
+        results={"total_return": 0.0},
+        artifact_path=tmp_path / "data" / "results" / "given-id",
+        warehouse=warehouse,
+        run_id="20250101T000000Z-abcdef",
+    )
+    assert rid == "20250101T000000Z-abcdef"
+    assert load_runs(tmp_path)[-1].run_id == "20250101T000000Z-abcdef"
 
 
 def test_recording_failure_warns_but_never_raises(

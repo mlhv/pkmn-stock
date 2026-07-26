@@ -78,6 +78,11 @@ def data_fingerprint(warehouse: Warehouse) -> dict[str, Any]:
     }
 
 
+def new_run_id() -> str:
+    """Timestamp + random suffix; unique per run, sortable by time."""
+    return datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ") + "-" + secrets.token_hex(3)
+
+
 def record_run(
     root: Path,
     command: str,
@@ -87,6 +92,7 @@ def record_run(
     artifact_path: Path,
     warehouse: Warehouse,
     runtime: dict[str, Any] | None = None,
+    run_id: str | None = None,
 ) -> str | None:
     """Append one record; returns run_id, or None after warning. Never raises.
 
@@ -94,13 +100,17 @@ def record_run(
     results (e.g. worker count) and is therefore excluded from config_hash:
     identical results must hash identically regardless of how many threads
     produced them.
+
+    ``run_id``, if supplied, is used as-is (e.g. minted earlier via
+    ``new_run_id()`` so a caller can key an artifact directory on the id
+    before writing artifacts); otherwise one is minted here.
     """
     try:
         now = datetime.now(UTC)
-        run_id = now.strftime("%Y%m%dT%H%M%SZ") + "-" + secrets.token_hex(3)
+        rid = run_id if run_id is not None else new_run_id()
         sha, dirty = git_info(root)
         record = {
-            "run_id": run_id,
+            "run_id": rid,
             "recorded_at": now.isoformat(),
             "command": command,
             "strategy": strategy,
@@ -118,7 +128,7 @@ def record_run(
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a") as fh:
             fh.write(json.dumps(record, sort_keys=True, default=str) + "\n")
-        return run_id
+        return rid
     except Exception as exc:  # bookkeeping must never kill a research run
         print(f"warning: run tracking failed ({exc}); results are unaffected", file=sys.stderr)
         return None
