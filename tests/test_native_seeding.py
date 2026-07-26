@@ -15,7 +15,7 @@ from pkmn_quant.config import Paths
 from pkmn_quant.data.transforms import PRICE_SCHEMA
 from pkmn_quant.data.warehouse import Warehouse
 from pkmn_quant.engine.costs import CostModel
-from pkmn_quant.engine.native import NativeBacktest, SeededHolding
+from pkmn_quant.engine.native import NativeBacktest, NativeStrategySpec, SeededHolding
 from pkmn_quant.engine.portfolio import Asset
 from pkmn_quant.engine.strategy import Context, Strategy
 
@@ -99,3 +99,50 @@ def test_holding_outside_universe_raises_value_error(tmp_path: Path) -> None:
     ghost = Asset(product_id=999, sub_type="Normal")
     with pytest.raises(ValueError, match="universe"):
         _run(tmp_path, [SeededHolding(asset=ghost, quantity=1, avg_cost=5.0, opened_on=START)])
+
+
+def test_native_strategy_path_seeds_day_zero_equity(tmp_path: Path) -> None:
+    """Seeding also works on the native (non-bridge) strategy path.
+
+    NoTrade above runs via the Python callback bridge (GIL held). Here the
+    strategy is a NativeStrategySpec, so the C++ factory builds and runs a
+    real native buy-and-hold strategy with no Python callback in the loop —
+    seeding must still be visible. On day 0 no T+1 fill has happened yet, so
+    equity[0] is a clean seed-isolating assertion: initial_cash + qty*market.
+    """
+    _seed_one_asset(tmp_path)
+    wh = Warehouse(Paths(root=tmp_path))
+    asset = Asset(product_id=1, sub_type="Normal")
+    res = NativeBacktest(
+        warehouse=wh,
+        strategy=NativeStrategySpec("buy-and-hold", {}, kind="sealed"),
+        cost_model=CostModel(),
+        start=START,
+        end=START + timedelta(days=2),
+        initial_cash=50.0,
+        initial_holdings=[
+            SeededHolding(asset=asset, quantity=4, avg_cost=9.0, opened_on=date(2024, 12, 1))
+        ],
+    ).run()
+    # day 0: 50 cash + 4 * market(10.0) = 90.0; no fill has landed yet.
+    assert res.equity_curve["equity"].to_list()[0] == 90.0
+
+
+def test_duplicate_seed_asset_raises_value_error_from_cpp(tmp_path: Path) -> None:
+    """A duplicate in-universe asset passes the Python universe check but
+    must be rejected by C++ Portfolio::seed's duplicate detection, proving
+    that a std::invalid_argument raised inside the C++ core crosses the
+    nanobind boundary as a Python ValueError (not just a Python-side
+    ValueError raised before the C++ call, as in the universe-check test
+    above: the Python adapter only validates universe membership, not
+    duplicates or quantity)."""
+    _seed_one_asset(tmp_path)
+    asset = Asset(product_id=1, sub_type="Normal")
+    with pytest.raises(ValueError):
+        _run(
+            tmp_path,
+            [
+                SeededHolding(asset=asset, quantity=1, avg_cost=5.0, opened_on=START),
+                SeededHolding(asset=asset, quantity=2, avg_cost=6.0, opened_on=START),
+            ],
+        )

@@ -62,13 +62,16 @@ void Portfolio::seed(const std::vector<SeedPosition>& holdings) {
     seen.reserve(holdings.size());
     for (const auto& s : holdings) {
         if (s.quantity <= 0)
-            throw std::invalid_argument("seed quantity must be positive");
+            throw std::invalid_argument("seed quantity must be positive for asset " +
+                                        std::to_string(s.asset));
         if (s.avg_cost < 0.0)
-            throw std::invalid_argument("seed avg_cost must be non-negative");
+            throw std::invalid_argument("seed avg_cost must be non-negative for asset " +
+                                        std::to_string(s.asset));
         if (positions.contains(s.asset))
-            throw std::invalid_argument("duplicate seed asset");
+            throw std::invalid_argument("duplicate seed asset " + std::to_string(s.asset));
         for (AssetId a : seen) {
-            if (a == s.asset) throw std::invalid_argument("duplicate seed asset");
+            if (a == s.asset)
+                throw std::invalid_argument("duplicate seed asset " + std::to_string(s.asset));
         }
         seen.push_back(s.asset);
     }
