@@ -129,3 +129,15 @@ TEST_CASE("seed validates quantity, avg_cost, and rejects duplicates") {
     ok.seed(std::vector<SeedPosition>{{0, 1, 0.0, 90}});
     CHECK(ok.positions.find(0)->avg_cost == 0.0);
 }
+
+TEST_CASE("seed is atomic: a later invalid holding rolls back earlier valid ones") {
+    Portfolio pf(100.0, 4);
+    // First item is valid; second item has a negative quantity and must
+    // fail validation. Because seed() validates all holdings before
+    // installing any, the valid first item must NOT be installed either.
+    CHECK_THROWS_AS(
+        pf.seed(std::vector<SeedPosition>{{0, 1, 5.0, 90}, {1, -1, 5.0, 91}}),
+        std::invalid_argument);
+    CHECK(pf.positions.find(0) == nullptr);
+    CHECK(pf.positions.find(1) == nullptr);
+}

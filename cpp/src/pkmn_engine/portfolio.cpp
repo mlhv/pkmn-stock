@@ -54,6 +54,12 @@ void Portfolio::sell_(const Fill& f) {
 }
 
 void Portfolio::seed(const std::vector<SeedPosition>& holdings) {
+    // Validate-then-apply: a failure partway through must leave `positions`
+    // completely unchanged, so every holding is checked in a first pass
+    // (including within-list duplicates) before anything is installed in a
+    // second pass.
+    std::vector<AssetId> seen;
+    seen.reserve(holdings.size());
     for (const auto& s : holdings) {
         if (s.quantity <= 0)
             throw std::invalid_argument("seed quantity must be positive");
@@ -61,6 +67,12 @@ void Portfolio::seed(const std::vector<SeedPosition>& holdings) {
             throw std::invalid_argument("seed avg_cost must be non-negative");
         if (positions.contains(s.asset))
             throw std::invalid_argument("duplicate seed asset");
+        for (AssetId a : seen) {
+            if (a == s.asset) throw std::invalid_argument("duplicate seed asset");
+        }
+        seen.push_back(s.asset);
+    }
+    for (const auto& s : holdings) {
         positions.set(s.asset, Position{s.quantity, s.avg_cost, s.opened_on});
     }
 }
