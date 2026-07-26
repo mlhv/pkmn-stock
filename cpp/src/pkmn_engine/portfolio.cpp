@@ -53,6 +53,33 @@ void Portfolio::sell_(const Fill& f) {
     if (pos->quantity == 0) positions.erase(f.asset);
 }
 
+void Portfolio::seed(const std::vector<SeedPosition>& holdings) {
+    // Validate-then-apply: a failure partway through must leave `positions`
+    // completely unchanged, so every holding is checked in a first pass
+    // (including within-list duplicates) before anything is installed in a
+    // second pass.
+    std::vector<AssetId> seen;
+    seen.reserve(holdings.size());
+    for (const auto& s : holdings) {
+        if (s.quantity <= 0)
+            throw std::invalid_argument("seed quantity must be positive for asset " +
+                                        std::to_string(s.asset));
+        if (s.avg_cost < 0.0)
+            throw std::invalid_argument("seed avg_cost must be non-negative for asset " +
+                                        std::to_string(s.asset));
+        if (positions.contains(s.asset))
+            throw std::invalid_argument("duplicate seed asset " + std::to_string(s.asset));
+        for (AssetId a : seen) {
+            if (a == s.asset)
+                throw std::invalid_argument("duplicate seed asset " + std::to_string(s.asset));
+        }
+        seen.push_back(s.asset);
+    }
+    for (const auto& s : holdings) {
+        positions.set(s.asset, Position{s.quantity, s.avg_cost, s.opened_on});
+    }
+}
+
 double Portfolio::equity(const InsertionMap<double>& marks) const {
     // portfolio.py:100-108: sum() over a generator of floats, in dict
     // (insertion) order. Naive `value += ...` here diverges from Python by

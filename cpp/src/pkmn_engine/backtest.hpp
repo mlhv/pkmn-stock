@@ -20,6 +20,7 @@ struct BacktestResult {
 
 BacktestResult run_backtest(MarketView& market, const ProductTable& products,
                             Strategy& strategy, const CostModel& cost_model,
-                            double initial_cash);
+                            double initial_cash,
+                            const std::vector<SeedPosition>& initial_holdings = {});
 
 }  // namespace pkmn

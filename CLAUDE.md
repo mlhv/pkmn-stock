@@ -265,7 +265,12 @@ uv.lock together).
   `MarketData` into flat numpy arrays (once per run — see the "measured
   speedup" note below on why this bounds the end-to-end gain), crosses the
   boundary once, and repackages the result into the same `Result` type the
-  Python engine returns, so callers can't tell engines apart. A
+  Python engine returns, so callers can't tell engines apart.
+  The native engine additionally supports initial-holdings seeding
+  (`SeededHolding` on `NativeBacktest`; C++ `Portfolio::seed` /
+  `SeedPosition`) — a C++-only capability the Python engine deliberately
+  lacks (Plan 2a, first step toward a C++-only engine), so it is pinned by
+  Catch2 goldens + `tests/test_native_seeding.py`, not by parity. A
   `NativeStrategySpec` names one of the five native strategies (or falls
   back to a per-bar Python callback bridge for anything else, e.g.
   ml-ranker). Parity with the Python engine is bit-for-bit by design

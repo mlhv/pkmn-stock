@@ -32,7 +32,10 @@ nb::object run_backtest_py(
     double fee_rate, double shipping_per_line,
     Arr<double> tier_thresholds, Arr<std::int64_t> tier_qtys,
     std::int64_t fallback_max_qty, bool impact_enabled,
-    double initial_cash, nb::object callback) {
+    double initial_cash,
+    Arr<std::int32_t> holding_asset, Arr<std::int64_t> holding_qty,
+    Arr<double> holding_cost, Arr<std::int32_t> holding_opened,
+    nb::object callback) {
     std::size_t n_assets = prod_id.size();
 
     std::vector<Day> days(trading_days.data(), trading_days.data() + trading_days.size());
@@ -60,6 +63,12 @@ nb::object run_backtest_py(
     }
     cm.fallback_max_qty = fallback_max_qty;
     cm.impact_enabled = impact_enabled;
+
+    std::vector<SeedPosition> holdings(holding_asset.size());
+    for (std::size_t i = 0; i < holdings.size(); ++i) {
+        holdings[i] = SeedPosition{holding_asset(i), holding_qty(i),
+                                   holding_cost(i), holding_opened(i)};
+    }
 
     std::unique_ptr<Strategy> strategy;
     if (!callback.is_none()) {
@@ -94,9 +103,9 @@ nb::object run_backtest_py(
     BacktestResult res;
     if (callback.is_none()) {
         nb::gil_scoped_release release;
-        res = run_backtest(market, products, *strategy, cm, initial_cash);
+        res = run_backtest(market, products, *strategy, cm, initial_cash, holdings);
     } else {
-        res = run_backtest(market, products, *strategy, cm, initial_cash);
+        res = run_backtest(market, products, *strategy, cm, initial_cash, holdings);
     }
 
     nb::list out_days, out_equity, out_fills;
@@ -120,6 +129,8 @@ NB_MODULE(_engine, m) {
           nb::arg("prod_kind"), nb::arg("prod_released"), nb::arg("strategy_name"),
           nb::arg("params"), nb::arg("universe_kind"), nb::arg("fee_rate"),
           nb::arg("shipping_per_line"), nb::arg("tier_thresholds"), nb::arg("tier_qtys"),
-          nb::arg("fallback_max_qty"), nb::arg("impact_enabled"), nb::arg("initial_cash"),
+          nb::arg("fallback_max_qty"), nb::arg("impact_enabled"),
+          nb::arg("initial_cash"), nb::arg("holding_asset"), nb::arg("holding_qty"),
+          nb::arg("holding_cost"), nb::arg("holding_opened"),
           nb::arg("callback").none());
 }

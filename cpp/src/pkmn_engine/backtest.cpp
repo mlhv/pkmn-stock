@@ -7,11 +7,13 @@ namespace pkmn {
 
 BacktestResult run_backtest(MarketView& market, const ProductTable& products,
                             Strategy& strategy, const CostModel& cost_model,
-                            double initial_cash) {
+                            double initial_cash,
+                            const std::vector<SeedPosition>& initial_holdings) {
     // backtest.py:50-102, same step order per day.
     strategy.reset();
     market.reset();
     Portfolio portfolio(initial_cash, market.n_assets());
+    portfolio.seed(initial_holdings);  // Plan 2a: pre-existing holdings, day 0
     BacktestResult out;
     std::vector<Order> pending;
     for (Day day : market.days()) {

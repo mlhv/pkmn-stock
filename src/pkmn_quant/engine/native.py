@@ -9,7 +9,7 @@ and are repackaged into engine.backtest.Result, so downstream consumers
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, timedelta
 
 import numpy as np
@@ -20,7 +20,7 @@ from pkmn_quant.data.warehouse import Warehouse
 from pkmn_quant.engine.backtest import Result
 from pkmn_quant.engine.costs import CostModel
 from pkmn_quant.engine.metrics import summarize
-from pkmn_quant.engine.portfolio import Fill, Position
+from pkmn_quant.engine.portfolio import Asset, Fill, Position
 from pkmn_quant.engine.prepared import _KIND_CODES, PreparedMarket
 from pkmn_quant.engine.strategy import Context, Strategy
 
@@ -46,6 +46,20 @@ class NativeStrategySpec:
     kind: str = "sealed"  # only read by buy-and-hold
 
 
+@dataclass(frozen=True)
+class SeededHolding:
+    """A pre-existing position installed before bar one (Plan 2a).
+
+    quantity > 0, avg_cost >= 0 (0 is legal). opened_on dates the holding for
+    duration-gated strategies. The asset must be in the backtest universe.
+    """
+
+    asset: Asset
+    quantity: int
+    avg_cost: float
+    opened_on: date
+
+
 @dataclass
 class NativeBacktest:
     """Drop-in for engine.backtest.Backtest, running the C++ engine.
@@ -62,6 +76,7 @@ class NativeBacktest:
     end: date
     initial_cash: float
     warmup_days: int = 0
+    initial_holdings: list[SeededHolding] = field(default_factory=list)
     prepared: PreparedMarket | None = None
 
     def run(self) -> Result:
@@ -83,6 +98,24 @@ class NativeBacktest:
         tiers = self.cost_model.liquidity_tiers
         tier_thresholds = np.array([t for t, _ in tiers], dtype=np.float64)
         tier_qtys = np.array([q for _, q in tiers], dtype=np.int64)
+
+        # Map holdings to dense asset ids (sorted for deterministic insertion
+        # order — equity() sums positions in insertion order). An asset outside
+        # this window's universe cannot cross the boundary (out-of-range id is
+        # UB in the engine), so reject it here with a clear error.
+        try:
+            indexed = sorted(
+                ((p.asset_index[h.asset], h) for h in self.initial_holdings),
+                key=lambda pair: pair[0],
+            )
+        except KeyError as e:
+            raise ValueError(
+                f"initial holding asset not in backtest universe: {e.args[0]}"
+            ) from None
+        holding_asset = np.array([aid for aid, _ in indexed], dtype=np.int32)
+        holding_qty = np.array([h.quantity for _, h in indexed], dtype=np.int64)
+        holding_cost = np.array([h.avg_cost for _, h in indexed], dtype=np.float64)
+        holding_opened = np.array([(h.opened_on - _EPOCH).days for _, h in indexed], dtype=np.int32)
 
         if isinstance(self.strategy, NativeStrategySpec):
             name = self.strategy.name
@@ -139,6 +172,10 @@ class NativeBacktest:
             fallback_max_qty=self.cost_model.fallback_max_qty,
             impact_enabled=self.cost_model.impact_enabled,
             initial_cash=self.initial_cash,
+            holding_asset=holding_asset,
+            holding_qty=holding_qty,
+            holding_cost=holding_cost,
+            holding_opened=holding_opened,
             callback=callback,
         )
 
