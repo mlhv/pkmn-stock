@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Literal
 
 import optuna
 
@@ -19,17 +20,39 @@ Params = dict[str, float | int]
 
 
 @dataclass(frozen=True)
+class ParamSpec:
+    name: str
+    kind: Literal["int", "float"]
+    default: float | int
+    low: float | int
+    high: float | int
+    log: bool = False
+
+
+def _space_from_params(params: tuple[ParamSpec, ...]) -> Callable[[optuna.Trial], Params]:
+    """Derive a flat optuna space from declarative specs. Suggestion order is
+    the tuple order — parity-relevant, the seeded sampler is order-sensitive."""
+
+    def space(trial: optuna.Trial) -> Params:
+        out: Params = {}
+        for p in params:
+            if p.kind == "int":
+                out[p.name] = trial.suggest_int(p.name, int(p.low), int(p.high), log=p.log)
+            else:
+                out[p.name] = trial.suggest_float(p.name, float(p.low), float(p.high), log=p.log)
+        return out
+
+    return space
+
+
+@dataclass(frozen=True)
 class RegistryEntry:
     factory: Callable[[Params], Strategy]
-    space: Callable[[optuna.Trial], Params]
+    params: tuple[ParamSpec, ...]
 
-
-def _sealed_space(trial: optuna.Trial) -> Params:
-    return {
-        "min_drawdown": trial.suggest_float("min_drawdown", 0.10, 0.50),
-        "take_profit": trial.suggest_float("take_profit", 1.2, 2.5),
-        "min_age_days": trial.suggest_int("min_age_days", 30, 180),
-    }
+    @property
+    def space(self) -> Callable[[optuna.Trial], Params]:
+        return _space_from_params(self.params)
 
 
 def _sealed_factory(p: Params) -> Strategy:
@@ -40,28 +63,12 @@ def _sealed_factory(p: Params) -> Strategy:
     )
 
 
-def _dip_space(trial: optuna.Trial) -> Params:
-    return {
-        "dip_threshold": trial.suggest_float("dip_threshold", 0.10, 0.50),
-        "hold_days": trial.suggest_int("hold_days", 7, 90),
-        "take_profit": trial.suggest_float("take_profit", 1.05, 1.6),
-    }
-
-
 def _dip_factory(p: Params) -> Strategy:
     return DipBuyer(
         dip_threshold=float(p["dip_threshold"]),
         hold_days=int(p["hold_days"]),
         take_profit=float(p["take_profit"]),
     )
-
-
-def _momentum_space(trial: optuna.Trial) -> Params:
-    return {
-        "lookback_days": trial.suggest_int("lookback_days", 14, 120),
-        "top_n": trial.suggest_int("top_n", 5, 25),
-        "rebalance_days": trial.suggest_int("rebalance_days", 7, 60),
-    }
 
 
 def _momentum_factory(p: Params) -> Strategy:
@@ -72,16 +79,6 @@ def _momentum_factory(p: Params) -> Strategy:
     )
 
 
-def _reversion_space(trial: optuna.Trial) -> Params:
-    return {
-        "dip_window_days": trial.suggest_int("dip_window_days", 14, 90),
-        "dip_threshold": trial.suggest_float("dip_threshold", 0.15, 0.50),
-        "min_edge": trial.suggest_float("min_edge", 0.02, 0.15),
-        "take_profit": trial.suggest_float("take_profit", 1.1, 1.6),
-        "max_hold_days": trial.suggest_int("max_hold_days", 30, 180),
-    }
-
-
 def _reversion_factory(p: Params) -> Strategy:
     return CostAwareReversion(
         dip_window_days=int(p["dip_window_days"]),
@@ -90,18 +87,6 @@ def _reversion_factory(p: Params) -> Strategy:
         take_profit=float(p["take_profit"]),
         max_hold_days=int(p["max_hold_days"]),
     )
-
-
-def _ml_ranker_space(trial: optuna.Trial) -> Params:
-    return {
-        "horizon_days": trial.suggest_int("horizon_days", 14, 60),
-        "rebalance_days": trial.suggest_int("rebalance_days", 21, 90),
-        "top_n": trial.suggest_int("top_n", 3, 15),
-        "train_days": trial.suggest_int("train_days", 120, 540),
-        "max_iter": trial.suggest_int("max_iter", 50, 300, log=True),
-        "learning_rate": trial.suggest_float("learning_rate", 0.03, 0.3, log=True),
-        "min_samples_leaf": trial.suggest_int("min_samples_leaf", 10, 50),
-    }
 
 
 def _ml_ranker_factory(p: Params) -> Strategy:
@@ -116,19 +101,6 @@ def _ml_ranker_factory(p: Params) -> Strategy:
     )
 
 
-def _ml_ranker_v2_space(trial: optuna.Trial) -> Params:
-    # max_iter / learning_rate are deliberately absent: in-loop purged
-    # validation owns them (research/purged.py DEFAULT_GRID).
-    return {
-        "horizon_days": trial.suggest_int("horizon_days", 14, 60),
-        "rebalance_days": trial.suggest_int("rebalance_days", 21, 90),
-        "top_n": trial.suggest_int("top_n", 3, 15),
-        "train_days": trial.suggest_int("train_days", 120, 540),
-        "min_price": trial.suggest_float("min_price", 1.0, 10.0),
-        "min_samples_leaf": trial.suggest_int("min_samples_leaf", 10, 50),
-    }
-
-
 def _ml_ranker_v2_factory(p: Params) -> Strategy:
     return MLRankerV2(
         horizon_days=int(p["horizon_days"]),
@@ -141,10 +113,63 @@ def _ml_ranker_v2_factory(p: Params) -> Strategy:
 
 
 REGISTRY: dict[str, RegistryEntry] = {
-    "sealed-accumulation": RegistryEntry(factory=_sealed_factory, space=_sealed_space),
-    "dip-buyer": RegistryEntry(factory=_dip_factory, space=_dip_space),
-    "xs-momentum": RegistryEntry(factory=_momentum_factory, space=_momentum_space),
-    "cost-aware-reversion": RegistryEntry(factory=_reversion_factory, space=_reversion_space),
-    "ml-ranker": RegistryEntry(factory=_ml_ranker_factory, space=_ml_ranker_space),
-    "ml-ranker-v2": RegistryEntry(factory=_ml_ranker_v2_factory, space=_ml_ranker_v2_space),
+    "sealed-accumulation": RegistryEntry(
+        factory=_sealed_factory,
+        params=(
+            ParamSpec("min_drawdown", "float", 0.25, 0.10, 0.50),
+            ParamSpec("take_profit", "float", 1.5, 1.2, 2.5),
+            ParamSpec("min_age_days", "int", 60, 30, 180),
+        ),
+    ),
+    "dip-buyer": RegistryEntry(
+        factory=_dip_factory,
+        params=(
+            ParamSpec("dip_threshold", "float", 0.30, 0.10, 0.50),
+            ParamSpec("hold_days", "int", 30, 7, 90),
+            ParamSpec("take_profit", "float", 1.25, 1.05, 1.6),
+        ),
+    ),
+    "xs-momentum": RegistryEntry(
+        factory=_momentum_factory,
+        params=(
+            ParamSpec("lookback_days", "int", 60, 14, 120),
+            ParamSpec("top_n", "int", 10, 5, 25),
+            ParamSpec("rebalance_days", "int", 30, 7, 60),
+        ),
+    ),
+    "cost-aware-reversion": RegistryEntry(
+        factory=_reversion_factory,
+        params=(
+            ParamSpec("dip_window_days", "int", 30, 14, 90),
+            ParamSpec("dip_threshold", "float", 0.25, 0.15, 0.50),
+            ParamSpec("min_edge", "float", 0.05, 0.02, 0.15),
+            ParamSpec("take_profit", "float", 1.25, 1.1, 1.6),
+            ParamSpec("max_hold_days", "int", 120, 30, 180),
+        ),
+    ),
+    "ml-ranker": RegistryEntry(
+        factory=_ml_ranker_factory,
+        params=(
+            ParamSpec("horizon_days", "int", 30, 14, 60),
+            ParamSpec("rebalance_days", "int", 30, 21, 90),
+            ParamSpec("top_n", "int", 8, 3, 15),
+            ParamSpec("train_days", "int", 365, 120, 540),
+            ParamSpec("max_iter", "int", 100, 50, 300, log=True),
+            ParamSpec("learning_rate", "float", 0.1, 0.03, 0.3, log=True),
+            ParamSpec("min_samples_leaf", "int", 20, 10, 50),
+        ),
+    ),
+    # max_iter / learning_rate are deliberately absent: in-loop purged
+    # validation owns them (research/purged.py DEFAULT_GRID).
+    "ml-ranker-v2": RegistryEntry(
+        factory=_ml_ranker_v2_factory,
+        params=(
+            ParamSpec("horizon_days", "int", 30, 14, 60),
+            ParamSpec("rebalance_days", "int", 30, 21, 90),
+            ParamSpec("top_n", "int", 8, 3, 15),
+            ParamSpec("train_days", "int", 365, 120, 540),
+            ParamSpec("min_price", "float", 3.0, 1.0, 10.0),
+            ParamSpec("min_samples_leaf", "int", 20, 10, 50),
+        ),
+    ),
 }

@@ -350,7 +350,7 @@ def test_portfolio_mode_context_copy_carries_opened_on(
     monkeypatch.setitem(
         REGISTRY,
         "sealed-accumulation",
-        RegistryEntry(factory=lambda p: Recorder(), space=old.space),
+        RegistryEntry(factory=lambda p: Recorder(), params=old.params),
     )
     results_dir = tmp_path / "data" / "results"
     seed_wf_artifact(results_dir)
