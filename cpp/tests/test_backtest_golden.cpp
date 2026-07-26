@@ -29,6 +29,12 @@ MarketView impact_view() {
 }
 
 ProductTable one_sealed() { return ProductTable{{1}, {0}, {100}}; }
+
+// Emits no orders: isolates seeding so the equity curve is purely
+// cash + seeded-position value across carry-forward marks.
+struct NoTrade : Strategy {
+    std::vector<Order> on_bar(const Context&) override { return {}; }
+};
 }  // namespace
 
 TEST_CASE("golden flat-cost: matches test_backtest_golden_numbers exactly") {
@@ -86,4 +92,29 @@ TEST_CASE("orders for assets that do not print expire unfilled") {
     auto res = run_backtest(mkt, prods, strat, cm, 100.0);
     REQUIRE(res.fills.empty());
     REQUIRE(res.equity == std::vector<double>{100.0, 100.0});
+}
+
+TEST_CASE("seeded holdings value through the loop with no trading") {
+    auto mkt = flat_view();  // asset 0, marks 10/12/15 on days 100/101/102
+    auto prods = one_sealed();
+    CostModel cm;  // impact off
+    NoTrade strat;
+    // Start with 50 cash and 4 units of asset 0 (cost basis 9, opened day 90).
+    std::vector<SeedPosition> holdings{{0, 4, 9.0, 90}};
+    auto res = run_backtest(mkt, prods, strat, cm, 50.0, holdings);
+    // No fills ever; equity = 50 + 4*mark. D1 50+40=90, D2 50+48=98,
+    // D3 50+60=110. EXACT doubles.
+    REQUIRE(res.fills.empty());
+    REQUIRE(res.equity == std::vector<double>{90.0, 98.0, 110.0});
+}
+
+TEST_CASE("no initial holdings leaves the existing signature behavior") {
+    auto mkt = flat_view();
+    auto prods = one_sealed();
+    CostModel cm;
+    NoTrade strat;
+    // 5-arg call still compiles (default empty holdings); flat cash curve.
+    auto res = run_backtest(mkt, prods, strat, cm, 50.0);
+    REQUIRE(res.fills.empty());
+    REQUIRE(res.equity == std::vector<double>{50.0, 50.0, 50.0});
 }
