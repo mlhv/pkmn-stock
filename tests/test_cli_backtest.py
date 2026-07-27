@@ -90,8 +90,7 @@ def test_backtest_cli_runs_and_writes_results(tmp_path: Path) -> None:
     assert (runs[0] / "fills.parquet").exists()
 
 
-@pytest.mark.parametrize("engine", ["python", "cpp"])
-def test_backtest_golden_numbers(tmp_path: Path, engine: str) -> None:
+def test_backtest_golden_numbers(tmp_path: Path) -> None:
     """Golden regression: any engine change that alters results fails here.
 
     Runs --no-impact: these numbers pin the flat-cost engine.
@@ -105,7 +104,7 @@ def test_backtest_golden_numbers(tmp_path: Path, engine: str) -> None:
       D3: no orders. Equity = 3 + 8*15 = 123.
     """
     seed(tmp_path)
-    result = run_cli(tmp_path, "--no-impact", "--engine", engine)
+    result = run_cli(tmp_path, "--no-impact")
     assert result.exit_code == 0, result.output
     out_dir = tmp_path / "data" / "results"
     run_dir = next(iter(out_dir.iterdir()))
@@ -120,8 +119,7 @@ def test_backtest_golden_numbers(tmp_path: Path, engine: str) -> None:
     assert f["impact"] == pytest.approx(0.0)
 
 
-@pytest.mark.parametrize("engine", ["python", "cpp"])
-def test_backtest_golden_numbers_with_impact(tmp_path: Path, engine: str) -> None:
+def test_backtest_golden_numbers_with_impact(tmp_path: Path) -> None:
     """Golden regression for the impact-on engine (CLI default).
 
     Hand-verified arithmetic (CostModel defaults + impact_enabled; $12 price
@@ -136,7 +134,7 @@ def test_backtest_golden_numbers_with_impact(tmp_path: Path, engine: str) -> Non
       D3: holding -> no orders. Equity = 2.75 + 7*15 = 107.75.
     """
     seed_impact(tmp_path)
-    result = run_cli(tmp_path, "--engine", engine)
+    result = run_cli(tmp_path)
     assert result.exit_code == 0, result.output
     out_dir = tmp_path / "data" / "results"
     run_dir = next(iter(out_dir.iterdir()))
@@ -169,13 +167,123 @@ def test_backtest_bad_kind_clean_error(tmp_path: Path) -> None:
     assert "Traceback" not in result.output
 
 
-def test_default_engine_is_cpp_and_recorded(tmp_path: Path) -> None:
-    """No --engine flag => cpp, recorded in the run config (Plan 11 flip)."""
+def test_backtest_recorded(tmp_path: Path) -> None:
+    """A backtest run is recorded in the experiment registry."""
     from pkmn_quant.research.runs import load_runs
 
     seed(tmp_path)
-    result = run_cli(tmp_path)  # no --engine argument
+    result = run_cli(tmp_path)
     assert result.exit_code == 0, result.output
     runs = load_runs(tmp_path)
     assert len(runs) == 1
-    assert runs[0].config["engine"] == "cpp"
+    assert runs[0].config["command"] == "backtest"
+
+
+def test_backtest_strategy_and_param_override(tmp_path: Path) -> None:
+    seed(tmp_path)
+    result = run_cli(tmp_path, "--strategy", "sealed-accumulation", "--param", "take_profit=2.0")
+    assert result.exit_code == 0, result.output
+    from pkmn_quant.research.runs import load_runs
+
+    rec = load_runs(tmp_path)[-1]
+    assert rec.config["strategy"] == "sealed-accumulation"
+    assert rec.config["params"]["take_profit"] == 2.0
+
+
+def test_backtest_bad_param_clean_error(tmp_path: Path) -> None:
+    seed(tmp_path)
+    result = run_cli(tmp_path, "--strategy", "sealed-accumulation", "--param", "nope=1")
+    assert result.exit_code != 0
+    assert "Traceback" not in result.output
+
+
+def test_backtest_bad_param_syntax_clean_error(tmp_path: Path) -> None:
+    """--param without a k=v shape (the CLI-local guard, no ValueError from
+    resolve_params) must still fail cleanly, not with an unhandled exit."""
+    seed(tmp_path)
+    result = run_cli(tmp_path, "--strategy", "sealed-accumulation", "--param", "no-equals-sign")
+    assert result.exit_code != 0
+    assert "Traceback" not in result.output
+
+
+def test_backtest_param_out_of_range_clean_error(tmp_path: Path) -> None:
+    """take_profit's range is [1.2, 2.5] (see registry.py); 999 is out of range."""
+    seed(tmp_path)
+    result = run_cli(tmp_path, "--strategy", "sealed-accumulation", "--param", "take_profit=999")
+    assert result.exit_code != 0
+    assert "Traceback" not in result.output
+
+
+def test_backtest_holdings_file(tmp_path: Path) -> None:
+    seed(tmp_path)
+    hfile = tmp_path / "holdings.csv"
+    hfile.write_text("product_id,sub_type,quantity,avg_cost,opened_on\n1,Normal,2,9.0,2025-05-01\n")
+    result = run_cli(tmp_path, "--holdings", str(hfile))
+    assert result.exit_code == 0, result.output
+    out_dir = tmp_path / "data" / "results"
+    run_dir = next(iter(out_dir.iterdir()))
+    equity = pl.read_parquet(run_dir / "equity.parquet")["equity"].to_list()
+    # Day 0: T+1 fills mean no order has landed yet, so equity[0] isolates
+    # the seeded position: cash (100) + 2 units * day-0 market (10.0) = 120.
+    # (see tests/test_native_seeding.py::test_native_strategy_path_seeds_day_zero_equity
+    # for the same cash + qty*market shape on the native engine directly.)
+    assert equity[0] == pytest.approx(100.0 + 2 * 10.0)
+
+
+def test_backtest_holdings_missing_column_clean_error(tmp_path: Path) -> None:
+    seed(tmp_path)
+    hfile = tmp_path / "holdings.csv"
+    hfile.write_text("product_id,quantity,avg_cost,opened_on\n1,2,9.0,2025-05-01\n")
+    result = run_cli(tmp_path, "--holdings", str(hfile))
+    assert result.exit_code != 0
+    assert "Traceback" not in result.output
+
+
+def test_backtest_holdings_bad_date_clean_error(tmp_path: Path) -> None:
+    seed(tmp_path)
+    hfile = tmp_path / "holdings.csv"
+    hfile.write_text("product_id,sub_type,quantity,avg_cost,opened_on\n1,Normal,2,9.0,not-a-date\n")
+    result = run_cli(tmp_path, "--holdings", str(hfile))
+    assert result.exit_code != 0
+    assert "Traceback" not in result.output
+
+
+def test_backtest_holdings_missing_file_clean_error(tmp_path: Path) -> None:
+    seed(tmp_path)
+    result = run_cli(tmp_path, "--holdings", str(tmp_path / "nope.csv"))
+    assert result.exit_code != 0
+    assert "Traceback" not in result.output
+
+
+def test_backtest_empty_window_with_holdings_clean_error(tmp_path: Path) -> None:
+    """An empty window (no trading days) used to raise a raw IndexError once
+    --holdings was supplied, while the same empty window without --holdings
+    exits 0 cleanly. Must be a clean non-zero exit, no traceback."""
+    seed(tmp_path)  # prices only on D1..D3 (2025-06-01..03)
+    hfile = tmp_path / "holdings.csv"
+    hfile.write_text("product_id,sub_type,quantity,avg_cost,opened_on\n1,Normal,2,9.0,2025-05-01\n")
+    result = CliRunner().invoke(
+        app,
+        [
+            "backtest",
+            "--start",
+            "2025-07-01",
+            "--end",
+            "2025-07-02",
+            "--cash",
+            "100",
+            "--root",
+            str(tmp_path),
+            "--holdings",
+            str(hfile),
+        ],
+    )
+    assert result.exit_code != 0
+    assert "Traceback" not in result.output
+
+
+def test_backtest_engine_flag_removed(tmp_path: Path) -> None:
+    seed(tmp_path)
+    result = run_cli(tmp_path, "--engine", "python")
+    assert result.exit_code != 0  # unknown option
+    assert "No such option" in result.output

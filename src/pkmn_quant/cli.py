@@ -15,6 +15,7 @@ from pkmn_quant.data.ingest import ingest_range
 
 if TYPE_CHECKING:
     from pkmn_quant.data.warehouse import Warehouse
+    from pkmn_quant.engine.native import SeededHolding
 
 app = typer.Typer(no_args_is_help=True, help="Pokemon card quant toolkit.")
 
@@ -247,10 +248,46 @@ def ingest(
         typer.echo("Nothing to do - all days already ingested.")
 
 
+def _read_holdings_csv(path: Path) -> list[SeededHolding]:
+    import csv
+
+    from pkmn_quant.engine.native import SeededHolding
+    from pkmn_quant.engine.portfolio import Asset
+
+    out: list[SeededHolding] = []
+    with path.open() as fh:
+        for i, r in enumerate(csv.DictReader(fh), start=1):
+            try:
+                out.append(
+                    SeededHolding(
+                        asset=Asset(product_id=int(r["product_id"]), sub_type=r["sub_type"]),
+                        quantity=int(r["quantity"]),
+                        avg_cost=float(r["avg_cost"]),
+                        opened_on=dt.date.fromisoformat(r["opened_on"]),
+                    )
+                )
+            except KeyError as exc:
+                raise typer.BadParameter(f"holdings row {i}: missing column {exc}") from exc
+            except ValueError as exc:
+                raise typer.BadParameter(f"holdings row {i}: {exc}") from exc
+    return out
+
+
 @app.command()
 def backtest(
     start: str = typer.Option(..., help="Backtest start date (YYYY-MM-DD)."),
     end: str = typer.Option(..., help="Backtest end date (YYYY-MM-DD)."),
+    strategy: str = typer.Option(
+        "buy-and-hold", help="Strategy name (see registry) or buy-and-hold."
+    ),
+    param: list[str] = typer.Option(
+        [], "--param", help="Hyperparameter override k=v (repeatable)."
+    ),
+    holdings: Path | None = typer.Option(
+        None,
+        exists=True,
+        help="CSV of starting holdings: product_id,sub_type,quantity,avg_cost,opened_on.",
+    ),
     cash: float = typer.Option(10_000.0, help="Initial cash."),
     kind: str = typer.Option("sealed", help="Universe for buy-and-hold: sealed|single."),
     impact: bool = typer.Option(
@@ -258,17 +295,10 @@ def backtest(
         "--impact/--no-impact",
         help="Walk-the-spread market impact on fills (see Plan 9 spec).",
     ),
-    engine: str = typer.Option(
-        "cpp",
-        help="Backtest engine: cpp (native, default) or python (reference).",
-    ),
     root: Path = typer.Option(Path("."), help="Project root holding the data/ directory."),
 ) -> None:
-    """Run the buy-and-hold benchmark backtest over the warehouse."""
-    from pkmn_quant.data.warehouse import Warehouse
-    from pkmn_quant.engine.backtest import Backtest
-    from pkmn_quant.engine.costs import CostModel
-    from pkmn_quant.strategies.buy_and_hold import BuyAndHold
+    """Run a single backtest of any registered strategy with cash + holdings."""
+    from pkmn_quant.research.backtest_run import run_single_backtest
 
     try:
         start_date = dt.date.fromisoformat(start)
@@ -278,88 +308,39 @@ def backtest(
     if kind not in ("sealed", "single"):
         raise typer.BadParameter(f"unknown kind {kind!r}; choose sealed or single")
 
-    wh = Warehouse(Paths(root=root))
-    cm = CostModel(impact_enabled=impact)
-    if engine == "cpp":
-        from pkmn_quant.engine.native import NativeBacktest, NativeStrategySpec
+    params: dict[str, str | float | int] = {}
+    for item in param:
+        if "=" not in item:
+            raise typer.BadParameter(f"--param must be k=v, got {item!r}")
+        k, v = item.split("=", 1)
+        params[k.strip()] = v.strip()  # resolve_params coerces per ParamSpec.kind
 
-        result = NativeBacktest(
-            warehouse=wh,
-            strategy=NativeStrategySpec("buy-and-hold", {}, kind=kind),
-            cost_model=cm,
+    seeded: list[SeededHolding] = []
+    if holdings is not None:
+        seeded = _read_holdings_csv(holdings)
+
+    try:
+        out = run_single_backtest(
+            root=root,
+            strategy_name=strategy,
+            params=params,
+            cash=cash,
+            holdings=seeded,
             start=start_date,
             end=end_date,
-            initial_cash=cash,
-        ).run()
-    elif engine == "python":
-        result = Backtest(
-            warehouse=wh,
-            strategy=BuyAndHold(kind=kind),
-            cost_model=cm,
-            start=start_date,
-            end=end_date,
-            initial_cash=cash,
-        ).run()
-    else:
-        raise typer.BadParameter(f"unknown engine {engine!r}; choose python or cpp")
+            impact=impact,
+            kind=kind,
+        )
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
 
-    run_dir = root / "data" / "results" / f"{result.strategy_name}-{start}-{end}"
-    if run_dir.exists():
-        typer.echo(f"warning: overwriting existing results in {run_dir}", err=True)
-    run_dir.mkdir(parents=True, exist_ok=True)
-    result.equity_curve.write_parquet(run_dir / "equity.parquet")
-    fills_df = pl.DataFrame(
-        [
-            {
-                "day": f.day,
-                "product_id": f.asset.product_id,
-                "sub_type": f.asset.sub_type,
-                "quantity": f.quantity,
-                "price": f.price,
-                "fees": f.fees,
-                "impact": f.impact,
-            }
-            for f in result.fills
-        ],
-        schema={
-            "day": pl.Date,
-            "product_id": pl.Int64,
-            "sub_type": pl.Utf8,
-            "quantity": pl.Int64,
-            "price": pl.Float64,
-            "fees": pl.Float64,
-            "impact": pl.Float64,
-        },
-    )
-    fills_df.write_parquet(run_dir / "fills.parquet")
-
-    from pkmn_quant.research.runs import record_run
-
-    run_id = record_run(
-        root=root,
-        command="backtest",
-        strategy=result.strategy_name,
-        config={
-            "command": "backtest",
-            "start": start,
-            "end": end,
-            "cash": cash,
-            "kind": kind,
-            "engine": engine,
-            "warmup_days": 0,
-            "cost_model": cm.as_dict(),
-        },
-        results=result.summary,
-        artifact_path=run_dir,
-        warehouse=wh,
-    )
-    if run_id is not None:
-        typer.echo(f"run recorded: {run_id}")
-
+    result = out.result
+    if out.run_id is not None:
+        typer.echo(f"run recorded: {out.run_id}")
     typer.echo(f"strategy: {result.strategy_name}  ({len(result.fills)} fills)")
     for key, value in result.summary.items():
         typer.echo(f"{key}: {value:.4f}")
-    typer.echo(f"results written to {run_dir}")
+    typer.echo(f"results written to {out.artifact_dir}")
 
 
 @app.command()
@@ -762,7 +743,7 @@ def evaluate(
 
     from pkmn_quant.data.warehouse import Warehouse
     from pkmn_quant.engine.metrics import TRADING_DAYS_PER_YEAR
-    from pkmn_quant.research.runs import record_run
+    from pkmn_quant.research.runs import load_runs, record_run
     from pkmn_quant.research.stats import (
         bootstrap_ci,
         daily_returns_from_curve,
@@ -798,11 +779,29 @@ def evaluate(
 
     # -- benchmark --
     if benchmark is None:
+        # First choice: the old `pkmn backtest`-produced directory name
+        # (data/results/buy-and-hold-sealed-{start}-{end}/), kept for
+        # backwards compatibility with artifacts already on disk.
         candidates = sorted(results_dir.glob("buy-and-hold-sealed-*"))
         candidates = [c for c in candidates if (c / "equity.parquet").exists()]
-        if not candidates:
-            fail("no buy-and-hold-sealed-* benchmark artifact; pass --benchmark")
-        benchmark = max(candidates, key=lambda c: pl.read_parquet(c / "equity.parquet").height)
+        if candidates:
+            benchmark = max(candidates, key=lambda c: pl.read_parquet(c / "equity.parquet").height)
+        else:
+            # Plan 2b rekeyed `pkmn backtest` artifact dirs to
+            # data/results/<run_id>/, so no current command can produce the
+            # glob pattern above any more. Fall back to the run registry:
+            # newest recorded `backtest` run for buy-and-hold-sealed whose
+            # artifact still exists on disk.
+            records = [
+                r
+                for r in load_runs(root)
+                if r.command == "backtest"
+                and r.strategy == "buy-and-hold-sealed"
+                and (Path(r.artifact_path) / "equity.parquet").exists()
+            ]
+            if not records:
+                fail("no buy-and-hold-sealed-* benchmark artifact; pass --benchmark")
+            benchmark = Path(max(records, key=lambda r: r.recorded_at).artifact_path)
     bench_frame = pl.read_parquet(benchmark / "equity.parquet")
 
     # -- align on common dates --
