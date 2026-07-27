@@ -63,7 +63,9 @@ tcgcsv.com). Design spec: `docs/superpowers/specs/2026-06-09-pkmn-quant-design.m
 - Plan 10 complete on feat/cpp-engine (328 tests + 3 dashboard tests + 23
   Catch2 tests): a native C++ engine (`cpp/`, nanobind-bound as
   `pkmn_quant._engine`) with ports of all five strategies, selectable via
-  `--engine cpp` on `pkmn backtest`/`walkforward`; anything else (a raw
+  `--engine cpp` on `pkmn backtest`/`walkforward` at the time (Plan 2b later
+  removed `--engine` from `pkmn backtest`, which is now native-only;
+  `pkmn walkforward` still has it); anything else (a raw
   Python `Strategy`, e.g. ml-ranker) still runs correctly on the C++ event
   loop through a per-bar callback bridge. Full-data acceptance
   (`scripts/parity_full.py`, real 874-day warehouse, 2024-03-01..2026-06-30):
@@ -174,6 +176,32 @@ tcgcsv.com). Design spec: `docs/superpowers/specs/2026-06-09-pkmn-quant-design.m
   alongside the existing `checks` job. This is a viewer only — no run-
   triggering yet (planned Plan 2), no data writes, no strategy claimed to
   beat buy-and-hold.
+- Plan 2b complete on feat/parameterized-backtest (438 tests + 1 skipped;
+  a fresh `uv run pytest` shows 438 passed, 1 skipped): `pkmn backtest` is
+  no longer buy-and-hold-only. `research/registry.py` strategy
+  hyperparameters are now declarative `ParamSpec(name, kind, default, low,
+  high, log)` tuples per `RegistryEntry`, with the optuna search space
+  derived from them (`RegistryEntry.space` is now a property backed by
+  `_space_from_params`); the six hand-written `_*_space` functions are gone,
+  and `tests/research/test_space_reproducibility.py` is a frozen-oracle
+  guard proving the derived space is bit-identical to them, so past
+  walk-forward runs stay reproducible. New `research/backtest_run.py`
+  (`run_single_backtest`) is the parameterized single-strategy capability
+  the CLI (and a future web trigger) both call: native engine only,
+  validates/coerces/default-fills params against the strategy's
+  `ParamSpec`s, validates any starting holdings (must be in the backtest
+  universe and have a mark on the window's first trading day), writes
+  `equity.parquet`/`fills.parquet` to `data/results/<run_id>/`, and records
+  a registry entry under that same run id (`research/runs.py` gained
+  `new_run_id()` plus a `record_run(..., run_id=)` parameter for this).
+  `pkmn backtest` gained `--strategy`, repeatable `--param k=v`,
+  `--holdings <csv>`, `--kind sealed|single`, and `--cash`; `--engine` is
+  removed from `pkmn backtest` (native engine only) but unchanged on
+  `pkmn walkforward`. Real-data smoke test (`pkmn backtest --strategy
+  sealed-accumulation --param take_profit=2.0 --start 2026-05-01 --end
+  2026-06-30` against the live 874-day warehouse): 3 fills, total_return
+  -1.66%, run recorded and visible in `pkmn runs list`. No new research
+  finding — this is capability work, not a new walk-forward result.
 
 ## Commands
 
@@ -183,7 +211,9 @@ uv run pytest                # test suite
 uv run ruff check . && uv run ruff format --check . && uv run mypy
                              # lint + format + strict typecheck (src/ only)
 uv run pkmn ingest --start 2026-07-01 --end 2026-07-31   # extend price history
-uv run pkmn backtest --start 2024-03-01 --end 2026-06-30 # benchmark backtest
+uv run pkmn backtest --start 2024-03-01 --end 2026-06-30 # buy-and-hold benchmark (default strategy)
+uv run pkmn backtest --strategy sealed-accumulation --start 2024-03-01 \
+    --end 2026-06-30 --param take_profit=2.0 --holdings holdings.csv   # any strategy + cash/holdings
 uv run pkmn walkforward --strategy sealed-accumulation \
     --start 2024-03-01 --end 2026-06-30 --trials 15      # research run (cpp, fold-parallel auto)
 uv run pkmn walkforward --strategy sealed-accumulation \
@@ -197,7 +227,8 @@ uv run pkmn runs list                                     # experiment registry:
 uv run pkmn runs show <run-id>                             # full record for one run
 uv run pkmn evaluate                                     # cross-strategy rigor: CIs, DSR, Reality Check
 uv run pkmn backtest --start ... --end ... --no-impact    # flat-cost, skip market-impact model
-uv run pkmn backtest --start ... --end ... --engine cpp   # same result, native C++ engine
+uv run pkmn walkforward --strategy sealed-accumulation --start ... --end ... \
+    --trials 15 --engine python                          # reference (slow) Python engine, walkforward only
 cmake -S cpp -B cpp/build -DPKMN_BUILD_TESTS=ON && cmake --build cpp/build -j && ctest --test-dir cpp/build
                              # C++ unit tests (Catch2), independent of pytest
 uv run python scripts/parity_full.py                      # full-data bit-for-bit acceptance, both engines
@@ -235,7 +266,13 @@ uv.lock together).
   regression-tested. `purged.py`: embargoed, most-recent-dates validation
   split and deterministic fixed-grid model selection
   (`select_config`/`_make_model`, `early_stopping=False` always) for
-  ml-ranker-v2's in-loop selection. `runs.py`:
+  ml-ranker-v2's in-loop selection. `registry.py` strategy hyperparameters
+  are declarative `ParamSpec(name, kind, default, low, high, log)` tuples —
+  the single source for CLI/web param validation, the derived optuna search
+  space (`RegistryEntry.space`), and (Plan 2b) the parameterized single-
+  strategy backtest capability. `backtest_run.py`: `run_single_backtest` —
+  the parameterized single-strategy backtest capability the CLI and a
+  future web trigger both call; native engine only. `runs.py`:
   experiment registry — every backtest/walkforward appends a record (run_id,
   config hash, git SHA+dirty, data fingerprint, results) to
   `data/runs/registry.jsonl`; `pkmn runs list`/`show` inspect it.
