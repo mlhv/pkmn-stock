@@ -43,7 +43,16 @@ class BacktestRunResult:
 def resolve_params(strategy_name: str, params: dict[str, ParamValue]) -> Params:
     """Validate + coerce + default-fill user params against the strategy's
     ParamSpecs. Accepts str or numeric values. buy-and-hold takes none.
-    Raises ValueError on any problem."""
+    Raises ValueError on any problem.
+
+    Note on int coercion: an "int"-kind param is coerced via
+    ``int(float(raw))``, which TRUNCATES rather than rejects a fractional
+    value ("90.9" -> 90, 90.9 -> 90). A typo like ``--param
+    min_age_days=90.9`` silently runs with 90, not an error. This is
+    pinned by tests and by the CLI's string-param path (every ``--param
+    k=v`` value arrives as a string) — do not change the behavior; if you
+    need stricter validation, add it as a new, separate check.
+    """
     if strategy_name == "buy-and-hold":
         if params:
             raise ValueError("buy-and-hold has no tunable parameters")
@@ -97,6 +106,10 @@ def _validate_holdings(prepared: PreparedMarket, holdings: list[SeededHolding]) 
     """
     if not holdings:
         return
+    if not prepared.market.days:
+        raise ValueError(
+            "cannot seed initial holdings: the backtest window contains no trading days"
+        )
     day0 = prepared.market.days[0]
     marks = prepared.market.marks_on(day0)
     for h in holdings:

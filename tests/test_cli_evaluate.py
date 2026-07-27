@@ -77,6 +77,67 @@ def test_evaluate_is_deterministic(tmp_path: Path) -> None:
     assert first == second
 
 
+def _seed_real_prices(root: Path, n_days: int) -> None:
+    w = Warehouse(Paths(root=root))
+    for i in range(n_days):
+        day = START + timedelta(days=i)
+        w.write_prices(day, pl.DataFrame([price_row(day, 1, 10.0 + i * 0.01)], schema=PRICE_SCHEMA))
+    w.write_products(
+        pl.DataFrame(
+            {
+                "product_id": [1],
+                "group_id": [1],
+                "name": ["Box"],
+                "rarity": [None],
+                "kind": ["sealed"],
+                "released_on": [START],
+            }
+        )
+    )
+
+
+def test_evaluate_finds_benchmark_via_run_registry(tmp_path: Path) -> None:
+    """Finding 1 regression. Plan 2b rekeyed `pkmn backtest` artifact dirs
+    from data/results/buy-and-hold-sealed-{start}-{end}/ to
+    data/results/<run_id>/, so no command on this branch can produce the
+    old glob pattern any more. Produce the benchmark with the real `pkmn
+    backtest` CLI (not a hand-written directory, unlike seed_everything
+    above) and confirm `pkmn evaluate` still locates it -- via the
+    run-registry fallback, since the glob will find nothing."""
+    n_days = 90
+    _seed_real_prices(tmp_path, n_days)
+
+    rng = np.random.default_rng(0)
+    for name, drift in [("alpha", 0.0), ("beta", -0.001)]:
+        eq = list(100.0 * np.cumprod(1.0 + rng.normal(drift, 0.01, n_days)))
+        _write_curve(tmp_path / "data" / "results" / f"wf-{name}-x", name, eq)
+
+    backtest_result = CliRunner().invoke(
+        app,
+        [
+            "backtest",
+            "--start",
+            START.isoformat(),
+            "--end",
+            (START + timedelta(days=n_days - 1)).isoformat(),
+            "--cash",
+            "1000",
+            "--root",
+            str(tmp_path),
+        ],
+    )
+    assert backtest_result.exit_code == 0, backtest_result.output
+
+    # sanity: the old glob pattern really is undiscoverable on this branch
+    assert not list((tmp_path / "data" / "results").glob("buy-and-hold-sealed-*"))
+
+    result = run_eval(tmp_path)
+    assert result.exit_code == 0, result.output
+    out = next((tmp_path / "data" / "results").glob("evaluate-*"))
+    payload = json.loads((out / "evaluate.json").read_text())
+    assert set(payload["strategies"]) == {"alpha", "beta"}
+
+
 def test_evaluate_records_run(tmp_path: Path) -> None:
     from pkmn_quant.research.runs import load_runs
 

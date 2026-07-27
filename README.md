@@ -64,7 +64,7 @@ The market-impact model lives in `engine/quotes.py`: a per-day `Quote` (mid/low)
 
 ## Two engines, one result
 
-The Python engine (`engine/backtest.py`) is the always-available reference. The C++ engine (`cpp/`, bound as `pkmn_quant._engine`) ports all five strategies natively; select it with `--engine cpp` (the default since Plan 11). Anything else, including any raw Python `Strategy` such as ml-ranker, still runs correctly on the C++ event loop through a per-bar callback bridge.
+The Python engine (`engine/backtest.py`) is the always-available reference. The C++ engine (`cpp/`, bound as `pkmn_quant._engine`) ports all five strategies natively. `pkmn backtest` is native-only (no `--engine` flag); `pkmn walkforward` still exposes `--engine cpp`/`--engine python`, defaulting to `cpp` since Plan 11. Anything else, including any raw Python `Strategy` such as ml-ranker, still runs correctly on the C++ event loop through a per-bar callback bridge.
 
 **The parity guarantee is bit-for-bit, not "close enough".** Every fill's day, asset, quantity, price, fees, and impact, and every equity-curve value, must match exactly (`==`). Enforced three ways: Catch2 unit tests on the C++ core in isolation, differential tests across both engines for every strategy, and a full-data acceptance script over the real 874-day warehouse:
 

@@ -743,7 +743,7 @@ def evaluate(
 
     from pkmn_quant.data.warehouse import Warehouse
     from pkmn_quant.engine.metrics import TRADING_DAYS_PER_YEAR
-    from pkmn_quant.research.runs import record_run
+    from pkmn_quant.research.runs import load_runs, record_run
     from pkmn_quant.research.stats import (
         bootstrap_ci,
         daily_returns_from_curve,
@@ -779,11 +779,29 @@ def evaluate(
 
     # -- benchmark --
     if benchmark is None:
+        # First choice: the old `pkmn backtest`-produced directory name
+        # (data/results/buy-and-hold-sealed-{start}-{end}/), kept for
+        # backwards compatibility with artifacts already on disk.
         candidates = sorted(results_dir.glob("buy-and-hold-sealed-*"))
         candidates = [c for c in candidates if (c / "equity.parquet").exists()]
-        if not candidates:
-            fail("no buy-and-hold-sealed-* benchmark artifact; pass --benchmark")
-        benchmark = max(candidates, key=lambda c: pl.read_parquet(c / "equity.parquet").height)
+        if candidates:
+            benchmark = max(candidates, key=lambda c: pl.read_parquet(c / "equity.parquet").height)
+        else:
+            # Plan 2b rekeyed `pkmn backtest` artifact dirs to
+            # data/results/<run_id>/, so no current command can produce the
+            # glob pattern above any more. Fall back to the run registry:
+            # newest recorded `backtest` run for buy-and-hold-sealed whose
+            # artifact still exists on disk.
+            records = [
+                r
+                for r in load_runs(root)
+                if r.command == "backtest"
+                and r.strategy == "buy-and-hold-sealed"
+                and (Path(r.artifact_path) / "equity.parquet").exists()
+            ]
+            if not records:
+                fail("no buy-and-hold-sealed-* benchmark artifact; pass --benchmark")
+            benchmark = Path(max(records, key=lambda r: r.recorded_at).artifact_path)
     bench_frame = pl.read_parquet(benchmark / "equity.parquet")
 
     # -- align on common dates --

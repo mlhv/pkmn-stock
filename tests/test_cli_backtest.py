@@ -255,6 +255,33 @@ def test_backtest_holdings_missing_file_clean_error(tmp_path: Path) -> None:
     assert "Traceback" not in result.output
 
 
+def test_backtest_empty_window_with_holdings_clean_error(tmp_path: Path) -> None:
+    """An empty window (no trading days) used to raise a raw IndexError once
+    --holdings was supplied, while the same empty window without --holdings
+    exits 0 cleanly. Must be a clean non-zero exit, no traceback."""
+    seed(tmp_path)  # prices only on D1..D3 (2025-06-01..03)
+    hfile = tmp_path / "holdings.csv"
+    hfile.write_text("product_id,sub_type,quantity,avg_cost,opened_on\n1,Normal,2,9.0,2025-05-01\n")
+    result = CliRunner().invoke(
+        app,
+        [
+            "backtest",
+            "--start",
+            "2025-07-01",
+            "--end",
+            "2025-07-02",
+            "--cash",
+            "100",
+            "--root",
+            str(tmp_path),
+            "--holdings",
+            str(hfile),
+        ],
+    )
+    assert result.exit_code != 0
+    assert "Traceback" not in result.output
+
+
 def test_backtest_engine_flag_removed(tmp_path: Path) -> None:
     seed(tmp_path)
     result = run_cli(tmp_path, "--engine", "python")

@@ -219,3 +219,38 @@ def test_holding_without_day_one_mark_raises(tmp_path: Path) -> None:
             "buy-and-hold",
             holdings=[SeededHolding(Asset(2, "Normal"), 1, 5.0, START)],
         )
+
+
+def test_empty_window_with_holdings_raises_clean_value_error(tmp_path: Path) -> None:
+    """A window with no trading days used to raise a raw IndexError on
+    ``prepared.market.days[0]`` once holdings were supplied (the same empty
+    window WITHOUT holdings runs to completion, since nothing needs day 0).
+    Must fail with a ValueError naming the window, not an unhandled crash."""
+    _seed(tmp_path)  # prices only on START .. START+5
+    holding = SeededHolding(Asset(1, "Normal"), 1, 5.0, START)
+    with pytest.raises(ValueError, match="no trading days"):
+        run_single_backtest(
+            root=tmp_path,
+            strategy_name="buy-and-hold",
+            params={},
+            cash=100.0,
+            holdings=[holding],
+            start=START + timedelta(days=30),
+            end=START + timedelta(days=31),
+        )
+
+
+def test_empty_window_without_holdings_still_runs_clean(tmp_path: Path) -> None:
+    """Same empty window, no holdings: exits cleanly (pre-existing behaviour,
+    pinned so the Finding-2 fix doesn't change this side of the guard)."""
+    _seed(tmp_path)
+    out = run_single_backtest(
+        root=tmp_path,
+        strategy_name="buy-and-hold",
+        params={},
+        cash=100.0,
+        holdings=[],
+        start=START + timedelta(days=30),
+        end=START + timedelta(days=31),
+    )
+    assert out.run_id is not None
