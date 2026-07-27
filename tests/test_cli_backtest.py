@@ -197,15 +197,66 @@ def test_backtest_bad_param_clean_error(tmp_path: Path) -> None:
     assert "Traceback" not in result.output
 
 
+def test_backtest_bad_param_syntax_clean_error(tmp_path: Path) -> None:
+    """--param without a k=v shape (the CLI-local guard, no ValueError from
+    resolve_params) must still fail cleanly, not with an unhandled exit."""
+    seed(tmp_path)
+    result = run_cli(tmp_path, "--strategy", "sealed-accumulation", "--param", "no-equals-sign")
+    assert result.exit_code != 0
+    assert "Traceback" not in result.output
+
+
+def test_backtest_param_out_of_range_clean_error(tmp_path: Path) -> None:
+    """take_profit's range is [1.2, 2.5] (see registry.py); 999 is out of range."""
+    seed(tmp_path)
+    result = run_cli(tmp_path, "--strategy", "sealed-accumulation", "--param", "take_profit=999")
+    assert result.exit_code != 0
+    assert "Traceback" not in result.output
+
+
 def test_backtest_holdings_file(tmp_path: Path) -> None:
     seed(tmp_path)
     hfile = tmp_path / "holdings.csv"
     hfile.write_text("product_id,sub_type,quantity,avg_cost,opened_on\n1,Normal,2,9.0,2025-05-01\n")
     result = run_cli(tmp_path, "--holdings", str(hfile))
     assert result.exit_code == 0, result.output
+    out_dir = tmp_path / "data" / "results"
+    run_dir = next(iter(out_dir.iterdir()))
+    equity = pl.read_parquet(run_dir / "equity.parquet")["equity"].to_list()
+    # Day 0: T+1 fills mean no order has landed yet, so equity[0] isolates
+    # the seeded position: cash (100) + 2 units * day-0 market (10.0) = 120.
+    # (see tests/test_native_seeding.py::test_native_strategy_path_seeds_day_zero_equity
+    # for the same cash + qty*market shape on the native engine directly.)
+    assert equity[0] == pytest.approx(100.0 + 2 * 10.0)
+
+
+def test_backtest_holdings_missing_column_clean_error(tmp_path: Path) -> None:
+    seed(tmp_path)
+    hfile = tmp_path / "holdings.csv"
+    hfile.write_text("product_id,quantity,avg_cost,opened_on\n1,2,9.0,2025-05-01\n")
+    result = run_cli(tmp_path, "--holdings", str(hfile))
+    assert result.exit_code != 0
+    assert "Traceback" not in result.output
+
+
+def test_backtest_holdings_bad_date_clean_error(tmp_path: Path) -> None:
+    seed(tmp_path)
+    hfile = tmp_path / "holdings.csv"
+    hfile.write_text("product_id,sub_type,quantity,avg_cost,opened_on\n1,Normal,2,9.0,not-a-date\n")
+    result = run_cli(tmp_path, "--holdings", str(hfile))
+    assert result.exit_code != 0
+    assert "Traceback" not in result.output
+
+
+def test_backtest_holdings_missing_file_clean_error(tmp_path: Path) -> None:
+    seed(tmp_path)
+    result = run_cli(tmp_path, "--holdings", str(tmp_path / "nope.csv"))
+    assert result.exit_code != 0
+    assert "Traceback" not in result.output
 
 
 def test_backtest_engine_flag_removed(tmp_path: Path) -> None:
     seed(tmp_path)
     result = run_cli(tmp_path, "--engine", "python")
     assert result.exit_code != 0  # unknown option
+    assert "No such option" in result.output

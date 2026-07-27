@@ -256,15 +256,20 @@ def _read_holdings_csv(path: Path) -> list[SeededHolding]:
 
     out: list[SeededHolding] = []
     with path.open() as fh:
-        for r in csv.DictReader(fh):
-            out.append(
-                SeededHolding(
-                    asset=Asset(product_id=int(r["product_id"]), sub_type=r["sub_type"]),
-                    quantity=int(r["quantity"]),
-                    avg_cost=float(r["avg_cost"]),
-                    opened_on=dt.date.fromisoformat(r["opened_on"]),
+        for i, r in enumerate(csv.DictReader(fh), start=1):
+            try:
+                out.append(
+                    SeededHolding(
+                        asset=Asset(product_id=int(r["product_id"]), sub_type=r["sub_type"]),
+                        quantity=int(r["quantity"]),
+                        avg_cost=float(r["avg_cost"]),
+                        opened_on=dt.date.fromisoformat(r["opened_on"]),
+                    )
                 )
-            )
+            except KeyError as exc:
+                raise typer.BadParameter(f"holdings row {i}: missing column {exc}") from exc
+            except ValueError as exc:
+                raise typer.BadParameter(f"holdings row {i}: {exc}") from exc
     return out
 
 
@@ -279,7 +284,9 @@ def backtest(
         [], "--param", help="Hyperparameter override k=v (repeatable)."
     ),
     holdings: Path | None = typer.Option(
-        None, help="CSV of starting holdings: product_id,sub_type,quantity,avg_cost,opened_on."
+        None,
+        exists=True,
+        help="CSV of starting holdings: product_id,sub_type,quantity,avg_cost,opened_on.",
     ),
     cash: float = typer.Option(10_000.0, help="Initial cash."),
     kind: str = typer.Option("sealed", help="Universe for buy-and-hold: sealed|single."),
