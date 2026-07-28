@@ -134,3 +134,39 @@ class JobStatus(ApiModel):
     run_id: str | None
     benchmark_run_id: str | None
     error: str | None
+
+
+class FillRow(ApiModel):
+    day: str
+    product_id: int
+    sub_type: str
+    quantity: int
+    price: float
+    fees: float
+    impact: float
+    seeded: bool
+
+
+class FillsPage(ApiModel):
+    run_id: str
+    offset: int
+    limit: int
+    n_fills: int
+    fills: list[FillRow]
+
+
+class BenchmarkCurve(ApiModel):
+    run_id: str
+    strategy: str
+    equity_curve: list[EquityPoint]
+
+
+class BacktestDetail(ApiModel):
+    run_id: str
+    strategy: str
+    config: dict[str, Any]
+    summary: dict[str, float]
+    equity_curve: list[EquityPoint]
+    benchmark: BenchmarkCurve | None
+    n_fills: int
+    seeded_exits: list[str]

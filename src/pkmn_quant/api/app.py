@@ -13,10 +13,14 @@ from fastapi import FastAPI, HTTPException, Query, Response
 from pkmn_quant.api import data
 from pkmn_quant.api.jobs import Job, JobManager, JobResult
 from pkmn_quant.api.models import (
+    BacktestDetail,
     BacktestRequest,
+    BenchmarkCurve,
     ConfidenceInterval,
     EquityPoint,
     EvaluateResponse,
+    FillRow,
+    FillsPage,
     FoldRow,
     HoldingInput,
     JobStatus,
@@ -188,6 +192,50 @@ def create_app(root: Path, executor: Executor | None = None) -> FastAPI:
         current = jobs.get(job.job_id) or job
         response.status_code = 202
         return _job_status(current)
+
+    @app.get("/api/backtest/{run_id}", response_model=BacktestDetail)
+    def get_backtest(run_id: str) -> BacktestDetail:
+        try:
+            raw = data.load_backtest(root, run_id)
+        except data.NotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from None
+        bench = raw["benchmark"]
+        return BacktestDetail(
+            run_id=raw["run_id"],
+            strategy=raw["strategy"],
+            config=raw["config"],
+            summary=raw["summary"],
+            equity_curve=[EquityPoint(**p) for p in raw["equity_curve"]],
+            benchmark=(
+                BenchmarkCurve(
+                    run_id=bench["run_id"],
+                    strategy=bench["strategy"],
+                    equity_curve=[EquityPoint(**p) for p in bench["equity_curve"]],
+                )
+                if bench
+                else None
+            ),
+            n_fills=raw["n_fills"],
+            seeded_exits=raw["seeded_exits"],
+        )
+
+    @app.get("/api/backtest/{run_id}/fills", response_model=FillsPage)
+    def get_backtest_fills(
+        run_id: str,
+        offset: int = Query(default=0, ge=0),
+        limit: int = Query(default=100, ge=1, le=500),
+    ) -> FillsPage:
+        try:
+            raw = data.load_fills(root, run_id, offset, limit)
+        except data.NotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from None
+        return FillsPage(
+            run_id=raw["run_id"],
+            offset=raw["offset"],
+            limit=raw["limit"],
+            n_fills=raw["n_fills"],
+            fills=[FillRow(**f) for f in raw["fills"]],
+        )
 
     @app.get("/api/jobs", response_model=list[JobStatus])
     def list_jobs() -> list[JobStatus]:
