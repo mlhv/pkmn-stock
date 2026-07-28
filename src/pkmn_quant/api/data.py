@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 import json
 from pathlib import Path
 from typing import Any
@@ -21,7 +22,10 @@ class NotFound(Exception):
 
 
 def list_runs(
-    root: Path, command: str | None = None, strategy: str | None = None
+    root: Path,
+    command: str | None = None,
+    strategy: str | None = None,
+    include_benchmarks: bool = True,
 ) -> list[RunRecord]:
     """Registry records, newest first, optionally filtered."""
     runs = load_runs(root)
@@ -29,6 +33,8 @@ def list_runs(
         runs = [r for r in runs if r.command == command]
     if strategy is not None:
         runs = [r for r in runs if r.strategy == strategy]
+    if not include_benchmarks:
+        runs = [r for r in runs if not r.config.get("benchmark_for")]
     return sorted(runs, key=lambda r: r.recorded_at, reverse=True)
 
 
@@ -177,8 +183,90 @@ def load_fills(root: Path, run_id: str, offset: int, limit: int) -> dict[str, An
     }
 
 
+@functools.lru_cache(maxsize=8)
+def _cached_product_index(root_key: str) -> tuple[dict[str, Any], ...]:
+    """One DuckDB pass over the warehouse, cached per process.
+
+    Search-as-you-type cannot afford a 2.9M-row scan per keystroke, and the
+    catalog only changes on ingest — a long-lived server sees a new product
+    after a restart. Deliberate tradeoff for a local single-user tool.
+    """
+    from pkmn_quant.config import Paths
+    from pkmn_quant.data.warehouse import Warehouse
+
+    wh = Warehouse(Paths(root=Path(root_key)))
+    try:
+        frame = wh.query(
+            """
+            SELECT p.product_id AS product_id,
+                   any_value(p.name) AS name,
+                   any_value(p.kind) AS kind,
+                   list_sort(list(DISTINCT s.sub_type)) AS sub_types,
+                   max(s.date) AS last_priced_on
+            FROM products p
+            JOIN prices s ON s.product_id = p.product_id
+            GROUP BY p.product_id
+            ORDER BY name
+            """
+        )
+    except FileNotFoundError:
+        return ()
+    return tuple(
+        {
+            "product_id": int(r["product_id"]),
+            "name": r["name"],
+            "kind": r["kind"] or "other",
+            "sub_types": list(r["sub_types"]),
+            "last_priced_on": r["last_priced_on"].isoformat(),
+        }
+        for r in frame.iter_rows(named=True)
+    )
+
+
+def product_index(root: Path) -> list[dict[str, Any]]:
+    return list(_cached_product_index(str(root.resolve())))
+
+
+def search_products(root: Path, q: str, limit: int) -> list[dict[str, Any]]:
+    """Case-insensitive substring match on name. Filtering happens in Python
+    against the cached index, so no user input ever reaches SQL."""
+    needle = q.strip().lower()
+    if not needle:
+        return []
+    hits = [p for p in product_index(root) if needle in p["name"].lower()]
+    return hits[:limit]
+
+
 def strategy_catalog() -> list[dict[str, Any]]:
+    """Every triggerable strategy with its declarative ParamSpecs — the
+    single source the web form generates its inputs from. `buy-and-hold` is
+    triggerable but absent from REGISTRY, so it is added explicitly."""
     from pkmn_quant.live.report import THESIS
     from pkmn_quant.research.registry import REGISTRY
 
-    return [{"name": n, "thesis": THESIS.get(n, "")} for n in sorted(REGISTRY)]
+    out: list[dict[str, Any]] = [
+        {
+            "name": "buy-and-hold",
+            "thesis": THESIS.get("buy-and-hold", "Buy the universe on day one and hold."),
+            "params": [],
+        }
+    ]
+    for name in sorted(REGISTRY):
+        out.append(
+            {
+                "name": name,
+                "thesis": THESIS.get(name, ""),
+                "params": [
+                    {
+                        "name": p.name,
+                        "kind": p.kind,
+                        "default": float(p.default),
+                        "low": float(p.low),
+                        "high": float(p.high),
+                        "log": p.log,
+                    }
+                    for p in REGISTRY[name].params
+                ],
+            }
+        )
+    return out

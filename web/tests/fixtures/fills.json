@@ -1,0 +1,18 @@
+{
+  "run_id": "20260728T191328Z-76ecc3",
+  "offset": 0,
+  "limit": 100,
+  "n_fills": 1,
+  "fills": [
+    {
+      "day": "2025-01-06",
+      "product_id": 1,
+      "sub_type": "Normal",
+      "quantity": -2,
+      "price": 15.0,
+      "fees": 4.825,
+      "impact": 0.25,
+      "seeded": true
+    }
+  ]
+}

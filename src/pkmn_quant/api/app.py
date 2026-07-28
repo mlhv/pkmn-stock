@@ -24,6 +24,7 @@ from pkmn_quant.api.models import (
     FoldRow,
     HoldingInput,
     JobStatus,
+    ProductHit,
     RigorCI,
     RunDetail,
     RunSummary,
@@ -72,6 +73,7 @@ def create_app(root: Path, executor: Executor | None = None) -> FastAPI:
     def list_runs(
         command: str | None = Query(default=None),
         strategy: str | None = Query(default=None),
+        include_benchmarks: bool = Query(default=False),
     ) -> list[RunSummary]:
         return [
             RunSummary(
@@ -83,7 +85,9 @@ def create_app(root: Path, executor: Executor | None = None) -> FastAPI:
                 git_dirty=r.git_dirty,
                 results=r.results,
             )
-            for r in data.list_runs(root, command=command, strategy=strategy)
+            for r in data.list_runs(
+                root, command=command, strategy=strategy, include_benchmarks=include_benchmarks
+            )
         ]
 
     @app.get("/api/runs/{run_id}", response_model=RunDetail)
@@ -151,6 +155,13 @@ def create_app(root: Path, executor: Executor | None = None) -> FastAPI:
     @app.get("/api/strategies", response_model=list[StrategyInfo])
     def get_strategies() -> list[StrategyInfo]:
         return [StrategyInfo(**s) for s in data.strategy_catalog()]
+
+    @app.get("/api/products", response_model=list[ProductHit])
+    def search_products(
+        q: str = Query(default=""),
+        limit: int = Query(default=20, ge=1, le=100),
+    ) -> list[ProductHit]:
+        return [ProductHit(**p) for p in data.search_products(root, q, limit)]
 
     @app.post("/api/backtest", response_model=JobStatus, status_code=202)
     def trigger_backtest(req: BacktestRequest, response: Response) -> JobStatus:

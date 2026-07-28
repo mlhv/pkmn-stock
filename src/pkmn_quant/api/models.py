@@ -100,9 +100,27 @@ class EvaluateResponse(ApiModel):
     strategies: list[StrategyStat]
 
 
+class ParamSpecInfo(ApiModel):
+    name: str
+    kind: str  # "int" | "float"
+    default: float
+    low: float
+    high: float
+    log: bool
+
+
+class ProductHit(ApiModel):
+    product_id: int
+    name: str
+    kind: str
+    sub_types: list[str]
+    last_priced_on: str
+
+
 class StrategyInfo(ApiModel):
     name: str
     thesis: str
+    params: list[ParamSpecInfo]
 
 
 class HoldingInput(ApiModel):

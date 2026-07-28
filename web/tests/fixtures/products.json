@@ -1,0 +1,20 @@
+[
+  {
+    "product_id": 1,
+    "name": "Alpha Booster Box",
+    "kind": "sealed",
+    "sub_types": [
+      "Normal"
+    ],
+    "last_priced_on": "2025-01-08"
+  },
+  {
+    "product_id": 2,
+    "name": "Beta Elite Trainer Box",
+    "kind": "sealed",
+    "sub_types": [
+      "Normal"
+    ],
+    "last_priced_on": "2025-01-08"
+  }
+]
