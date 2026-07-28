@@ -11,6 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
+from typing import Any
 
 import polars as pl
 
@@ -173,6 +174,7 @@ def run_single_backtest(
     impact: bool = True,
     warmup_days: int = 0,
     kind: str = "sealed",
+    config_extra: dict[str, Any] | None = None,
 ) -> BacktestRunResult:
     resolved = resolve_params(strategy_name, params)
     wh = Warehouse(Paths(root=root))
@@ -197,26 +199,89 @@ def run_single_backtest(
     run_dir = root / "data" / "results" / run_id
     _write_artifacts(result, run_dir)
 
+    config: dict[str, Any] = {
+        "command": "backtest",
+        "strategy": strategy_name,
+        "params": resolved,
+        "holdings": _holdings_config(holdings),
+        "cash": cash,
+        "kind": kind if strategy_name == "buy-and-hold" else None,
+        "start": start.isoformat(),
+        "end": end.isoformat(),
+        "impact": impact,
+        "warmup_days": warmup_days,
+        "cost_model": cm.as_dict(),
+    }
+    if config_extra:
+        config.update(config_extra)
+
     recorded = record_run(
         root=root,
         command="backtest",
         strategy=result.strategy_name,
-        config={
-            "command": "backtest",
-            "strategy": strategy_name,
-            "params": resolved,
-            "holdings": _holdings_config(holdings),
-            "cash": cash,
-            "kind": kind if strategy_name == "buy-and-hold" else None,
-            "start": start.isoformat(),
-            "end": end.isoformat(),
-            "impact": impact,
-            "warmup_days": warmup_days,
-            "cost_model": cm.as_dict(),
-        },
+        config=config,
         results=result.summary,
         artifact_path=run_dir,
         warehouse=wh,
         run_id=run_id,
     )
     return BacktestRunResult(run_id=recorded, result=result, artifact_dir=run_dir)
+
+
+@dataclass(frozen=True)
+class PairedRunResult:
+    """A strategy run and the buy-and-hold benchmark computed beside it."""
+
+    primary: BacktestRunResult
+    benchmark: BacktestRunResult | None
+
+
+def run_with_benchmark(
+    root: Path,
+    strategy_name: str,
+    params: dict[str, ParamValue],
+    cash: float,
+    holdings: list[SeededHolding],
+    start: date,
+    end: date,
+    *,
+    impact: bool = True,
+    warmup_days: int = 0,
+    kind: str = "sealed",
+) -> PairedRunResult:
+    """Run `strategy_name`, then buy-and-hold-sealed over the IDENTICAL
+    starting state (same window, cash, holdings, impact) so the two equity
+    curves differ only by trading policy. The benchmark record carries
+    ``benchmark_for: <primary run_id>``; that tag is the only linkage.
+
+    Returns benchmark=None when the primary IS buy-and-hold-sealed — pairing
+    a run with a copy of itself buys nothing.
+    """
+    primary = run_single_backtest(
+        root=root,
+        strategy_name=strategy_name,
+        params=params,
+        cash=cash,
+        holdings=holdings,
+        start=start,
+        end=end,
+        impact=impact,
+        warmup_days=warmup_days,
+        kind=kind,
+    )
+    if strategy_name == "buy-and-hold" and kind == "sealed":
+        return PairedRunResult(primary=primary, benchmark=None)
+    benchmark = run_single_backtest(
+        root=root,
+        strategy_name="buy-and-hold",
+        params={},
+        cash=cash,
+        holdings=holdings,
+        start=start,
+        end=end,
+        impact=impact,
+        warmup_days=warmup_days,
+        kind="sealed",
+        config_extra={"benchmark_for": primary.run_id},
+    )
+    return PairedRunResult(primary=primary, benchmark=benchmark)
