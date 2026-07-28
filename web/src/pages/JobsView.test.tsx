@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { JobsView } from "./JobsView";
@@ -45,11 +45,11 @@ describe("JobsView", () => {
     const fetchMock = stub([[RUNNING], [RUNNING], [DONE]]);
     render(<MemoryRouter><JobsView /></MemoryRouter>);
     await waitFor(() => expect(screen.getByText("running")).toBeInTheDocument());
-    await vi.advanceTimersByTimeAsync(1000);
-    await vi.advanceTimersByTimeAsync(1000);
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
     await waitFor(() => expect(screen.getByText("succeeded")).toBeInTheDocument());
     const afterSettled = fetchMock.mock.calls.length;
-    await vi.advanceTimersByTimeAsync(5000);
+    await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
     expect(fetchMock.mock.calls.length).toBe(afterSettled);
   });
 
@@ -57,7 +57,7 @@ describe("JobsView", () => {
     const fetchMock = stub([[DONE]]);
     render(<MemoryRouter><JobsView /></MemoryRouter>);
     await screen.findByText("succeeded");
-    await vi.advanceTimersByTimeAsync(5000);
+    await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
     expect(fetchMock.mock.calls.length).toBe(1);
   });
 });
