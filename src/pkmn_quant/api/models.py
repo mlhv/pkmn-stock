@@ -103,3 +103,34 @@ class EvaluateResponse(ApiModel):
 class StrategyInfo(ApiModel):
     name: str
     thesis: str
+
+
+class HoldingInput(ApiModel):
+    product_id: int
+    sub_type: str
+    quantity: int
+    avg_cost: float
+    opened_on: str  # ISO date
+
+
+class BacktestRequest(ApiModel):
+    strategy: str
+    start: str
+    end: str
+    params: dict[str, float | int | str] = {}
+    cash: float = 10_000.0
+    impact: bool = True
+    kind: str = "sealed"
+    holdings: list[HoldingInput] = []
+
+
+class JobStatus(ApiModel):
+    job_id: str
+    status: str
+    request: dict[str, Any]
+    submitted_at: str
+    started_at: str | None
+    finished_at: str | None
+    run_id: str | None
+    benchmark_run_id: str | None
+    error: str | None

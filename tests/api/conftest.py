@@ -1,14 +1,34 @@
 """Synthetic data root + app fixture for API tests."""
 
 import json
+from collections.abc import Callable
+from concurrent.futures import Executor, Future
 from datetime import date, timedelta
 from pathlib import Path
+from typing import TypeVar
 
 import polars as pl
 import pytest
 from fastapi.testclient import TestClient
 
 from pkmn_quant.api import create_app
+from pkmn_quant.config import Paths
+from pkmn_quant.data.transforms import PRICE_SCHEMA
+from pkmn_quant.data.warehouse import Warehouse
+
+T = TypeVar("T")
+
+
+class InlineExecutor(Executor):
+    """Runs work on submit so a POST completes its job before returning."""
+
+    def submit(self, fn: Callable[..., T], /, *args: object, **kwargs: object) -> "Future[T]":
+        fut: Future[T] = Future()
+        try:
+            fut.set_result(fn(*args, **kwargs))
+        except BaseException as exc:
+            fut.set_exception(exc)
+        return fut
 
 
 def _write_registry(root: Path, records: list[dict]) -> None:
@@ -129,3 +149,60 @@ def seeded_root(tmp_path: Path) -> Path:
 @pytest.fixture
 def client(seeded_root: Path) -> TestClient:
     return TestClient(create_app(seeded_root))
+
+
+def seed_warehouse(root: Path, days: int = 8) -> None:
+    """A 2-asset warehouse: product 1 prints every day, product 2 only from
+    day 3 (so it is in-universe but cannot seed a day-0 holding)."""
+    wh = Warehouse(Paths(root=root))
+    start = date(2025, 1, 1)
+    for i in range(days):
+        day = start + timedelta(days=i)
+        rows = [
+            {
+                "date": day,
+                "product_id": 1,
+                "sub_type": "Normal",
+                "low": 9.0 + i,
+                "mid": 11.5 + i,
+                "high": 30.0 + i,
+                "market": 10.0 + i,
+            }
+        ]
+        if i >= 3:
+            rows.append(
+                {
+                    "date": day,
+                    "product_id": 2,
+                    "sub_type": "Normal",
+                    "low": 4.0,
+                    "mid": 5.5,
+                    "high": 15.0,
+                    "market": 5.0,
+                }
+            )
+        wh.write_prices(day, pl.DataFrame(rows, schema=PRICE_SCHEMA))
+    wh.write_products(
+        pl.DataFrame(
+            {
+                "product_id": [1, 2],
+                "group_id": [1, 1],
+                "name": ["Alpha Booster Box", "Beta Elite Trainer Box"],
+                "rarity": [None, None],
+                "kind": ["sealed", "sealed"],
+                "released_on": [date(2024, 11, 1), date(2024, 12, 1)],
+            }
+        )
+    )
+
+
+@pytest.fixture
+def live_root(tmp_path: Path) -> Path:
+    """A root with real price data (no pre-seeded registry) for trigger tests."""
+    seed_warehouse(tmp_path)
+    return tmp_path
+
+
+@pytest.fixture
+def live_client(live_root: Path) -> TestClient:
+    return TestClient(create_app(live_root, executor=InlineExecutor()))

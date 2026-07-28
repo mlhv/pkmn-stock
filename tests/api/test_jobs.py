@@ -1,27 +1,10 @@
 """JobManager unit tests. An inline executor makes every transition
 observable without sleeping — no polling, no flakes."""
 
-from collections.abc import Callable
-from concurrent.futures import Executor, Future
-from typing import Any, TypeVar
-
 import pytest
 
 from pkmn_quant.api.jobs import JobManager
-
-T = TypeVar("T")
-
-
-class InlineExecutor(Executor):
-    """Runs the callable immediately on submit, in the calling thread."""
-
-    def submit(self, fn: Callable[..., T], /, *args: Any, **kwargs: Any) -> "Future[T]":
-        fut: Future[T] = Future()
-        try:
-            fut.set_result(fn(*args, **kwargs))
-        except BaseException as exc:  # mirrors Executor semantics
-            fut.set_exception(exc)
-        return fut
+from tests.api.conftest import InlineExecutor
 
 
 def test_successful_job_records_both_run_ids() -> None:
