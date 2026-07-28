@@ -61,6 +61,28 @@ def test_returned_job_is_a_snapshot_not_a_live_handle() -> None:
     assert stored is not None and stored.status == "succeeded"
 
 
+def test_request_dict_is_not_aliased_with_stored_state() -> None:
+    """The `request` field is a dict — a mutable container. Neither
+    mutating the snapshot handed back by submit() nor mutating the caller's
+    original dict afterwards may reach the manager's stored copy."""
+    mgr = JobManager(InlineExecutor())
+    original = {"strategy": "xs-momentum"}
+    returned = mgr.submit(original, lambda: ("run-2", None))
+
+    returned.request["strategy"] = "tampered-via-returned"
+    original["strategy"] = "tampered-via-caller-dict"
+
+    stored = mgr.get(returned.job_id)
+    assert stored is not None
+    assert stored.request == {"strategy": "xs-momentum"}
+
+    # get()/list_jobs() must also hand out copies, not aliases of each other.
+    stored.request["strategy"] = "tampered-via-get"
+    stored_again = mgr.get(returned.job_id)
+    assert stored_again is not None
+    assert stored_again.request == {"strategy": "xs-momentum"}
+
+
 def test_status_is_running_while_work_executes() -> None:
     """The worker flips the job to `running` BEFORE calling the work
     function — that is what makes a `running` row appear in the jobs view

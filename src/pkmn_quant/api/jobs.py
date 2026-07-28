@@ -55,25 +55,33 @@ class JobManager:
         job = Job(
             job_id=secrets.token_hex(8),
             status="queued",
-            request=request,
+            request=dict(request),  # defensive copy: don't alias the caller's dict
             submitted_at=_now(),
         )
         with self._lock:
             self._jobs[job.job_id] = job
             while len(self._jobs) > self.max_history:
                 self._jobs.popitem(last=False)
-            snapshot = Job(**vars(job))
+            snapshot = self._snapshot(job)
         self.executor.submit(self._run, job.job_id, work)
         return snapshot
 
     def get(self, job_id: str) -> Job | None:
         with self._lock:
             job = self._jobs.get(job_id)
-            return Job(**vars(job)) if job is not None else None
+            return self._snapshot(job) if job is not None else None
 
     def list_jobs(self) -> list[Job]:
         with self._lock:
-            return [Job(**vars(j)) for j in reversed(self._jobs.values())]
+            return [self._snapshot(j) for j in reversed(self._jobs.values())]
+
+    @staticmethod
+    def _snapshot(job: Job) -> Job:
+        """A copy safe to hand outside the lock: a shallow `dict(...)` on
+        `request` is enough since it holds only JSON-scalar / small values
+        (typically a Pydantic `model_dump()`), not nested mutable structures
+        that would need `copy.deepcopy`."""
+        return Job(**{**vars(job), "request": dict(job.request)})
 
     def _run(self, job_id: str, work: Callable[[], JobResult]) -> None:
         self._update(job_id, status="running", started_at=_now())
