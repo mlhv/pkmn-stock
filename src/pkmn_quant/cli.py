@@ -11,7 +11,8 @@ import polars as pl
 import typer
 
 from pkmn_quant.config import Paths
-from pkmn_quant.data.ingest import ingest_range
+from pkmn_quant.data import tcgcsv
+from pkmn_quant.data.ingest import ingest_range, refresh_products
 
 if TYPE_CHECKING:
     from pkmn_quant.data.warehouse import Warehouse
@@ -246,6 +247,27 @@ def ingest(
         typer.echo(f"{s.day}: {s.rows_clean} clean rows, {s.rows_quarantined} quarantined")
     if not stats:
         typer.echo("Nothing to do - all days already ingested.")
+
+
+@app.command("refresh-products")
+def refresh_products_cmd(
+    root: Path = typer.Option(Path("."), help="Project root holding the data/ directory."),
+) -> None:
+    """Re-fetch the product catalog for every set, without ingesting prices.
+
+    Names come from every tcgcsv group, not just the price-tracked ones:
+    TCGplayer re-files products between groups, so a product priced under a
+    tracked set can end up listed under an untracked promo group. A product
+    with no catalog row has no rarity, so it is tagged kind "other" and is
+    invisible to every kind-filtered strategy.
+    """
+    from pkmn_quant.data.warehouse import Warehouse
+
+    with tcgcsv.make_client() as client:
+        groups = tcgcsv.fetch_groups(client)
+        typer.echo(f"fetching product catalog for {len(groups)} sets...")
+        rows = refresh_products(client, Warehouse(Paths(root=root)), groups)
+    typer.echo(f"wrote {rows} products")
 
 
 def _read_holdings_csv(path: Path) -> list[SeededHolding]:
