@@ -56,7 +56,7 @@ export function BacktestDetail() {
                   </table>
                   <button type="button" disabled={offset === 0}
                     onClick={() => setOffset(Math.max(0, offset - PAGE))}>Previous</button>
-                  <button type="button" disabled={page.fills.length === 0}
+                  <button type="button" disabled={offset + PAGE >= page.n_fills}
                     onClick={() => setOffset(offset + PAGE)}>Next</button>
                 </>
               )}

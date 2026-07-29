@@ -45,11 +45,28 @@ describe("BacktestDetail", () => {
   });
 
   it("pages the fills table", async () => {
-    const calls = mount();
+    // fillsFixture (n_fills: 1) can't exercise real paging — one row can never
+    // fill a 100-row page, so `Next` would correctly stay disabled. Build a
+    // payload with a genuine second page instead of touching the fixture.
+    const paged = {
+      ...fillsFixture,
+      n_fills: 250,
+      fills: Array.from({ length: 100 }, (_, i) => ({
+        ...(fillsFixture as { fills: Record<string, unknown>[] }).fills[0],
+        day: `2025-01-${String((i % 28) + 1).padStart(2, "0")}`,
+      })),
+    };
+    const calls = mount(detailFixture, paged);
     await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
     fireEvent.click(screen.getByRole("button", { name: /next/i }));
     await waitFor(() =>
       expect(calls.some((u) => u.includes("offset=100"))).toBe(true));
+  });
+
+  it("disables Next when the run has no further pages", async () => {
+    mount();
+    await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
+    expect(screen.getByRole("button", { name: /next/i })).toBeDisabled();
   });
 
   it("says so when a run has no benchmark", async () => {
