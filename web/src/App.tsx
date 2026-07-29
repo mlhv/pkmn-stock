@@ -1,5 +1,6 @@
 import { Route, Routes } from "react-router-dom";
 import { Layout } from "./components/Layout";
+import { BacktestDetail } from "./pages/BacktestDetail";
 import { JobsView } from "./pages/JobsView";
 import { NewRun } from "./pages/NewRun";
 import { RigorCompare } from "./pages/RigorCompare";
@@ -14,6 +15,7 @@ export function App() {
         <Route path="/new" element={<NewRun />} />
         <Route path="/jobs" element={<JobsView />} />
         <Route path="/walkforward/:runId" element={<WalkForwardDetail />} />
+        <Route path="/backtest/:runId" element={<BacktestDetail />} />
         <Route path="/evaluate/:runId" element={<RigorCompare />} />
         <Route path="*" element={<p>Not found.</p>} />
       </Routes>
