@@ -202,6 +202,48 @@ tcgcsv.com). Design spec: `docs/superpowers/specs/2026-06-09-pkmn-quant-design.m
   2026-06-30` against the live 874-day warehouse): 3 fills, total_return
   -1.66%, run recorded and visible in `pkmn runs list`. No new research
   finding — this is capability work, not a new walk-forward result.
+- Plan 2c complete on feat/web-trigger-jobs (489 tests + 1 skipped Python —
+  a fresh `uv run pytest` shows 489 passed, 1 skipped — plus 4 dashboard
+  tests via `uv run --group dashboard pytest tests/test_dashboard.py` and
+  25 web tests via `npm run check`): the web explorer can trigger runs, not
+  just view them. `api/jobs.py`'s single-worker `JobManager` (injected
+  `Executor`, in-memory `Job` state) backs `POST /api/backtest` (202 + job
+  id), `GET /api/jobs`, and `GET /api/jobs/{job_id}`; every triggered run is
+  paired with an identical-starting-state buy-and-hold benchmark
+  (`research/backtest_run.py`'s new `run_with_benchmark`/`PairedRunResult`)
+  tagged `config["benchmark_for"] = <primary run_id>` — the only linkage.
+  `GET /api/backtest/{run_id}` and `/fills` serve the paired detail (fills
+  carry a `seeded` flag for exits on starting holdings); `/api/strategies`
+  now carries ParamSpecs plus `buy-and-hold`, `/api/runs` gained
+  `include_benchmarks` (default off, hides paired benchmarks), and new
+  `/api/products` does case-insensitive name search against a
+  process-cached index — 11 endpoints total, up from 5. `web/` gained
+  three screens (`/new` self-generating param form + holdings editor,
+  `/jobs` self-stopping polling table, `/backtest/:runId` detail with the
+  benchmark overlaid on the equity chart and seeded-exit markers) for 6
+  total. Dashboard fix: `benchmark_runs()` is now registry-driven (filters
+  `command == "backtest"` and `strategy.startswith("buy-and-hold")`)
+  instead of directory-scanning, so triggered runs and their paired
+  benchmarks no longer clutter the overlay selector with opaque ids.
+  Real-data end-to-end check (server against the live 874-day warehouse):
+  `GET /api/products?q=surging` took 0.42s cold (first DuckDB pass over the
+  full warehouse to build the process-cached index) and 0.003s warm on a
+  second query — comfortably under the multi-second concern threshold, but
+  the cold cost is real and worth knowing about before judging first-query
+  latency. `POST /api/backtest` (sealed-accumulation, 2026-05-01..2026-06-30,
+  $5,000 cash) reached `succeeded` in ~1.8s with `run_id
+  20260729T035305Z-e61086` and `benchmark_run_id 20260729T035306Z-b67712`;
+  `GET /api/backtest/<run_id>` returned a 61-point equity curve on both the
+  primary and the benchmark (3 fills, total_return -1.55%). Honest caveats:
+  job state is in-memory (a restart loses the job list, never the results,
+  already durable in the run registry); the product index is cached per
+  process, so a fresh ingest is invisible until the server restarts;
+  holdings that fail universe/mark validation surface as a failed job
+  rather than a synchronous 400; and `/api/products` inner-joins `products`
+  to `prices`, so a product_id with price history but no catalog row (40 of
+  4,687 inside the backtest window, 1,845 of 6,493 warehouse-wide per the
+  Plan 10 finding) is silently absent from search even though a backtest
+  will still trade it — scheduled as follow-up work, not fixed here.
 
 ## Commands
 
@@ -271,8 +313,13 @@ uv.lock together).
   the single source for CLI/web param validation, the derived optuna search
   space (`RegistryEntry.space`), and (Plan 2b) the parameterized single-
   strategy backtest capability. `backtest_run.py`: `run_single_backtest` —
-  the parameterized single-strategy backtest capability the CLI and a
-  future web trigger both call; native engine only. `runs.py`:
+  the parameterized single-strategy backtest capability the CLI and the web
+  trigger both call; native engine only. Plan 2c added `run_with_benchmark`
+  beside it: runs the strategy, then buy-and-hold-sealed over the identical
+  starting state (same window, cash, holdings, impact), tagging the
+  benchmark's registry record `config["benchmark_for"] = <primary run_id>`
+  (the only linkage; `benchmark=None` when the primary already is
+  buy-and-hold-sealed). `runs.py`:
   experiment registry — every backtest/walkforward appends a record (run_id,
   config hash, git SHA+dirty, data fingerprint, results) to
   `data/runs/registry.jsonl`; `pkmn runs list`/`show` inspect it.
@@ -318,18 +365,31 @@ uv.lock together).
   ~2.9M price rows) plus raw archives. Do not delete; re-ingest is ~40 min.
   `data/portfolio/` holds the gitignored real and paper ledgers. `data/runs/`
   holds the gitignored experiment registry (`registry.jsonl`).
-- `src/pkmn_quant/api/` — FastAPI read-only research explorer API (dependency
-  group `api`): `models.py` has the Pydantic response models (also the
-  cross-language contract checked by `tests/api/test_contract.py`); 5
-  endpoints over the experiment registry and walkforward/evaluate artifacts.
-  Run standalone with `uv run --group api uvicorn pkmn_quant.api:app --port
-  8000`, or via `make web` alongside the frontend dev server.
+- `src/pkmn_quant/api/` — FastAPI research explorer API (dependency group
+  `api`): `models.py` has the Pydantic response models (also the
+  cross-language contract checked by `tests/api/test_contract.py`); 11
+  endpoints over the experiment registry and walkforward/evaluate/backtest
+  artifacts. No longer read-only as of Plan 2c: `POST /api/backtest` (202 +
+  job id) plus `GET /api/jobs`/`GET /api/jobs/{job_id}` are backed by
+  `jobs.py`'s single-worker `JobManager` (an injected `Executor`; job state
+  is in-memory only — a restart loses the job list, never the results,
+  which are already durable in the run registry). Every triggered run is
+  paired with an identical-starting-state buy-and-hold benchmark
+  (`research/backtest_run.py`'s `run_with_benchmark`), linked solely by
+  `config["benchmark_for"]`. Run standalone with `uv run --group api
+  uvicorn pkmn_quant.api:app --port 8000`, or via `make web` alongside the
+  frontend dev server.
 - `web/` — React/TypeScript SPA (Vite), its own toolchain (`web/package.json`,
   `web/package-lock.json` committed) independent of the `uv`/Python gates:
-  3 screens (runs browser, walk-forward detail, cross-strategy rigor
-  compare) consuming the API above. `npm run check` (tsc --noEmit + vitest,
-  8 tests) and `npm run build` (production build) gate it; CI runs both in
-  a dedicated `web` job alongside the Python `checks` job.
+  6 screens consuming the API above — runs browser (`/`), new-run trigger
+  form (`/new`, generated from the strategy's ParamSpecs, with a holdings
+  editor and product autocomplete), jobs queue (`/jobs`, self-stopping
+  polling), walk-forward detail (`/walkforward/:runId`), backtest detail
+  (`/backtest/:runId`, benchmark overlaid on the equity chart, seeded-exit
+  markers, paginated fills table), and cross-strategy rigor compare
+  (`/evaluate/:runId`). `npm run check` (tsc --noEmit + vitest, 25 tests)
+  and `npm run build` (production build) gate it; CI runs both in a
+  dedicated `web` job alongside the Python `checks` job.
 
 ## Conventions and gotchas
 

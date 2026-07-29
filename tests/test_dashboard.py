@@ -4,6 +4,7 @@ Run with the dashboard group: uv run --group dashboard pytest tests/test_dashboa
 Under plain `uv run pytest` these skip (streamlit not installed).
 """
 
+import json
 from pathlib import Path
 
 import pytest
@@ -81,3 +82,50 @@ def test_paper_empty_state_shows_deposit_hint(
     at = ledger_radio.set_value("Paper").run()
     assert not at.exception
     assert any("--paper" in str(i.value) for i in at.info)
+
+
+def test_benchmark_runs_excludes_non_benchmark_backtests(tmp_path, monkeypatch) -> None:
+    """A triggered sealed-accumulation run must not appear in the benchmark
+    overlay selector just because it has an equity.parquet."""
+    import app.dashboard as dash
+
+    results = tmp_path / "data" / "results"
+    for name in ("20260727T100000Z-aaa111", "20260727T100001Z-bbb222"):
+        (results / name).mkdir(parents=True)
+        (results / name / "equity.parquet").write_bytes(b"")
+    reg = tmp_path / "data" / "runs" / "registry.jsonl"
+    reg.parent.mkdir(parents=True)
+    rows = [
+        {
+            "run_id": "20260727T100000Z-aaa111",
+            "recorded_at": "2026-07-27T10:00:00+00:00",
+            "command": "backtest",
+            "strategy": "sealed-accumulation",
+            "git_sha": None,
+            "git_dirty": False,
+            "config_hash": "x",
+            "config": {},
+            "data_fingerprint": {},
+            "results": {},
+            "artifact_path": str(results / "20260727T100000Z-aaa111"),
+        },
+        {
+            "run_id": "20260727T100001Z-bbb222",
+            "recorded_at": "2026-07-27T10:00:01+00:00",
+            "command": "backtest",
+            "strategy": "buy-and-hold-sealed",
+            "git_sha": None,
+            "git_dirty": False,
+            "config_hash": "y",
+            "config": {},
+            "data_fingerprint": {},
+            "results": {},
+            "artifact_path": str(results / "20260727T100001Z-bbb222"),
+        },
+    ]
+    reg.write_text("".join(json.dumps(r) + "\n" for r in rows))
+    monkeypatch.setattr(dash, "ROOT", tmp_path)
+    monkeypatch.setattr(dash, "RESULTS", results)
+
+    names = [p.name for p in dash.benchmark_runs()]
+    assert names == ["20260727T100001Z-bbb222"]

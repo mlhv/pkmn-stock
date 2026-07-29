@@ -158,12 +158,18 @@ exit signals against a real ledger and works with the paper daily loop.
 
 ## Web explorer
 
-A read-only research explorer over the experiment registry and walk-forward/
-evaluate artifacts: browse recorded runs, drill into a single walk-forward
-run's folds/equity curve/rigor CI, and compare the full strategy zoo's
+A research explorer over the experiment registry and walk-forward/evaluate
+artifacts, with the ability to trigger new runs from the browser: browse
+recorded runs, launch a parameterized backtest (any strategy, any params,
+optional starting holdings) from a form generated off the strategy's
+declarative parameter specs, watch it through a polling jobs queue, and open
+the finished run's detail screen — equity curve overlaid with an
+identical-starting-state buy-and-hold benchmark, seeded-exit markers, and a
+paginated fills table. Also: drill into a single walk-forward run's
+folds/equity curve/rigor CI, and compare the full strategy zoo's
 deflated-Sharpe/Reality-Check numbers side by side. Stack: FastAPI
-(`src/pkmn_quant/api/`, 5 endpoints) serving Pydantic-typed JSON, and a
-React/TS single-page app (`web/`, 3 screens) with its own toolchain.
+(`src/pkmn_quant/api/`, 11 endpoints) serving Pydantic-typed JSON, and a
+React/TS single-page app (`web/`, 6 screens) with its own toolchain.
 
 One-command dev (runs both the API and the web dev server together, Ctrl-C
 stops both):
@@ -174,9 +180,13 @@ make web
 
 ![Web explorer — walk-forward detail: stitched OOS equity curve, block-bootstrap CI, and the mark-smoothing caveat](docs/assets/web-explorer.png)
 
-This is a viewer only — read-only, no data writes, and it does not claim any
-strategy beats buy-and-hold. Triggering new runs from the browser is planned
-for a later phase (Plan 2), not implemented here.
+This is a research tool, not a trading terminal: no strategy is claimed to
+beat buy-and-hold, and a triggered run writes a real artifact directory plus
+a run-registry record — there is no sandbox mode. Job state lives in memory
+(a server restart loses the jobs queue, never the results); the product
+search index is cached per process, so a fresh ingest needs a restart to
+become searchable; and holdings that fail universe/mark validation surface
+as a failed job rather than a form error.
 
 ## Engineering practices
 
