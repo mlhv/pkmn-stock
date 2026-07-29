@@ -1,0 +1,259 @@
+[
+  {
+    "name": "buy-and-hold",
+    "thesis": "Buy the universe on day one and hold.",
+    "params": []
+  },
+  {
+    "name": "cost-aware-reversion",
+    "thesis": "Cards trading well below recent highs tend to revert; buy dips that clear ~12.75% round-trip cost hurdle, sell at profit target or time limit.",
+    "params": [
+      {
+        "name": "dip_window_days",
+        "kind": "int",
+        "default": 30.0,
+        "low": 14.0,
+        "high": 90.0,
+        "log": false
+      },
+      {
+        "name": "dip_threshold",
+        "kind": "float",
+        "default": 0.25,
+        "low": 0.15,
+        "high": 0.5,
+        "log": false
+      },
+      {
+        "name": "min_edge",
+        "kind": "float",
+        "default": 0.05,
+        "low": 0.02,
+        "high": 0.15,
+        "log": false
+      },
+      {
+        "name": "take_profit",
+        "kind": "float",
+        "default": 1.25,
+        "low": 1.1,
+        "high": 1.6,
+        "log": false
+      },
+      {
+        "name": "max_hold_days",
+        "kind": "int",
+        "default": 120.0,
+        "low": 30.0,
+        "high": 180.0,
+        "log": false
+      }
+    ]
+  },
+  {
+    "name": "dip-buyer",
+    "thesis": "Sharp one-week dips in singles may mean-revert; buy the dip, exit on time or profit target.",
+    "params": [
+      {
+        "name": "dip_threshold",
+        "kind": "float",
+        "default": 0.3,
+        "low": 0.1,
+        "high": 0.5,
+        "log": false
+      },
+      {
+        "name": "hold_days",
+        "kind": "int",
+        "default": 30.0,
+        "low": 7.0,
+        "high": 90.0,
+        "log": false
+      },
+      {
+        "name": "take_profit",
+        "kind": "float",
+        "default": 1.25,
+        "low": 1.05,
+        "high": 1.6,
+        "log": false
+      }
+    ]
+  },
+  {
+    "name": "ml-ranker",
+    "thesis": "Gradient-boosted model ranks all products by predicted forward return from trailing features; hold the top names, retrain each rebalance from history only.",
+    "params": [
+      {
+        "name": "horizon_days",
+        "kind": "int",
+        "default": 30.0,
+        "low": 14.0,
+        "high": 60.0,
+        "log": false
+      },
+      {
+        "name": "rebalance_days",
+        "kind": "int",
+        "default": 30.0,
+        "low": 21.0,
+        "high": 90.0,
+        "log": false
+      },
+      {
+        "name": "top_n",
+        "kind": "int",
+        "default": 8.0,
+        "low": 3.0,
+        "high": 15.0,
+        "log": false
+      },
+      {
+        "name": "train_days",
+        "kind": "int",
+        "default": 365.0,
+        "low": 120.0,
+        "high": 540.0,
+        "log": false
+      },
+      {
+        "name": "max_iter",
+        "kind": "int",
+        "default": 100.0,
+        "low": 50.0,
+        "high": 300.0,
+        "log": true
+      },
+      {
+        "name": "learning_rate",
+        "kind": "float",
+        "default": 0.1,
+        "low": 0.03,
+        "high": 0.3,
+        "log": true
+      },
+      {
+        "name": "min_samples_leaf",
+        "kind": "int",
+        "default": 20.0,
+        "low": 10.0,
+        "high": 50.0,
+        "log": false
+      }
+    ]
+  },
+  {
+    "name": "ml-ranker-v2",
+    "thesis": "Gradient-boosted model ranks products by predicted forward return NET of round-trip cost, using friction/momentum-shape features and in-loop purged model selection; hold the top names, retrain each rebalance from history only.",
+    "params": [
+      {
+        "name": "horizon_days",
+        "kind": "int",
+        "default": 30.0,
+        "low": 14.0,
+        "high": 60.0,
+        "log": false
+      },
+      {
+        "name": "rebalance_days",
+        "kind": "int",
+        "default": 30.0,
+        "low": 21.0,
+        "high": 90.0,
+        "log": false
+      },
+      {
+        "name": "top_n",
+        "kind": "int",
+        "default": 8.0,
+        "low": 3.0,
+        "high": 15.0,
+        "log": false
+      },
+      {
+        "name": "train_days",
+        "kind": "int",
+        "default": 365.0,
+        "low": 120.0,
+        "high": 540.0,
+        "log": false
+      },
+      {
+        "name": "min_price",
+        "kind": "float",
+        "default": 3.0,
+        "low": 1.0,
+        "high": 10.0,
+        "log": false
+      },
+      {
+        "name": "min_samples_leaf",
+        "kind": "int",
+        "default": 20.0,
+        "low": 10.0,
+        "high": 50.0,
+        "log": false
+      }
+    ]
+  },
+  {
+    "name": "sealed-accumulation",
+    "thesis": "Sealed products crash post-release then grind up as supply dries; buy aged drawdowns, sell at a target multiple.",
+    "params": [
+      {
+        "name": "min_drawdown",
+        "kind": "float",
+        "default": 0.25,
+        "low": 0.1,
+        "high": 0.5,
+        "log": false
+      },
+      {
+        "name": "take_profit",
+        "kind": "float",
+        "default": 1.5,
+        "low": 1.2,
+        "high": 2.5,
+        "log": false
+      },
+      {
+        "name": "min_age_days",
+        "kind": "int",
+        "default": 60.0,
+        "low": 30.0,
+        "high": 180.0,
+        "log": false
+      }
+    ]
+  },
+  {
+    "name": "xs-momentum",
+    "thesis": "Winners keep winning: hold the top trailing performers among singles, rebalance periodically.",
+    "params": [
+      {
+        "name": "lookback_days",
+        "kind": "int",
+        "default": 60.0,
+        "low": 14.0,
+        "high": 120.0,
+        "log": false
+      },
+      {
+        "name": "top_n",
+        "kind": "int",
+        "default": 10.0,
+        "low": 5.0,
+        "high": 25.0,
+        "log": false
+      },
+      {
+        "name": "rebalance_days",
+        "kind": "int",
+        "default": 30.0,
+        "low": 7.0,
+        "high": 60.0,
+        "log": false
+      }
+    ]
+  }
+]

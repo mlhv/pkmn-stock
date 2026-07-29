@@ -100,6 +100,91 @@ class EvaluateResponse(ApiModel):
     strategies: list[StrategyStat]
 
 
+class ParamSpecInfo(ApiModel):
+    name: str
+    kind: str  # "int" | "float"
+    default: float
+    low: float
+    high: float
+    log: bool
+
+
+class ProductHit(ApiModel):
+    product_id: int
+    name: str
+    kind: str
+    sub_types: list[str]
+    last_priced_on: str
+
+
 class StrategyInfo(ApiModel):
     name: str
     thesis: str
+    params: list[ParamSpecInfo]
+
+
+class HoldingInput(ApiModel):
+    product_id: int
+    sub_type: str
+    quantity: int
+    avg_cost: float
+    opened_on: str  # ISO date
+
+
+class BacktestRequest(ApiModel):
+    strategy: str
+    start: str
+    end: str
+    params: dict[str, float | int | str] = {}
+    cash: float = 10_000.0
+    impact: bool = True
+    kind: str = "sealed"
+    holdings: list[HoldingInput] = []
+
+
+class JobStatus(ApiModel):
+    job_id: str
+    status: str
+    request: dict[str, Any]
+    submitted_at: str
+    started_at: str | None
+    finished_at: str | None
+    run_id: str | None
+    benchmark_run_id: str | None
+    error: str | None
+
+
+class FillRow(ApiModel):
+    day: str
+    product_id: int
+    sub_type: str
+    quantity: int
+    price: float
+    fees: float
+    impact: float
+    seeded: bool
+
+
+class FillsPage(ApiModel):
+    run_id: str
+    offset: int
+    limit: int
+    n_fills: int
+    fills: list[FillRow]
+
+
+class BenchmarkCurve(ApiModel):
+    run_id: str
+    strategy: str
+    equity_curve: list[EquityPoint]
+
+
+class BacktestDetail(ApiModel):
+    run_id: str
+    strategy: str
+    config: dict[str, Any]
+    summary: dict[str, float]
+    equity_curve: list[EquityPoint]
+    benchmark: BenchmarkCurve | None
+    n_fills: int
+    seeded_exits: list[str]

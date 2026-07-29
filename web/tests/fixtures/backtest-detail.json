@@ -1,0 +1,132 @@
+{
+  "run_id": "20260728T191328Z-76ecc3",
+  "strategy": "sealed-accumulation",
+  "config": {
+    "cash": 500.0,
+    "command": "backtest",
+    "cost_model": {
+      "fallback_max_qty": 1,
+      "fee_rate": 0.1275,
+      "impact_enabled": true,
+      "liquidity_tiers": [
+        [
+          5.0,
+          20
+        ],
+        [
+          50.0,
+          8
+        ],
+        [
+          200.0,
+          3
+        ]
+      ],
+      "shipping_per_line": 1.0
+    },
+    "end": "2025-01-08",
+    "holdings": [
+      {
+        "avg_cost": 9.0,
+        "opened_on": "2024-12-01",
+        "product_id": 1,
+        "quantity": 2,
+        "sub_type": "Normal"
+      }
+    ],
+    "impact": true,
+    "kind": null,
+    "params": {
+      "min_age_days": 60,
+      "min_drawdown": 0.25,
+      "take_profit": 1.5
+    },
+    "start": "2025-01-01",
+    "strategy": "sealed-accumulation",
+    "warmup_days": 0
+  },
+  "summary": {
+    "cagr": 0.6348139495630913,
+    "calmar": 109.00220012010094,
+    "max_drawdown": -0.005823863636363669,
+    "sharpe": 7.098317026042852,
+    "sortino": 11.745291716552975,
+    "total_return": 0.009471153846153824
+  },
+  "equity_curve": [
+    {
+      "date": "2025-01-01",
+      "equity": 520.0
+    },
+    {
+      "date": "2025-01-02",
+      "equity": 522.0
+    },
+    {
+      "date": "2025-01-03",
+      "equity": 524.0
+    },
+    {
+      "date": "2025-01-04",
+      "equity": 526.0
+    },
+    {
+      "date": "2025-01-05",
+      "equity": 528.0
+    },
+    {
+      "date": "2025-01-06",
+      "equity": 524.925
+    },
+    {
+      "date": "2025-01-07",
+      "equity": 524.925
+    },
+    {
+      "date": "2025-01-08",
+      "equity": 524.925
+    }
+  ],
+  "benchmark": {
+    "run_id": "20260728T191328Z-6c38ee",
+    "strategy": "buy-and-hold-sealed",
+    "equity_curve": [
+      {
+        "date": "2025-01-01",
+        "equity": 520.0
+      },
+      {
+        "date": "2025-01-02",
+        "equity": 515.0
+      },
+      {
+        "date": "2025-01-03",
+        "equity": 525.0
+      },
+      {
+        "date": "2025-01-04",
+        "equity": 535.0
+      },
+      {
+        "date": "2025-01-05",
+        "equity": 545.0
+      },
+      {
+        "date": "2025-01-06",
+        "equity": 555.0
+      },
+      {
+        "date": "2025-01-07",
+        "equity": 565.0
+      },
+      {
+        "date": "2025-01-08",
+        "equity": 575.0
+      }
+    ]
+  },
+  "n_fills": 1,
+  "seeded_exits": [
+    "2025-01-06"
+  ]
+}

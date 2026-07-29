@@ -221,6 +221,31 @@ def test_holding_without_day_one_mark_raises(tmp_path: Path) -> None:
         )
 
 
+def test_holding_opened_after_window_start_raises(tmp_path: Path) -> None:
+    """A starting holding opened after the window start is incoherent, and it
+    silently disarms every duration-gated strategy: they compute
+    ``(ctx.today - pos.opened_on).days``, which is negative for a future
+    opened_on, so the age/rebalance gate never fires and the run trades
+    nothing while still reporting success. Guarded in the shared capability
+    layer so the CLI's --holdings CSV path is covered too, not just the API."""
+    _seed(tmp_path)
+    late = SeededHolding(Asset(1, "Normal"), 1, 5.0, START + timedelta(days=3))
+    with pytest.raises(ValueError, match="opened_on"):
+        _run(tmp_path, "buy-and-hold", holdings=[late])
+
+
+def test_holding_opened_on_the_window_start_is_accepted(tmp_path: Path) -> None:
+    """The boundary: opened_on == start is legitimate and must still run."""
+    _seed(tmp_path)
+    out = _run(
+        tmp_path,
+        "buy-and-hold",
+        holdings=[SeededHolding(Asset(1, "Normal"), 1, 5.0, START)],
+        cash=100.0,
+    )
+    assert out.run_id is not None
+
+
 def test_empty_window_with_holdings_raises_clean_value_error(tmp_path: Path) -> None:
     """A window with no trading days used to raise a raw IndexError on
     ``prepared.market.days[0]`` once holdings were supplied (the same empty
@@ -254,3 +279,95 @@ def test_empty_window_without_holdings_still_runs_clean(tmp_path: Path) -> None:
         end=START + timedelta(days=31),
     )
     assert out.run_id is not None
+
+
+# --- benchmark pairing ----------------------------------------------------
+
+
+def test_config_extra_merged_into_record(tmp_path: Path) -> None:
+    _seed(tmp_path)
+    from pkmn_quant.research.backtest_run import run_single_backtest
+    from pkmn_quant.research.runs import load_runs
+
+    run_single_backtest(
+        root=tmp_path,
+        strategy_name="buy-and-hold",
+        params={},
+        cash=100.0,
+        holdings=[],
+        start=START,
+        end=START + timedelta(days=5),
+        config_extra={"benchmark_for": "20250101T000000Z-abcdef"},
+    )
+    rec = load_runs(tmp_path)[-1]
+    assert rec.config["benchmark_for"] == "20250101T000000Z-abcdef"
+    assert rec.config["strategy"] == "buy-and-hold"  # untouched keys survive
+
+
+def test_run_with_benchmark_pairs_two_runs(tmp_path: Path) -> None:
+    _seed(tmp_path)
+    from pkmn_quant.research.backtest_run import run_with_benchmark
+    from pkmn_quant.research.runs import load_runs
+
+    paired = run_with_benchmark(
+        root=tmp_path,
+        strategy_name="sealed-accumulation",
+        params={},
+        cash=500.0,
+        holdings=[],
+        start=START,
+        end=START + timedelta(days=5),
+    )
+    assert paired.benchmark is not None
+    assert paired.primary.run_id != paired.benchmark.run_id
+    by_id = {r.run_id: r for r in load_runs(tmp_path)}
+    bench = by_id[paired.benchmark.run_id]
+    assert bench.config["benchmark_for"] == paired.primary.run_id
+    assert bench.config["strategy"] == "buy-and-hold"
+    # identical starting state: same cash, window, impact, holdings
+    primary = by_id[paired.primary.run_id]
+    for key in ("cash", "start", "end", "impact", "holdings"):
+        assert bench.config[key] == primary.config[key]
+
+
+def test_run_with_benchmark_passes_holdings_to_both(tmp_path: Path) -> None:
+    _seed(tmp_path)
+    from pkmn_quant.research.backtest_run import run_with_benchmark
+
+    holding = SeededHolding(
+        asset=Asset(product_id=1, sub_type="Normal"),
+        quantity=3,
+        avg_cost=9.0,
+        opened_on=date(2024, 12, 1),
+    )
+    paired = run_with_benchmark(
+        root=tmp_path,
+        strategy_name="sealed-accumulation",
+        params={},
+        cash=100.0,
+        holdings=[holding],
+        start=START,
+        end=START + timedelta(days=5),
+    )
+    assert paired.benchmark is not None
+    # both curves start from cash + 3 * day-0 market (10.0) = 130
+    assert paired.primary.result.equity_curve["equity"].to_list()[0] == 130.0
+    assert paired.benchmark.result.equity_curve["equity"].to_list()[0] == 130.0
+
+
+def test_run_with_benchmark_skips_self_pairing(tmp_path: Path) -> None:
+    # buy-and-hold-sealed IS the benchmark; pairing it with itself is waste.
+    _seed(tmp_path)
+    from pkmn_quant.research.backtest_run import run_with_benchmark
+
+    paired = run_with_benchmark(
+        root=tmp_path,
+        strategy_name="buy-and-hold",
+        params={},
+        cash=100.0,
+        holdings=[],
+        start=START,
+        end=START + timedelta(days=5),
+        kind="sealed",
+    )
+    assert paired.benchmark is None

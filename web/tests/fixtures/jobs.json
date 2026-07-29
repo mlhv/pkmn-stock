@@ -1,0 +1,30 @@
+[
+  {
+    "job_id": "fc0a91b98cae213f",
+    "status": "succeeded",
+    "request": {
+      "strategy": "sealed-accumulation",
+      "start": "2025-01-01",
+      "end": "2025-01-08",
+      "params": {},
+      "cash": 500.0,
+      "impact": true,
+      "kind": "sealed",
+      "holdings": [
+        {
+          "product_id": 1,
+          "sub_type": "Normal",
+          "quantity": 2,
+          "avg_cost": 9.0,
+          "opened_on": "2024-12-01"
+        }
+      ]
+    },
+    "submitted_at": "2026-07-28T19:13:28.021066+00:00",
+    "started_at": "2026-07-28T19:13:28.021093+00:00",
+    "finished_at": "2026-07-28T19:13:28.173343+00:00",
+    "run_id": "20260728T191328Z-76ecc3",
+    "benchmark_run_id": "20260728T191328Z-6c38ee",
+    "error": null
+  }
+]

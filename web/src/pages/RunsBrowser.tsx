@@ -7,6 +7,7 @@ import { useAsync } from "../hooks/useAsync";
 const DETAIL_PATH: Record<string, string> = {
   walkforward: "walkforward",
   evaluate: "evaluate",
+  backtest: "backtest",
 };
 
 function headline(r: RunSummary): string {

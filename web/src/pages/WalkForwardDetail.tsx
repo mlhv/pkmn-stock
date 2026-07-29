@@ -15,7 +15,7 @@ export function WalkForwardDetail() {
         {(wf) => (
           <>
             <h2>Walk-forward: {wf.strategy}</h2>
-            <EquityChart curve={wf.equity_curve} rigor={wf.rigor} />
+            <EquityChart curve={wf.equity_curve} />
             {wf.rigor && (
               <p>
                 Stitched OOS total return {pct(wf.rigor.point)}, {" "}

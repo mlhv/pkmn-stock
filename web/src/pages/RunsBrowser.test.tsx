@@ -28,4 +28,14 @@ describe("RunsBrowser", () => {
     render(<MemoryRouter><RunsBrowser /></MemoryRouter>);
     await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("boom"));
   });
+
+  it("links a backtest run to its detail screen", async () => {
+    mountWith([{
+      run_id: "20260727T100009Z-abc123", recorded_at: "2026-07-27T10:00:09+00:00",
+      command: "backtest", strategy: "sealed-accumulation", git_sha: "abc1234",
+      git_dirty: false, results: { total_return: -0.02 },
+    }]);
+    const link = await screen.findByRole("link", { name: /20260727T100009Z-abc123/ });
+    expect(link).toHaveAttribute("href", "/backtest/20260727T100009Z-abc123");
+  });
 });

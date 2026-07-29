@@ -1,6 +1,6 @@
 """Parameterized single-strategy backtest capability (Plan 2b).
 
-One entry point the CLI and (later) the web trigger both call: build any
+One entry point the CLI and the web trigger both call: build any
 registered strategy from name + params, run it on the native engine with cash
 + initial holdings over a window, write artifacts + a registry record. Native
 engine only — never the Python Backtest.
@@ -11,6 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
+from typing import Any
 
 import polars as pl
 
@@ -91,21 +92,50 @@ def _build_strategy(strategy_name: str, params: Params, kind: str) -> NativeStra
     return REGISTRY[strategy_name].factory(params)
 
 
-def _validate_holdings(prepared: PreparedMarket, holdings: list[SeededHolding]) -> None:
-    """Reject a starting holding whose asset can't legally seed this window.
+def validate_opened_on(index: int, opened_on: date, start: date) -> None:
+    """Reject a STARTING holding opened after the window starts.
 
-    Two independent checks, both required:
-      1. universe membership — the asset must appear somewhere in [start, end]
+    Incoherent by definition — the position is held on day 0, so it cannot
+    have been opened later — and silently corrosive if allowed through: five
+    strategies derive their exit/rebalance timing from
+    ``(ctx.today - pos.opened_on).days``, which goes NEGATIVE for an
+    opened_on past the window, so the age gate never fires. For xs-momentum
+    and both ml-rankers the rebalance gate is "flat OR newest opened_on old
+    enough", so one such seeded holding keeps the portfolio non-flat forever
+    and the strategy makes zero trades for the entire run — while the run
+    still succeeds and reports a clean equity curve.
+
+    Needs no market data, so callers that can check early (the API's
+    ``_to_seeded``) do it synchronously; ``_validate_holdings`` re-checks so
+    the invariant holds for every caller of ``run_single_backtest``,
+    including the CLI's ``--holdings`` CSV path.
+    """
+    if opened_on > start:
+        raise ValueError(
+            f"holding {index}: opened_on {opened_on.isoformat()} is after the backtest "
+            f"window start {start.isoformat()}; a starting holding must already be held"
+        )
+
+
+def _validate_holdings(prepared: PreparedMarket, holdings: list[SeededHolding]) -> None:
+    """Reject a starting holding that can't legally seed this window.
+
+    Three independent checks, all required:
+      1. opened_on no later than the window start (``validate_opened_on``);
+         needs no market data, so it runs first.
+      2. universe membership — the asset must appear somewhere in [start, end]
          (``prepared.asset_index``); NativeBacktest itself also enforces this
          (mapping to a dense C++ asset id), but checking here gives an error
          before any C++ boundary crossing.
-      2. a mark on the window's first trading day — marks_on carries forward
+      3. a mark on the window's first trading day — marks_on carries forward
          from a PRIOR print, never backward from a later one, so an asset
          that first prints after day 0 has no legitimate day-0 value to seed
          with, even though it's a valid in-universe tradeable asset overall.
     """
     if not holdings:
         return
+    for i, h in enumerate(holdings, start=1):
+        validate_opened_on(i, h.opened_on, prepared.start)
     if not prepared.market.days:
         raise ValueError(
             "cannot seed initial holdings: the backtest window contains no trading days"
@@ -173,6 +203,7 @@ def run_single_backtest(
     impact: bool = True,
     warmup_days: int = 0,
     kind: str = "sealed",
+    config_extra: dict[str, Any] | None = None,
 ) -> BacktestRunResult:
     resolved = resolve_params(strategy_name, params)
     wh = Warehouse(Paths(root=root))
@@ -197,26 +228,89 @@ def run_single_backtest(
     run_dir = root / "data" / "results" / run_id
     _write_artifacts(result, run_dir)
 
+    config: dict[str, Any] = {
+        "command": "backtest",
+        "strategy": strategy_name,
+        "params": resolved,
+        "holdings": _holdings_config(holdings),
+        "cash": cash,
+        "kind": kind if strategy_name == "buy-and-hold" else None,
+        "start": start.isoformat(),
+        "end": end.isoformat(),
+        "impact": impact,
+        "warmup_days": warmup_days,
+        "cost_model": cm.as_dict(),
+    }
+    if config_extra:
+        config.update(config_extra)
+
     recorded = record_run(
         root=root,
         command="backtest",
         strategy=result.strategy_name,
-        config={
-            "command": "backtest",
-            "strategy": strategy_name,
-            "params": resolved,
-            "holdings": _holdings_config(holdings),
-            "cash": cash,
-            "kind": kind if strategy_name == "buy-and-hold" else None,
-            "start": start.isoformat(),
-            "end": end.isoformat(),
-            "impact": impact,
-            "warmup_days": warmup_days,
-            "cost_model": cm.as_dict(),
-        },
+        config=config,
         results=result.summary,
         artifact_path=run_dir,
         warehouse=wh,
         run_id=run_id,
     )
     return BacktestRunResult(run_id=recorded, result=result, artifact_dir=run_dir)
+
+
+@dataclass(frozen=True)
+class PairedRunResult:
+    """A strategy run and the buy-and-hold benchmark computed beside it."""
+
+    primary: BacktestRunResult
+    benchmark: BacktestRunResult | None
+
+
+def run_with_benchmark(
+    root: Path,
+    strategy_name: str,
+    params: dict[str, ParamValue],
+    cash: float,
+    holdings: list[SeededHolding],
+    start: date,
+    end: date,
+    *,
+    impact: bool = True,
+    warmup_days: int = 0,
+    kind: str = "sealed",
+) -> PairedRunResult:
+    """Run `strategy_name`, then buy-and-hold-sealed over the IDENTICAL
+    starting state (same window, cash, holdings, impact) so the two equity
+    curves differ only by trading policy. The benchmark record carries
+    ``benchmark_for: <primary run_id>``; that tag is the only linkage.
+
+    Returns benchmark=None when the primary IS buy-and-hold-sealed — pairing
+    a run with a copy of itself buys nothing.
+    """
+    primary = run_single_backtest(
+        root=root,
+        strategy_name=strategy_name,
+        params=params,
+        cash=cash,
+        holdings=holdings,
+        start=start,
+        end=end,
+        impact=impact,
+        warmup_days=warmup_days,
+        kind=kind,
+    )
+    if strategy_name == "buy-and-hold" and kind == "sealed":
+        return PairedRunResult(primary=primary, benchmark=None)
+    benchmark = run_single_backtest(
+        root=root,
+        strategy_name="buy-and-hold",
+        params={},
+        cash=cash,
+        holdings=holdings,
+        start=start,
+        end=end,
+        impact=impact,
+        warmup_days=warmup_days,
+        kind="sealed",
+        config_extra={"benchmark_for": primary.run_id},
+    )
+    return PairedRunResult(primary=primary, benchmark=benchmark)
