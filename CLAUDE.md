@@ -78,9 +78,15 @@ tcgcsv.com). Design spec: `docs/superpowers/specs/2026-06-09-pkmn-quant-design.m
   synthetic fixtures never exercised: `products.parquet` is missing rows
   for 40 of 4,687 priced product_ids inside the backtest window (7,565
   price rows; warehouse-wide, past the window, the gap is far larger —
-  1,845 of 6,493 as of this run, mostly explained by a second, distinct
-  cause: `ingest.py`'s documented one-time catalog fetch never picking up
-  new sets) — `NativeBacktest.run()` crashed on it (`KeyError`)
+  re-measured 2026-07-29 at 2,017 of 6,665. The cause originally recorded
+  here (the one-time catalog fetch missing new sets) was wrong: measured,
+  that explains 14 of 2,017. The real cause is that TCGplayer **re-files
+  products between groups**, so a promo whose prices were archived under a
+  tracked set now lists under an untracked group (`Miscellaneous Cards &
+  Products`, `Blister Exclusives`, `Nintendo Promos`, …), and the catalog
+  fetch only ever asked the 23 price-tracked sets. Fixed by the
+  catalog-completeness plan (2026-07-29): the catalog now covers all 217
+  groups on every ingest.) — `NativeBacktest.run()` crashed on it (`KeyError`)
   where the Python engine silently excludes uncataloged assets from
   kind-filtered strategies; fixed by tagging missing catalog rows kind
   "other" (commit `091b663`), which also correctly keeps them tradeable for

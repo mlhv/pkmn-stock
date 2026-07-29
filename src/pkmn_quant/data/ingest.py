@@ -36,9 +36,13 @@ def tracked_groups(groups: list[Group], today: date) -> list[Group]:
 def refresh_products(client: httpx.Client, warehouse: Warehouse, groups: list[Group]) -> int:
     """Fetch and store the product catalog. One failing set does not abort the rest.
 
-    Called by ingest_range only when products.parquet is missing — new sets
-    released after the first run are not picked up until the file is deleted
-    (known Plan 1 limitation; a `pkmn refresh-products` command is future work).
+    Callers pass EVERY tcgcsv group, not just the price-tracked ones:
+    TCGplayer re-files products between groups over time, so a product whose
+    prices were archived under a tracked set can now list under an untracked
+    promo group. Asking only tracked groups leaves 2,017 priced products
+    (measured 2026-07-29) with no rarity, hence kind "other", hence invisible
+    to every kind-filtered strategy. Fetching names is cheap and independent
+    of which sets we ingest prices for.
     """
     if not groups:
         return 0
@@ -49,8 +53,10 @@ def refresh_products(client: httpx.Client, warehouse: Warehouse, groups: list[Gr
         except httpx.HTTPError as exc:
             print(f"warning: products fetch failed for group {g.group_id}: {exc}", file=sys.stderr)
     if not frames:
-        raise RuntimeError("No product data fetched for any tracked set; aborting.")
-    df = pl.concat(frames)
+        raise RuntimeError("No product data fetched for any set; aborting.")
+    # A product listed under two groups would otherwise duplicate, and a
+    # duplicate product row fans out every join against the price frame.
+    df = pl.concat(frames).unique(subset=["product_id"], keep="first").sort("product_id")
     warehouse.write_products(df)
     return df.height
 
@@ -83,11 +89,12 @@ def ingest_range(
     stats: list[IngestStats] = []
     try:
         groups = tcgcsv.fetch_groups(client)
+        # Prices come from tracked sets only (MIN_SET_RELEASE); NAMES come from
+        # every set, because TCGplayer re-files products across groups.
         tracked = tracked_groups(groups, today=end)
         group_ids = {g.group_id for g in tracked}
-        if not paths.products.exists():
-            print("fetching product catalog (one request per set)...", file=sys.stderr)
-            refresh_products(client, warehouse, tracked)
+        print(f"fetching product catalog ({len(groups)} sets)...", file=sys.stderr)
+        refresh_products(client, warehouse, groups)
 
         stored = warehouse.stored_days()
         previous: pl.DataFrame | None = None
