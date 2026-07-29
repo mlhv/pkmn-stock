@@ -96,7 +96,7 @@ export function NewRun() {
                 </>
               )}
 
-              <HoldingsEditor value={holdings} onChange={setHoldings} />
+              <HoldingsEditor value={holdings} onChange={setHoldings} start={start} />
 
               {submitError && <p role="alert">{submitError}</p>}
               <button type="submit">Run backtest</button>

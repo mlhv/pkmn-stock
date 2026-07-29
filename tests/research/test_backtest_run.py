@@ -221,6 +221,31 @@ def test_holding_without_day_one_mark_raises(tmp_path: Path) -> None:
         )
 
 
+def test_holding_opened_after_window_start_raises(tmp_path: Path) -> None:
+    """A starting holding opened after the window start is incoherent, and it
+    silently disarms every duration-gated strategy: they compute
+    ``(ctx.today - pos.opened_on).days``, which is negative for a future
+    opened_on, so the age/rebalance gate never fires and the run trades
+    nothing while still reporting success. Guarded in the shared capability
+    layer so the CLI's --holdings CSV path is covered too, not just the API."""
+    _seed(tmp_path)
+    late = SeededHolding(Asset(1, "Normal"), 1, 5.0, START + timedelta(days=3))
+    with pytest.raises(ValueError, match="opened_on"):
+        _run(tmp_path, "buy-and-hold", holdings=[late])
+
+
+def test_holding_opened_on_the_window_start_is_accepted(tmp_path: Path) -> None:
+    """The boundary: opened_on == start is legitimate and must still run."""
+    _seed(tmp_path)
+    out = _run(
+        tmp_path,
+        "buy-and-hold",
+        holdings=[SeededHolding(Asset(1, "Normal"), 1, 5.0, START)],
+        cash=100.0,
+    )
+    assert out.run_id is not None
+
+
 def test_empty_window_with_holdings_raises_clean_value_error(tmp_path: Path) -> None:
     """A window with no trading days used to raise a raw IndexError on
     ``prepared.market.days[0]`` once holdings were supplied (the same empty

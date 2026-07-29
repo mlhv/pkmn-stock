@@ -100,4 +100,17 @@ describe("NewRun", () => {
     expect(await screen.findByDisplayValue("Alpha Booster Box")).toBeInTheDocument();
     expect(screen.getByLabelText("Sub type")).toHaveValue("Normal");
   });
+
+  it("defaults a new holding row's opened_on to the window start, not today", async () => {
+    stubRoutes();
+    render(<MemoryRouter><NewRun /></MemoryRouter>);
+    await waitFor(() => expect(screen.getByLabelText("Strategy")).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText("Start"), { target: { value: "2025-01-01" } });
+    fireEvent.change(screen.getByLabelText("Product search"), { target: { value: "box" } });
+    fireEvent.click(await screen.findByRole("button", { name: /Alpha Booster Box/ }));
+    // Today would be after every backtest window (the warehouse is historical),
+    // which the API now rejects with a 400 — and which used to silently disarm
+    // every duration-gated strategy.
+    expect(await screen.findByLabelText("Opened on")).toHaveValue("2025-01-01");
+  });
 });

@@ -5,7 +5,11 @@ import type { HoldingInput, ProductHit } from "../api/types";
 interface Row extends HoldingInput { name: string; sub_types: string[]; last_priced_on: string; }
 
 export function HoldingsEditor(
-  { value, onChange }: { value: Row[]; onChange: (rows: Row[]) => void },
+  { value, onChange, start }: {
+    value: Row[];
+    onChange: (rows: Row[]) => void;
+    start: string;
+  },
 ) {
   const [query, setQuery] = useState("");
   const [hits, setHits] = useState<ProductHit[]>([]);
@@ -25,7 +29,11 @@ export function HoldingsEditor(
   const add = (p: ProductHit) => {
     onChange([...value, {
       product_id: p.product_id, sub_type: p.sub_types[0] ?? "Normal",
-      quantity: 1, avg_cost: 0, opened_on: new Date().toISOString().slice(0, 10),
+      // Default to the window start, not today: every backtest window is
+      // historical, so today is always after it — which the API rejects, and
+      // which used to silently disarm every duration-gated strategy.
+      quantity: 1, avg_cost: 0,
+      opened_on: start || new Date().toISOString().slice(0, 10),
       name: p.name, sub_types: p.sub_types, last_priced_on: p.last_priced_on,
     }]);
     setQuery("");

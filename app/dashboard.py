@@ -39,6 +39,11 @@ def benchmark_runs() -> list[Path]:
     backtest mints its own `data/results/<run_id>/` directory, and since
     Plan 2c every triggered run also writes a paired benchmark, so a raw
     directory scan would fill this selector with opaque ids.
+
+    A paired benchmark IS a buy-and-hold backtest, so the strategy-name
+    filter alone lets it through — but it is a sidecar of somebody else's
+    run over that run's (often short) window, not a comparable benchmark.
+    Skipping `benchmark_for` here applies the same rule /api/runs uses.
     """
     from pkmn_quant.research.runs import load_runs
 
@@ -46,10 +51,12 @@ def benchmark_runs() -> list[Path]:
     for r in sorted(load_runs(ROOT), key=lambda r: r.recorded_at, reverse=True):
         if r.command != "backtest" or not r.strategy.startswith("buy-and-hold"):
             continue
+        if r.config.get("benchmark_for"):
+            continue
         art = Path(r.artifact_path)
         if (art / "equity.parquet").exists():
             out.append(art)
-    # legacy pre-Plan-2b directories, still on disk and still readable
+    # legacy pre-registry (pre-Plan-9) directories, still on disk and readable
     if RESULTS.exists():
         out.extend(
             p

@@ -202,10 +202,12 @@ tcgcsv.com). Design spec: `docs/superpowers/specs/2026-06-09-pkmn-quant-design.m
   2026-06-30` against the live 874-day warehouse): 3 fills, total_return
   -1.66%, run recorded and visible in `pkmn runs list`. No new research
   finding — this is capability work, not a new walk-forward result.
-- Plan 2c complete on feat/web-trigger-jobs (489 tests + 1 skipped Python —
-  a fresh `uv run pytest` shows 489 passed, 1 skipped — plus 4 dashboard
-  tests via `uv run --group dashboard pytest tests/test_dashboard.py` and
-  25 web tests via `npm run check`): the web explorer can trigger runs, not
+- Plan 2c complete on feat/web-trigger-jobs (493 tests + 1 skipped Python —
+  a fresh `uv sync --group api && uv run pytest` shows 493 passed, 1 skipped
+  — plus 5 dashboard tests via `uv run --group dashboard pytest
+  tests/test_dashboard.py` and 26 web tests via `npm run check`; note the
+  `api` group is required, as CI does, or `tests/api` fails to collect):
+  the web explorer can trigger runs, not
   just view them. `api/jobs.py`'s single-worker `JobManager` (injected
   `Executor`, in-memory `Job` state) backs `POST /api/backtest` (202 + job
   id), `GET /api/jobs`, and `GET /api/jobs/{job_id}`; every triggered run is
@@ -222,9 +224,17 @@ tcgcsv.com). Design spec: `docs/superpowers/specs/2026-06-09-pkmn-quant-design.m
   `/jobs` self-stopping polling table, `/backtest/:runId` detail with the
   benchmark overlaid on the equity chart and seeded-exit markers) for 6
   total. Dashboard fix: `benchmark_runs()` is now registry-driven (filters
-  `command == "backtest"` and `strategy.startswith("buy-and-hold")`)
+  `command == "backtest"` and `strategy.startswith("buy-and-hold")`, and
+  skips records tagged `benchmark_for` — the same rule `/api/runs` applies)
   instead of directory-scanning, so triggered runs and their paired
   benchmarks no longer clutter the overlay selector with opaque ids.
+  Starting holdings are guarded against an `opened_on` after the window
+  start (`research/backtest_run.py`'s `validate_opened_on`, re-checked
+  synchronously in the API for a 400, and defaulted to the form's start date
+  in the web holdings editor): the five duration-gated strategies compute
+  `(ctx.today - pos.opened_on).days`, which goes negative for a future
+  `opened_on`, so the age/rebalance gate never fires and the run silently
+  trades nothing while still reporting success.
   Real-data end-to-end check (server against the live 874-day warehouse):
   `GET /api/products?q=surging` took 0.42s cold (first DuckDB pass over the
   full warehouse to build the process-cached index) and 0.003s warm on a

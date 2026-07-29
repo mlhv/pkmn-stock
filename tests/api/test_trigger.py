@@ -97,6 +97,41 @@ def test_bad_holding_row_is_400(live_client: TestClient) -> None:
     assert resp.status_code == 400 and "quantity" in resp.json()["detail"]
 
 
+def test_holding_opened_after_window_start_is_400(live_client: TestClient) -> None:
+    """A STARTING holding cannot have been opened after the window starts.
+
+    Beyond being incoherent, a future opened_on is silently corrosive: five
+    strategies gate on ``(ctx.today - pos.opened_on).days``, which goes
+    negative, so the gate never fires and the run trades nothing while still
+    reporting success. Needs no market data, so it is a synchronous 400.
+    """
+    holding = {
+        "product_id": 1,
+        "sub_type": "Normal",
+        "quantity": 1,
+        "avg_cost": 1.0,
+        "opened_on": "2026-07-29",  # BASE window starts 2025-01-01
+    }
+    resp = live_client.post("/api/backtest", json={**BASE, "holdings": [holding]})
+    assert resp.status_code == 400, resp.text
+    assert "opened_on" in resp.json()["detail"]
+    assert live_client.get("/api/jobs").json() == []  # nothing was queued
+
+
+def test_holding_opened_on_the_window_start_is_accepted(live_client: TestClient) -> None:
+    """The boundary: opened_on == start is a legitimate starting holding."""
+    holding = {
+        "product_id": 1,
+        "sub_type": "Normal",
+        "quantity": 1,
+        "avg_cost": 1.0,
+        "opened_on": BASE["start"],
+    }
+    resp = live_client.post("/api/backtest", json={**BASE, "holdings": [holding]})
+    assert resp.status_code == 202, resp.text
+    assert resp.json()["status"] == "succeeded"
+
+
 def test_unknown_field_is_422(live_client: TestClient) -> None:
     assert live_client.post("/api/backtest", json={**BASE, "bogus": 1}).status_code == 422
 
