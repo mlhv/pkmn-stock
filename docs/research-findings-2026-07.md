@@ -1,5 +1,33 @@
 # Walk-forward findings — 2026-07-04
 
+**Catalog-completeness note (2026-07-29/30), read before anything below.**
+Every section in this file above the "Catalog completeness" section near the
+end was computed against a product catalog that only covered 23 of tcgcsv's
+217 groups (see that section for the full story and the real numbers). The
+short version: the fix corrected 2,009 products warehouse-wide, but only 32
+of those sit inside the standard 2024-03-01..2026-06-30 backtest window used
+throughout this file (all 32 `single`, zero `sealed`) — the other ~1,978 only
+started pricing in July 2026, after this window ends. On this window the
+fix is immaterial for every strategy with a hard `kind` filter (buy-and-hold
+sealed and sealed-accumulation are bit-for-bit unchanged to the full float;
+dip-buyer and xs-momentum move about 1 CAGR-point) and provably a no-op for
+cost-aware-reversion (it never reads `kind` at all). It is **not**
+immaterial for the two ML strategies: ml-ranker and ml-ranker-v2 have no
+hard `kind` filter, so those 32 products were always in their feature
+frames — the fix only changed two feature values (`is_sealed`,
+`days_since_release`) from missing to real for those rows, and that alone
+moved ml-ranker by +2.47 stitched-OOS points and ml-ranker-v2 by −8.43
+points, in opposite directions, both confirmed deterministic (bit-identical
+across independent re-runs, not noise). **None of the numbers below are
+wrong or need to be distrusted** — they were computed correctly against the
+catalog that existed at the time, and for every strategy except the two ML
+ones the correction turns out to be immaterial on this window; they remain
+the numbers to cite for 2024-03-01..2026-06-30. The ml-ranker and
+ml-ranker-v2 sections below, and their appearances in the Rigor pack /
+evaluate tables, are the ones genuinely superseded by the new section at the
+end. The catalog fix matters more for any future window extending past
+2026-06-30, where the bulk of the 1,978 newly-priced products actually live.
+
 Runs: `pkmn walkforward --start 2024-03-01 --end 2026-06-30 --is-days 180
 --oos-days 60 --trials 15 --seed 42` (CLI default `--warmup-days 120`),
 11 folds per strategy, OOS period 2024-08-28 .. 2026-06-18. Benchmark:
@@ -740,3 +768,272 @@ enough validation dates survive the embargo.
   CLI default 120.
 - Regime caveat: one ~2-year bull market for sealed. These results say
   little about how the strategies behave in a flat or falling market.
+
+## Catalog completeness (2026-07-29/30): universe correction and its effect on this window
+
+### What changed and why
+
+The product catalog only ever asked tcgcsv for the 23 price-tracked groups.
+TCGplayer re-files products between groups over time — a product whose
+prices were archived under a tracked set can later list under an untracked
+promo group (`Miscellaneous Cards & Products`, `Blister Exclusives`,
+`Nintendo Promos`, …). Every product that drifted this way lost its catalog
+row entirely, and a priced product with no catalog row has no `rarity`, so
+it gets tagged `kind: "other"` — invisible to the five of seven strategies
+that filter their trading universe on `kind`. The catalog-completeness plan
+(Tasks 1-4, this branch) fetches every one of tcgcsv's 217 groups on every
+ingest, added `pkmn refresh-products` to repair the catalog on demand
+without a price re-ingest, and ran that repair against the real warehouse.
+
+**Real before/after, measured directly against the live warehouse (Task 4,
+2026-07-29), priced-universe counts by kind:**
+
+| kind | before | after | delta |
+|---|---|---|---|
+| UNCATALOGED | 2,017 | 8 | −2,009 |
+| `single` | 4,077 | 5,383 | +1,306 |
+| `sealed` | 436 | 953 | +517 |
+| `excluded` | 135 | 321 | +186 |
+
+Catalog rows 4,673 → 32,506, spanning 214 of tcgcsv's 217 groups (3 are
+genuinely empty upstream, confirmed by direct re-fetch). The total priced
+universe is invariant at 6,665 before and after — the same products,
+reclassified, not a different population. The residual 8 UNCATALOGED
+products (`660410, 664093, 646307, 662148, 662168, 557364, 646306, 662234`)
+appear in no tcgcsv group at all, verified by direct re-fetch — genuinely
+un-catalogable upstream, correctly left `kind: "other"`. Zero products lost,
+zero duplicate `product_id`s.
+
+### The reclassification is prospective, not retrospective, for this window
+
+That +1,306/+517/+186 shift reads like a large correction, and warehouse-wide
+it is. But the standard research window this whole file uses is
+2024-03-01..2026-06-30, and almost none of the shift lands inside it:
+
+- Products priced on or before 2026-06-30: **4,687**.
+- Products priced after 2026-06-30 (the warehouse now runs through
+  2026-07-28, 902 ingested days): **6,617**.
+- Products that price **only** after 2026-06-30 (never appear in-window at
+  all): **1,978**.
+- Of the 4,687 in-window priced products, exactly **32** changed `kind`
+  between the before and after catalogs — **all 32 became `single`, zero
+  became `sealed`**. (This reconciles the Plan 10 finding already in this
+  file: "40 of 4,687 priced product_ids inside the backtest window" were
+  UNCATALOGED before the fix; 8 remain UNCATALOGED after; the other 32
+  moved to `single`.)
+
+In other words: the overwhelming majority of the 2,009-product warehouse-wide
+correction is for products that only started pricing in the final month of
+ingest (2026-07), which sits entirely outside the window every walk-forward
+in this file uses. The fix is real and warehouse-wide, but on
+2024-03-01..2026-06-30 specifically it touches 0.7% of the in-window priced
+universe (32 of 4,687), and touches the `sealed` side of it not at all.
+
+### Re-run results, by mechanism
+
+Every strategy was re-run exactly as before (`pkmn walkforward --strategy
+<s> --start 2024-03-01 --end 2026-06-30 --trials 15`, impact model on — the
+CLI default) against the corrected catalog. The honest way to read what
+moved and why is by *mechanism*, not as one undifferentiated re-run, because
+the five kind-aware strategies split cleanly into three groups that behaved
+completely differently, and the difference is explained entirely by how
+each strategy touches `ctx.products`:
+
+| path | mechanism | in-window universe effect | result |
+|---|---|---|---|
+| sealed-universe hard filter (buy-and-hold, sealed-accumulation) | `kind == "sealed"` filter | 0 new sealed products | **bit-identical**, to the full float |
+| cost-aware-reversion | never reads `ctx.products` at all (code-verified: zero references) | none, by construction | **provably invariant** — analytical, not measured |
+| single-universe hard filter (dip-buyer, xs-momentum) | `kind == "single"` filter | +32 new single candidates | small, bounded: **+0.62 pts, +1.24 pts** |
+| ML feature paths (ml-ranker, ml-ranker-v2) | no hard filter; `kind`/`released_on` feed features (`is_sealed`, `days_since_release`) that were `NaN` for uncataloged rows | 32 rows go from missing to real metadata; candidate membership unchanged | large, **opposite-signed**: **+2.47 pts, −8.43 pts** |
+
+**Sealed-universe strategies — bit-identical, verified to the full float.**
+buy-and-hold-sealed's post-fix `total_return` is
+`1.8367248749999998`, identical in every digit to the pre-fix impact-on run
+(`20260714T045104Z-8d084f`). sealed-accumulation's post-fix
+`stitched_total_return` is `-0.0735732413695348`, identical in every digit
+to its pre-fix impact-on run (`20260714T045549Z-e0e52c`). This is exactly
+what the mechanism predicts: both strategies buy on (or filter to) the
+`sealed` kind, and zero products became `sealed` in-window, so their
+candidate sets are byte-for-byte the same before and after the fix.
+
+**cost-aware-reversion — analytically invariant, stated as such rather than
+measured.** Its source (`strategies/cost_aware_reversion.py`) references
+`ctx.marks` only; it has zero references to `ctx.products` or `kind`
+anywhere in the file. Its candidate universe is "every product priced
+today," which is invariant to catalog completeness by construction — the
+catalog only changes labels, never which `product_id`s are priced. No A/B
+was run for this strategy because the code itself rules out an effect; its
+post-fix result (stitched −22.45%, impact-on) is simply the first time this
+strategy has been run under the impact-on cost model at all (its only prior
+number in this file, −10.18%, is a flat-cost artifact — see the mixed-regime
+note below).
+
+**Single-universe strategies — small, bounded, confirmed by a clean
+same-regime A/B.** dip-buyer and xs-momentum had never been run impact-on
+before this plan (their prior numbers in this file, −9.02% and −25.08%, are
+flat-cost), so a direct before/after comparison at the CLI's current default
+would confound the catalog fix with the well-documented flat-cost →
+impact-on regime shift (Plan 9 already showed this shift alone moves results
+by double-digit points). To isolate the catalog effect alone, both
+strategies were re-run twice under the **same** impact-on regime — once
+against the pre-fix catalog (restored from the `/tmp` backup made before
+Task 4's refresh) and once against the post-fix catalog — with the live
+catalog file verified byte-for-byte back to the corrected state afterward
+(`single` 5,383, `sealed` 953, `excluded` 321, `UNCATALOGED` 8, 32,506
+catalog rows — exact match to Task 4's after-table):
+
+| strategy | pre-fix catalog, impact-on | post-fix catalog, impact-on | delta |
+|---|---:|---:|---:|
+| dip-buyer | −21.77% | −21.15% | **+0.62 pts** |
+| xs-momentum | −10.54% | −9.30% | **+1.24 pts** |
+
+Small, same-direction, bounded improvements — consistent with adding 32 new
+candidate assets to a `single`-only universe of thousands: more choices,
+marginally better picks, nowhere near enough to flip the sign.
+
+**ML feature paths — the substantive finding of this plan.** ml-ranker and
+ml-ranker-v2 apply no hard `kind` filter (`build_features` takes every
+priced product on a given day, joins `ctx.products` for `kind`/
+`released_on`, and only *drops* an asset from the trading candidate list if
+its `mark < min_price`). Before the fix, the 32 in-window uncataloged
+products had **no catalog row to join against**, so `is_sealed` and
+`days_since_release` were `NaN` for those specific rows in the feature
+frame (sklearn's `HistGradientBoostingRegressor` natively handles missing
+features, so training didn't crash — it just saw less information for those
+rows). After the fix, those same 32 rows carry real values for both
+features. Candidate membership did not change at all for these two
+strategies; only the quality of two feature columns, for 32 rows out of
+4,687 in-window priced products (0.7%), changed.
+
+That 0.7% metadata correction was **empirically confirmed to move both
+strategies' results deterministically**, not as run-to-run noise:
+
+| strategy | pre-fix catalog | post-fix catalog | delta | determinism check |
+|---|---:|---:|---:|---|
+| ml-ranker | −7.52% (`20260714T051127Z-0bc0fc`) | −5.05% (`20260729T233603Z-db7880`) | **+2.47 pts** | independent re-run `20260730T151358Z-8ab1ea`\* reproduced `-0.05046803533703004` to the full float |
+| ml-ranker-v2 | −14.72% (`20260720T033422Z-858699`) | −23.15% (`20260730T151937Z-37eeeb`) | **−8.43 pts** | independent re-run `20260730T181722Z-274fc0` reproduced `-0.2315269080881951` to the full float |
+
+\* both re-runs are separate `uv run` processes, not repeated calls within
+one Python process — this is a real cross-process, real-scale determinism
+check, not the smaller
+synthetic-fixture unit test (`test_deterministic_and_stateless`) that only
+proves same-input-same-process reproducibility. Both baselines
+(`0bc0fc`, `858699`) were confirmed same-regime as the post-fix runs via
+`pkmn runs show` before attributing anything to the catalog (impact-on,
+same window, same `trials`/`is_days`/`oos_days`/`seed`/`warmup_days` in
+every case) — the deltas above are not confounded by a cost-regime change,
+only by the catalog.
+
+**Read this as evidence about the strategies, not about the catalog.**
+Determinism closes off the "it's just noisy, ignore it" reading: the swing
+is exactly reproducible, so it is a genuine, deterministic sensitivity of
+each model's output to the metadata quality of 32 products out of 4,687
+in-window (0.7% of the universe). A result that moves by 8.43 points because
+32 rows out of thousands gained two previously-missing feature values was
+not resting on much to begin with. Do not read ml-ranker's +2.47 as the
+catalog "improving" it — the same mechanism, on the same 32 products, moved
+ml-ranker-v2 by more than three times as much in the opposite direction.
+Contrast this against the hard-filtered strategies directly above: those
+move by at most ~1 CAGR-point, in a predictable direction, from a
+predictable, countable change in candidate set size. The ML feature paths
+have no such bound — the sign itself is not predictable from the size of the
+metadata correction. That contrast (hard filters: stable and bounded; ML
+feature paths: volatile and unbounded in sign) is the most valuable result
+this plan produced, and it says something about the fragility of the ML
+strategies' results, not about whether the catalog fix was worthwhile.
+
+### Before/after table — stitched OOS total return, full zoo + benchmark
+
+Regime stated per row; **only rows marked "impact-on, same regime"** isolate
+the catalog effect cleanly. Flat-cost prior numbers are shown for reference
+only (they predate this plan's impact-on re-runs for the three
+never-previously-impact-on strategies) and are not directly comparable to
+either the after-fix or the pre-fix-catalog impact-on column.
+
+| strategy | flat-cost (prior, reference only) | impact-on, pre-fix catalog | impact-on, post-fix catalog | catalog-attributable delta |
+|---|---:|---:|---:|---:|
+| buy-and-hold sealed | +186.0% | +183.7% (`8d084f`) | **+183.67%** (`4aeaa9`) | 0.00 pts (bit-identical) |
+| sealed-accumulation | +13.6% | −7.36% (`e0e52c`) | **−7.36%** (`827311`) | 0.00 pts (bit-identical) |
+| cost-aware-reversion | −10.18% | n/a (no pre-fix impact-on run; analytically invariant) | **−22.45%** (`c581f7`) | 0 pts (analytical, not measured) |
+| dip-buyer | −9.02% | −21.77% (A/B, `7790a6`) | **−21.15%** (`356d78`) | **+0.62 pts** |
+| xs-momentum | −25.08% | −10.54% (A/B, `43227a`) | **−9.30%** (`45ba49`) | **+1.24 pts** |
+| ml-ranker | +6.0% (flat, Plan 8) | −7.52% (`0bc0fc`) | **−5.05%** (`db7880`) | **+2.47 pts** |
+| ml-ranker-v2 | n/a (v2 has no flat-cost baseline; built impact-on) | −14.72% (`858699`) | **−23.15%** (`37eeeb`) | **−8.43 pts** |
+
+### Rigor comparison — DSR and joint Reality Check, before vs after
+
+`pkmn evaluate`, same seeded stationary block bootstrap (n_boot=10000, mean
+block 10 days, seed 42) both times, 660 aligned days
+(2024-08-28..2026-06-18), benchmark `buy-and-hold-sealed-2024-03-01-
+2026-06-30`:
+
+| strategy | DSR before (6-strategy run, `20260720T034508Z-241dd9`) | DSR after (`20260730T181818Z-75d38b`) |
+|---|---:|---:|
+| cost-aware-reversion | 0.000 | 0.000 |
+| dip-buyer | 0.004 | 0.000 |
+| ml-ranker | 0.007 | 0.004 |
+| ml-ranker-v2 | 0.017 | 0.000 |
+| sealed-accumulation | 0.005 | 0.000 |
+| xs-momentum | 0.000 | 0.000 |
+
+**White's Reality Check, jointly over all six strategies: p = 1.0000 before
+and p = 1.0000 after — unchanged.** Every deflated Sharpe remains far under
+even the 0.5 coin-flip point, let alone the conventional 0.95 confidence
+bar. One methodological improvement falls out of this re-run almost for
+free: dip-buyer, xs-momentum, and cost-aware-reversion are impact-on for the
+first time, so **for the first time, all six strategies plus the benchmark
+share the same cost regime** — the "mixed-regime" caveat that qualified
+every evaluate table in this file since the original Rigor pack section no
+longer applies. That is a comparison-hygiene improvement, not a research
+result; it does not change the joint verdict, which was already p = 1.0000
+under the old mixed-regime panel and stays p = 1.0000 under the new
+single-regime one.
+
+### The honest conclusion
+
+**No research conclusion in this file changes.** Nothing beats buy-and-hold
+sealed, before or after the catalog fix — the standing result across every
+prior plan in this repo holds exactly as before. The corrected catalog does
+not surface a strategy edge that was hiding behind bad metadata; it
+surfaces that two ML strategies' results were sitting on comparatively
+thin ice (a deterministic 8-point swing from a 0.7%-of-universe metadata
+correction), while every other strategy's result was either provably or
+empirically insensitive to the same correction. Both ml-ranker (−5.05%) and
+ml-ranker-v2 (−23.15%) remain deeply negative and are not remotely close to
+buy-and-hold sealed's +183.67%. The catalog-completeness plan is capability
+and data-quality work — a real fix to a real gap, worth having for any
+future window — not a research result, and it should not be read as one.
+Its value is **prospective**: the ~1,978 products that began pricing only
+in July 2026 are now correctly classified for any walk-forward that extends
+past 2026-06-30; on the window every prior finding in this file used, the
+fix changes almost nothing that a hard `kind` filter touches and changes a
+lot — reproducibly, in unpredictable directions — for the two strategies
+that don't filter at all.
+
+### Operational notes, for whoever runs the next ml-ranker-family batch
+
+- The first ml-ranker walk-forward attempt of this batch was killed with
+  zero captured output (0 bytes) and no traceback, no exit code, no signal
+  name recovered — the process simply stopped producing anything. The
+  absence of any traceback is evidence against an in-process Python
+  exception (a real code bug would print one to stderr before exiting,
+  and stderr was captured in the same stream); it is not proof of a
+  specific external cause. Two candidate causes were checked and both
+  remain consistent with the evidence: an unexplained ~2h12m gap in
+  wall-clock time between the last confirmed-healthy check and the "killed"
+  notification (consistent with the machine sleeping), and separately
+  measured swap at 88% consumed during a later, unrelated part of this
+  batch (consistent with memory pressure triggering an OOM kill). **The
+  cause is not definitively established; do not read this as a resolved
+  root cause.** The re-run (wrapped in `caffeinate -i`, which prevents idle
+  sleep specifically) completed successfully, which is consistent with
+  sleep as a contributing factor but does not rule out memory pressure.
+- Running the ml-ranker determinism re-run in parallel with the
+  ml-ranker-v2 walk-forward was a mistake under this system's memory
+  profile: solo ml-ranker takes ~22 minutes (Plan 8), but the parallel pair
+  took over 55 minutes and put both runs at risk of the same kill under
+  investigation. The subsequent ml-ranker-v2 determinism check was run
+  alone, sequentially, and completed in line with the expected solo
+  wall-clock. **Run ml-ranker-family walk-forwards sequentially, one at a
+  time**, not in parallel, especially on a machine already under memory
+  pressure.

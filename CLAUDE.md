@@ -77,17 +77,18 @@ tcgcsv.com). Design spec: `docs/superpowers/specs/2026-06-09-pkmn-quant-design.m
   3.4x, dip-buyer 7.6x. The first full-data run found a real bug the
   synthetic fixtures never exercised: `products.parquet` is missing rows
   for 40 of 4,687 priced product_ids inside the backtest window (7,565
-  price rows; warehouse-wide, past the window, the gap is far larger —
+  price rows). Warehouse-wide, past the window, the gap is far larger —
   re-measured 2026-07-29 at 2,017 of 6,665. The cause originally recorded
   here (the one-time catalog fetch missing new sets) was wrong: measured,
-  that explains 14 of 2,017. The real cause is that TCGplayer **re-files
-  products between groups**, so a promo whose prices were archived under a
-  tracked set now lists under an untracked group (`Miscellaneous Cards &
-  Products`, `Blister Exclusives`, `Nintendo Promos`, …), and the catalog
-  fetch only ever asked the 23 price-tracked sets. Fixed by the
-  catalog-completeness plan (2026-07-29): the catalog now covers all 217
-  groups on every ingest.) — `NativeBacktest.run()` crashed on it (`KeyError`)
-  where the Python engine silently excludes uncataloged assets from
+  that explains only 14 of 2,017. The real cause is that TCGplayer
+  **re-files products between groups**, so a promo whose prices were
+  archived under a tracked set now lists under an untracked group
+  (`Miscellaneous Cards & Products`, `Blister Exclusives`, `Nintendo
+  Promos`, …), and the catalog fetch only ever asked the 23 price-tracked
+  sets. Fixed by the catalog-completeness plan (2026-07-29): the catalog
+  now covers all 217 groups on every ingest. This in-window gap is what
+  crashed `NativeBacktest.run()` (`KeyError`), where the Python engine
+  silently excludes uncataloged assets from
   kind-filtered strategies; fixed by tagging missing catalog rows kind
   "other" (commit `091b663`), which also correctly keeps them tradeable for
   cost-aware-reversion (no kind filter), with a differential regression test
@@ -260,6 +261,46 @@ tcgcsv.com). Design spec: `docs/superpowers/specs/2026-06-09-pkmn-quant-design.m
   4,687 inside the backtest window, 1,845 of 6,493 warehouse-wide per the
   Plan 10 finding) is silently absent from search even though a backtest
   will still trade it — scheduled as follow-up work, not fixed here.
+- Catalog completeness complete on feat/catalog-completeness (502 tests +
+  1 skipped Python via a bare `uv run pytest`; the skip is
+  `tests/test_dashboard.py`, which needs `streamlit` — run
+  `uv run --group dashboard pytest tests/test_dashboard.py` separately for
+  it, 5 passed; 26 web tests via `cd web && npm run check`): the product
+  catalog now covers all 217 tcgcsv groups on every `pkmn ingest` (previously
+  23, the price-tracked ones only), fixing the drift where TCGplayer
+  re-files products between groups and priced products silently lose their
+  `rarity`/`kind`; new `pkmn refresh-products` repairs the catalog from all
+  217 groups without a price re-ingest. Real-warehouse refresh (2026-07-29):
+  UNCATALOGED 2,017 → 8, `single` 4,077 → 5,383 (+1,306), `sealed` 436 → 953
+  (+517), `excluded` 135 → 321 (+186); catalog rows 4,673 → 32,506; total
+  priced universe invariant at 6,665 (reclassified, not a different
+  population); 0 products lost. **The correction is almost entirely
+  prospective, not retrospective**: of the 4,687 products priced on or
+  before the standard 2024-03-01..2026-06-30 research window's end, only 32
+  changed `kind` (all to `single`, none to `sealed`) — the other ~1,978
+  reclassified products only started pricing in July 2026, after that
+  window. Full walk-forward re-run of all six strategies plus the
+  buy-and-hold benchmark over that same window, split by mechanism: the two
+  hard `kind`-filtered sealed-universe strategies (buy-and-hold,
+  sealed-accumulation) are bit-for-bit unchanged (0 new sealed products
+  in-window); cost-aware-reversion is provably invariant (it never reads
+  `ctx.products`); the two hard `kind`-filtered single-universe strategies
+  (dip-buyer, xs-momentum) move small and bounded amounts confirmed by a
+  clean same-cost-regime A/B (+0.62 pts, +1.24 pts); the two ML strategies
+  (ml-ranker, ml-ranker-v2), which have no hard `kind` filter and instead
+  feed `kind`/`released_on` into features that were `NaN` for the 32
+  affected rows before the fix, move by +2.47 pts and −8.43 pts respectively
+  — large, opposite-signed, and confirmed deterministic by an independent
+  cross-process re-run reproducing each result to the full float. `pkmn
+  evaluate` before vs after: joint White's Reality Check p = 1.0000 both
+  times (unchanged); every deflated Sharpe stays far below the 0.5
+  coin-flip point both times. **No research conclusion changes: nothing
+  beats buy-and-hold sealed** (+183.67% impact-on this window, bit-identical
+  before and after the fix) — the catalog fix is capability and
+  data-quality work, not a new research result, and the ML strategies'
+  large swing from a 0.7%-of-universe metadata correction is evidence of
+  their fragility, not of an edge. Full findings in
+  `docs/research-findings-2026-07.md` (Catalog completeness section).
 
 ## Commands
 
@@ -269,6 +310,7 @@ uv run pytest                # test suite
 uv run ruff check . && uv run ruff format --check . && uv run mypy
                              # lint + format + strict typecheck (src/ only)
 uv run pkmn ingest --start 2026-07-01 --end 2026-07-31   # extend price history
+uv run pkmn refresh-products                             # repair the catalog from all 217 groups, no price ingest
 uv run pkmn backtest --start 2024-03-01 --end 2026-06-30 # buy-and-hold benchmark (default strategy)
 uv run pkmn backtest --strategy sealed-accumulation --start 2024-03-01 \
     --end 2026-06-30 --param take_profit=2.0 --holdings holdings.csv   # any strategy + cash/holdings
@@ -377,10 +419,18 @@ uv.lock together).
   (`tests/test_native_parity.py`, `scripts/parity_full.py`) — see the
   Plan 10 status bullet above for the one real gap the full-warehouse run
   found and how it was closed.
-- `data/` — gitignored. Contains 874 ingested days (2024-02-08..2026-06-30,
-  ~2.9M price rows) plus raw archives. Do not delete; re-ingest is ~40 min.
-  `data/portfolio/` holds the gitignored real and paper ledgers. `data/runs/`
-  holds the gitignored experiment registry (`registry.jsonl`).
+- `data/` — gitignored. Contains 902 ingested days (2024-02-08..2026-07-28,
+  ~3.16M price rows) plus raw archives. Do not delete; re-ingest is ~40 min.
+  The product catalog and the price history are deliberately different
+  scopes: the catalog (`products.parquet`, 32,506 rows as of the
+  2026-07-29 catalog-completeness refresh) covers every tcgcsv group ever
+  published, while prices only cover `MIN_SET_RELEASE`-onward sets
+  (`tracked_groups` in `ingest.py`, 2024-01-01-onward) — the catalog is
+  fetched wide so any priced product can be classified regardless of which
+  group it currently lists under, but prices are only ever ingested for
+  the tracked window. `data/portfolio/` holds the gitignored real and paper
+  ledgers. `data/runs/` holds the gitignored experiment registry
+  (`registry.jsonl`).
 - `src/pkmn_quant/api/` — FastAPI research explorer API (dependency group
   `api`): `models.py` has the Pydantic response models (also the
   cross-language contract checked by `tests/api/test_contract.py`); 11
@@ -419,7 +469,10 @@ uv.lock together).
 - Sharpe/Sortino on this data are inflated by mark smoothing (thin markets,
   carry-forward marks). Caveat them in any report; compare strategies against
   the buy-and-hold benchmark (+186.0% flat-cost / +183.7% impact-on for
-  sealed, 2024-03→2026-06), not equities.
+  sealed, 2024-03→2026-06), not equities. Reconfirmed bit-for-bit unchanged
+  after the catalog-completeness fix (2026-07-29): the sealed universe
+  priced inside this window gained zero new members from the fix (see the
+  catalog-completeness status bullet), so this figure is still current.
 - Never share one `PreparedMarket` across fold worker threads in
   `run_walkforward`: each fold builds its own IS/OOS `PreparedMarket`
   windows from the shared read-only `frame_full`/`products_full` frames —
