@@ -77,11 +77,18 @@ tcgcsv.com). Design spec: `docs/superpowers/specs/2026-06-09-pkmn-quant-design.m
   3.4x, dip-buyer 7.6x. The first full-data run found a real bug the
   synthetic fixtures never exercised: `products.parquet` is missing rows
   for 40 of 4,687 priced product_ids inside the backtest window (7,565
-  price rows; warehouse-wide, past the window, the gap is far larger —
-  1,845 of 6,493 as of this run, mostly explained by a second, distinct
-  cause: `ingest.py`'s documented one-time catalog fetch never picking up
-  new sets) — `NativeBacktest.run()` crashed on it (`KeyError`)
-  where the Python engine silently excludes uncataloged assets from
+  price rows). Warehouse-wide, past the window, the gap is far larger —
+  re-measured 2026-07-29 at 2,017 of 6,665. The cause originally recorded
+  here (the one-time catalog fetch missing new sets) was wrong: measured,
+  that explains only 14 of 2,017. The real cause is that TCGplayer
+  **re-files products between groups**, so a promo whose prices were
+  archived under a tracked set now lists under an untracked group
+  (`Miscellaneous Cards & Products`, `Blister Exclusives`, `Nintendo
+  Promos`, …), and the catalog fetch only ever asked the 23 price-tracked
+  sets. Fixed by the catalog-completeness plan (2026-07-29): the catalog
+  now covers all 217 groups on every ingest. This in-window gap is what
+  crashed `NativeBacktest.run()` (`KeyError`), where the Python engine
+  silently excludes uncataloged assets from
   kind-filtered strategies; fixed by tagging missing catalog rows kind
   "other" (commit `091b663`), which also correctly keeps them tradeable for
   cost-aware-reversion (no kind filter), with a differential regression test
@@ -250,10 +257,93 @@ tcgcsv.com). Design spec: `docs/superpowers/specs/2026-06-09-pkmn-quant-design.m
   process, so a fresh ingest is invisible until the server restarts;
   holdings that fail universe/mark validation surface as a failed job
   rather than a synchronous 400; and `/api/products` inner-joins `products`
-  to `prices`, so a product_id with price history but no catalog row (40 of
-  4,687 inside the backtest window, 1,845 of 6,493 warehouse-wide per the
-  Plan 10 finding) is silently absent from search even though a backtest
-  will still trade it — scheduled as follow-up work, not fixed here.
+  to `prices`, so a product_id with price history but no catalog row is
+  silently absent from search even though a backtest will still trade it.
+  At the time of Plan 2c that hid a large slice of the universe (the Plan 10
+  figure, re-measured 2026-07-29 at 2,017 of 6,665 warehouse-wide) and was
+  scheduled as follow-up work. **The catalog-completeness branch below closed
+  it**: the all-groups refresh took uncataloged priced products from 2,017 to
+  8 of 6,665 (99.6% of the gap), so the inner join now hides 8 products.
+  The join is still an inner join — a defensible ~0.1% blind spot, no longer
+  pending work.
+- Catalog completeness complete on feat/catalog-completeness (502 tests +
+  1 skipped Python via a bare `uv run pytest`; the skip is
+  `tests/test_dashboard.py`, which needs `streamlit` — run
+  `uv run --group dashboard pytest tests/test_dashboard.py` separately for
+  it, 5 passed; 26 web tests via `cd web && npm run check`): the product
+  catalog now covers all 217 tcgcsv groups on every `pkmn ingest` (previously
+  23, the price-tracked ones only), fixing the drift where TCGplayer
+  re-files products between groups and priced products silently lose their
+  `rarity`/`kind`; new `pkmn refresh-products` repairs the catalog from all
+  217 groups without a price re-ingest. Real-warehouse refresh (2026-07-29):
+  UNCATALOGED 2,017 → 8, `single` 4,077 → 5,383 (+1,306), `sealed` 436 → 953
+  (+517), `excluded` 135 → 321 (+186); catalog rows 4,673 → 32,506; total
+  priced universe invariant at 6,665 (reclassified, not a different
+  population); 0 products lost. **The correction is almost entirely
+  prospective, not retrospective**: of the 4,687 products priced on or
+  before the standard 2024-03-01..2026-06-30 research window's end, only 32
+  changed `kind` (all to `single`, none to `sealed`) — the other ~1,978
+  reclassified products only started pricing in July 2026, after that
+  window. Full walk-forward re-run of all six strategies plus the
+  buy-and-hold benchmark over that same window, split by mechanism: the two
+  hard `kind`-filtered sealed-universe strategies (buy-and-hold,
+  sealed-accumulation) are bit-for-bit unchanged (0 new sealed products
+  in-window); cost-aware-reversion is provably invariant (it never reads
+  `ctx.products`); the two hard `kind`-filtered single-universe strategies
+  (dip-buyer, xs-momentum) move small and bounded amounts confirmed by a
+  clean same-cost-regime A/B (+0.62 pts, +1.24 pts); the two ML strategies
+  (ml-ranker, ml-ranker-v2), which have no hard `kind` filter and instead
+  feed `kind`/`released_on` into features that were `NaN` for the 32
+  affected rows before the fix, move by +2.47 pts and −8.43 pts respectively
+  — large, opposite-signed, and confirmed deterministic by an independent
+  cross-process re-run reproducing each result to the full float. `pkmn
+  evaluate` before vs after: joint White's Reality Check p = 1.0000 both
+  times (unchanged); every deflated Sharpe stays far below the 0.5
+  coin-flip point both times. **No research conclusion changes: nothing
+  beats buy-and-hold sealed** (+183.67% impact-on this window, bit-identical
+  before and after the fix) — the catalog fix is capability and
+  data-quality work, not a new research result, and the ML strategies'
+  large swing from a 0.7%-of-universe metadata correction is evidence of
+  their fragility, not of an edge. Full findings in
+  `docs/research-findings-2026-07.md` (Catalog completeness section).
+- Final-review fix on the same branch (`uv run pytest` observed at 514
+  passed with the dashboard group installed — the same suite reads
+  509 passed + 1 skipped in a venv without it):
+  refreshing the catalog on **every** ingest made a partial fetch dangerous,
+  because `refresh_products` overwrote `products.parquet` with whatever it
+  managed to fetch. That fired for real on the first unattended run under the
+  new code — one `[Errno 54] Connection reset by peer` on group 2534
+  (`data/results/daily.log`) silently dropped that group and the 09:00
+  `pkmn daily` job still reported success, leaving the live catalog at
+  32,218 rows / 213 groups. It then happened **again the next morning**
+  (2026-07-31 09:43, still on the pre-fix code since this fix was not yet
+  committed): a reset on group 1404 dropped that group while the successful
+  re-fetch of 2534 restored it, leaving 32,410 rows / 213 groups — two
+  silent losses in 48 hours, which is the frequency argument for the fix.
+  Both were harmless only by luck (neither group holds priced products, so
+  warehouse-wide `UNCATALOGED` measured 8 of 6,666 after the second one);
+  the same reset on group 2374 (1,244 products, many priced) would have
+  quietly regressed the priced universe toward the exact pre-fix state.
+  Fixed by **merging** the fetch into the
+  stored catalog instead of replacing it (fresh rows win on `product_id`, so
+  upstream updates still land, while a group that failed this run keeps its
+  previous rows), plus a **completeness floor**: a fetch holding less than
+  `CATALOG_FLOOR` (90%) of the rows already on disk raises instead of
+  writing. Two adjacent holes closed at the same time: the per-group
+  exception filter now catches `(httpx.HTTPError, ValueError, KeyError)` —
+  a 200 carrying HTML (`json.JSONDecodeError`) or a payload with no
+  `results` used to abort the whole ingest before one price row landed —
+  and failures are now reported, not just warned to stderr:
+  `refresh_products` returns `CatalogRefresh(rows, failed_groups)`,
+  `ingest_range` returns `IngestReport(days, catalog_failures)`,
+  `pkmn refresh-products` prints the failed-group count, and `pkmn daily`
+  records `catalog_failures` in `daily.json` and sends a "catalog degraded"
+  notification (the run still succeeds — merging means nothing was lost).
+  The live catalog is deliberately left as the unattended runs left it
+  (32,410 rows / 213 groups, group 1404 missing, as of 2026-07-31); repairing
+  it is scheduled as a first real-data exercise of this code. Note the fix
+  only starts protecting the 09:00 job once it is committed and installed —
+  until then every unattended run is another coin flip.
 
 ## Commands
 
@@ -263,6 +353,7 @@ uv run pytest                # test suite
 uv run ruff check . && uv run ruff format --check . && uv run mypy
                              # lint + format + strict typecheck (src/ only)
 uv run pkmn ingest --start 2026-07-01 --end 2026-07-31   # extend price history
+uv run pkmn refresh-products                             # repair the catalog from all 217 groups, no price ingest
 uv run pkmn backtest --start 2024-03-01 --end 2026-06-30 # buy-and-hold benchmark (default strategy)
 uv run pkmn backtest --strategy sealed-accumulation --start 2024-03-01 \
     --end 2026-06-30 --param take_profit=2.0 --holdings holdings.csv   # any strategy + cash/holdings
@@ -371,10 +462,27 @@ uv.lock together).
   (`tests/test_native_parity.py`, `scripts/parity_full.py`) — see the
   Plan 10 status bullet above for the one real gap the full-warehouse run
   found and how it was closed.
-- `data/` — gitignored. Contains 874 ingested days (2024-02-08..2026-06-30,
-  ~2.9M price rows) plus raw archives. Do not delete; re-ingest is ~40 min.
-  `data/portfolio/` holds the gitignored real and paper ledgers. `data/runs/`
-  holds the gitignored experiment registry (`registry.jsonl`).
+- `data/` — gitignored. Contains 902 ingested days (2024-02-08..2026-07-28,
+  ~3.16M price rows) plus raw archives. Do not delete; re-ingest is ~40 min.
+  The product catalog and the price history are deliberately different
+  scopes: the catalog (`products.parquet`, 32,506 rows / 214 groups as of the
+  2026-07-29 catalog-completeness refresh) covers every tcgcsv group ever
+  published, while prices only cover `MIN_SET_RELEASE`-onward sets
+  (`tracked_groups` in `ingest.py`, 2024-01-01-onward) — the catalog is
+  fetched wide so any priced product can be classified regardless of which
+  group it currently lists under, but prices are only ever ingested for
+  the tracked window. Those catalog figures are **point-in-time**: the
+  catalog is re-fetched on every ingest, so unattended `pkmn daily` runs move
+  them, and on the pre-fix code they moved it twice in 48 hours (a connection
+  reset on 2026-07-30 left 32,218 rows / 213 groups; another on 2026-07-31
+  left 32,410 / 213). Expect the live file to differ from any figure pinned
+  here. Since the final-review fix that movement can no longer
+  silently degrade the priced universe: `refresh_products` merges into the
+  stored catalog rather than replacing it, and refuses to write a fetch
+  holding under 90% of the rows already on disk. `data/portfolio/` holds the
+  gitignored real and paper
+  ledgers. `data/runs/` holds the gitignored experiment registry
+  (`registry.jsonl`).
 - `src/pkmn_quant/api/` — FastAPI research explorer API (dependency group
   `api`): `models.py` has the Pydantic response models (also the
   cross-language contract checked by `tests/api/test_contract.py`); 11
@@ -410,10 +518,20 @@ uv.lock together).
   numbers — if a deliberate change shifts results, update the goldens in the
   same commit with a hand-derivation in the docstring.
 - tcgcsv.com 401s httpx's default User-Agent — always use `tcgcsv.make_client()`.
+- `refresh_products` merges into `products.parquet` and never replaces it: it
+  runs on every ingest, including the unattended `pkmn daily` job that
+  swallows ingest errors, so a replace lets one transient connection reset
+  delete a whole group's products silently (it did, on 2026-07-30). Keep the
+  merge, the `CATALOG_FLOOR` refusal, and the wide `(httpx.HTTPError,
+  ValueError, KeyError)` filter — a fetch failure must degrade to "stale
+  rows kept, failure counted", never to "rows gone, run reports success".
 - Sharpe/Sortino on this data are inflated by mark smoothing (thin markets,
   carry-forward marks). Caveat them in any report; compare strategies against
   the buy-and-hold benchmark (+186.0% flat-cost / +183.7% impact-on for
-  sealed, 2024-03→2026-06), not equities.
+  sealed, 2024-03→2026-06), not equities. Reconfirmed bit-for-bit unchanged
+  after the catalog-completeness fix (2026-07-29): the sealed universe
+  priced inside this window gained zero new members from the fix (see the
+  catalog-completeness status bullet), so this figure is still current.
 - Never share one `PreparedMarket` across fold worker threads in
   `run_walkforward`: each fold builds its own IS/OOS `PreparedMarket`
   windows from the shared read-only `frame_full`/`products_full` frames —

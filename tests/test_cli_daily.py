@@ -11,6 +11,7 @@ from typer.testing import CliRunner
 import pkmn_quant.live.notify as notify
 from pkmn_quant.cli import app
 from pkmn_quant.config import Paths
+from pkmn_quant.data.ingest import IngestReport
 from pkmn_quant.data.transforms import PRICE_SCHEMA
 from pkmn_quant.data.warehouse import Warehouse
 from tests.helpers import price_row
@@ -149,9 +150,9 @@ def test_daily_calls_ingest_when_warehouse_is_stale(
 
     ingest_calls: list[tuple[Any, ...]] = []
 
-    def fake_ingest(paths: Any, start: date, end: date) -> list[Any]:
+    def fake_ingest(paths: Any, start: date, end: date) -> IngestReport:
         ingest_calls.append((paths, start, end))
-        return []
+        return IngestReport(days=[], catalog_failures=())
 
     monkeypatch.setattr("pkmn_quant.cli.ingest_range", fake_ingest)
 
@@ -167,6 +168,33 @@ def test_daily_calls_ingest_when_warehouse_is_stale(
     _, call_start, call_end = ingest_calls[0]
     assert call_start == expected_start
     assert call_end == yesterday
+
+
+def test_daily_records_and_notifies_catalog_failures(
+    tmp_path: Path,
+    sent: list[tuple[str, str]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A degraded catalog refresh inside the unattended run must leave a
+    durable trace (daily.json) and a notification, without failing the run —
+    refresh_products merges, so the failed groups kept their previous rows."""
+    seed(tmp_path)
+    runner = CliRunner()
+    run_walkforward(runner, tmp_path)
+
+    def fake_ingest(paths: Any, start: date, end: date) -> IngestReport:
+        return IngestReport(days=[], catalog_failures=(2534,))
+
+    monkeypatch.setattr("pkmn_quant.cli.ingest_range", fake_ingest)
+
+    result = runner.invoke(app, ["daily", "--root", str(tmp_path)])
+    assert result.exit_code == 0, result.output
+
+    meta = json.loads(next((tmp_path / "data" / "results").glob("daily-*/daily.json")).read_text())
+    assert meta["status"] == "ok"
+    assert meta["catalog_failures"] == 1
+    catalog_notifs = [b for t, b in sent if "catalog" in t.lower()]
+    assert len(catalog_notifs) == 1 and "2534" in catalog_notifs[0]
 
 
 # ---------------------------------------------------------------------------
@@ -189,7 +217,7 @@ def test_daily_ingest_failure_exits_1_and_records_error(
     r = runner.invoke(app, [*deposit_args, "--root", str(tmp_path)])
     assert r.exit_code == 0, r.output
 
-    def fake_ingest_fail(paths: Any, start: date, end: date) -> list[Any]:
+    def fake_ingest_fail(paths: Any, start: date, end: date) -> IngestReport:
         raise RuntimeError("boom")
 
     monkeypatch.setattr("pkmn_quant.cli.ingest_range", fake_ingest_fail)

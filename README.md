@@ -73,7 +73,7 @@ uv run python scripts/parity_full.py        # five rule strategies, ~1 min
 uv run python scripts/parity_full.py --ml   # + ml-ranker bridge, ~2-3 min
 ```
 
-The full-data acceptance run surfaced a real gap the synthetic fixtures never exercised: 40 priced product_ids inside the backtest window (1,845 warehouse-wide as of that run) had no matching `products.parquet` catalog row. Both engines now tag missing catalog rows kind `other`, so they agree bit-for-bit on which assets are tradeable; details in the findings doc's Plan 10 section.
+The full-data acceptance run surfaced a real gap the synthetic fixtures never exercised: 40 priced product_ids inside the backtest window (1,845 warehouse-wide as of that run) had no matching `products.parquet` catalog row. Both engines now tag missing catalog rows kind `other`, so they agree bit-for-bit on which assets are tradeable; details in the findings doc's Plan 10 section. The underlying gap has since been **fixed** — the catalog now covers all 217 tcgcsv groups on every ingest, which took uncataloged priced products from 2,017 (the re-measured warehouse-wide figure) to 8 of 6,665; the kind-`other` tagging stays as the safety net for the remainder.
 
 **Measured single-backtest speedup** (best of 3, full 2024-03 to 2026-06 range, impact on, total wall-clock including the one-time data load):
 
@@ -106,6 +106,7 @@ ctest --test-dir cpp/build --output-on-failure
 uv sync                                                   # installs everything, builds the C++ extension
 uv run pytest                                             # 349 tests (+1 dashboard skip without --group dashboard)
 uv run pkmn ingest --start 2024-02-08 --end 2026-06-30    # ~40 min, ~2.9M price rows
+uv run pkmn refresh-products                              # repair the product catalog (all 217 groups, no prices)
 uv run pkmn backtest --start 2024-03-01 --end 2026-06-30  # benchmark backtest (cpp engine, impact on)
 uv run pkmn walkforward --strategy sealed-accumulation \
     --start 2024-03-01 --end 2026-06-30 --trials 15       # research run (fold-parallel by default)
