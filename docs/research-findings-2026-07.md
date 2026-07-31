@@ -19,10 +19,17 @@ frames — the fix only changed two feature values (`is_sealed`,
 moved ml-ranker by +2.47 stitched-OOS points and ml-ranker-v2 by −8.43
 points, in opposite directions, both confirmed deterministic (bit-identical
 across independent re-runs, not noise). **None of the numbers below are
-wrong or need to be distrusted** — they were computed correctly against the
-catalog that existed at the time, and for every strategy except the two ML
-ones the correction turns out to be immaterial on this window; they remain
-the numbers to cite for 2024-03-01..2026-06-30. The ml-ranker and
+wrong or need to be distrusted *on the catalog axis*** — they were computed
+correctly against the catalog that existed at the time, and for every
+strategy except the two ML ones the correction turns out to be immaterial on
+this window; on that axis they remain the numbers to cite for
+2024-03-01..2026-06-30. **This note says nothing about the cost axis**, which
+supersedes some of them independently: dip-buyer (−9.02%), xs-momentum
+(−25.08%) and cost-aware-reversion (−10.18%) below are **flat-cost** numbers,
+and the current shared-regime (impact-on) figures for those three are
+−21.15%, −9.30% and −22.45% — see the Catalog completeness section's
+mixed-regime note. Cite the impact-on figures for cross-strategy comparison.
+The ml-ranker and
 ml-ranker-v2 sections below, and their appearances in the Rigor pack /
 evaluate tables, are the ones genuinely superseded by the new section at the
 end. The catalog fix matters more for any future window extending past
@@ -803,6 +810,25 @@ products (`660410, 664093, 646307, 662148, 662168, 557364, 646306, 662234`)
 appear in no tcgcsv group at all, verified by direct re-fetch — genuinely
 un-catalogable upstream, correctly left `kind: "other"`. Zero products lost,
 zero duplicate `product_id`s.
+
+**These catalog counts are point-in-time.** The catalog is now re-fetched on
+every ingest, so unattended runs move them: on 2026-07-30 a single
+`[Errno 54] Connection reset by peer` on group 2534 during the 09:00
+`pkmn daily` job left the live file at 32,218 rows / 213 groups, and — under
+the replace-the-file behaviour this branch originally shipped — the run
+reported success with no trace. The next morning it recurred: on 2026-07-31,
+still pre-fix, a reset on group 1404 dropped that group while a successful
+re-fetch restored 2534, leaving 32,410 rows / 213 groups. Two silent losses
+in 48 hours, both harmless only by luck — neither group holds priced
+products, and a direct re-measurement after the second one puts warehouse-wide
+`UNCATALOGED` at 8 of 6,666, unchanged. The final-review fix makes
+that class of drift non-destructive: `refresh_products` now merges the fetch
+into the stored catalog (fresh rows win per `product_id`), refuses to write a
+fetch holding under 90% of the rows on disk, catches malformed-JSON and
+missing-`results` payloads alongside HTTP errors, and reports the failed
+group count into `pkmn refresh-products`' output and `daily.json`
+(`catalog_failures`). None of the numbers in this section change: they were
+measured before that drift, from a complete refresh.
 
 ### The reclassification is prospective, not retrospective, for this window
 
