@@ -3,6 +3,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+import pytest
 
 from pkmn_quant.config import Paths
 from pkmn_quant.data.ingest import ingest_range, tracked_groups
@@ -88,13 +89,14 @@ def test_ingest_range_end_to_end(tmp_path: Path) -> None:
 
     client = httpx.Client(transport=httpx.MockTransport(handler))
     root = tmp_path / "proj"
-    stats = ingest_range(Paths(root=root), d1, d2, client=client)
+    report = ingest_range(Paths(root=root), d1, d2, client=client)
 
-    assert [s.day for s in stats] == [d1, d2]
-    assert stats[0].rows_clean == 1
+    assert [s.day for s in report.days] == [d1, d2]
+    assert report.days[0].rows_clean == 1
     # 10.0 -> 500.0 is a 50x jump: quarantined by the price_jump gate.
-    assert stats[1].rows_clean == 0
-    assert stats[1].rows_quarantined == 1
+    assert report.days[1].rows_clean == 0
+    assert report.days[1].rows_quarantined == 1
+    assert report.catalog_failures == ()
 
     warehouse = Warehouse(Paths(root=root))
     assert warehouse.stored_days() == [d1, d2]
@@ -119,8 +121,8 @@ def test_ingest_range_skips_already_stored(tmp_path: Path) -> None:
     first = ingest_range(Paths(root=root), d1, d1, client=client)
     calls_after_first = len(calls)
     second = ingest_range(Paths(root=root), d1, d1, client=client)
-    assert len(first) == 1
-    assert second == []
+    assert len(first.days) == 1
+    assert second.days == []
     # The already-stored day's price archive must not be re-downloaded. (The
     # catalog, unlike price archives, IS re-fetched on every ingest_range call
     # — see test_ingest_refreshes_catalog_even_when_products_exist.)
@@ -151,9 +153,9 @@ def test_previous_resets_after_long_gap(tmp_path: Path) -> None:
     ingest_range(Paths(root=root), d1, d1, client=client)
     # Resuming a month later: the 50x move must NOT be quarantined as a jump,
     # because the baseline resets after GAP_RESET_DAYS.
-    stats = ingest_range(Paths(root=root), d2, d2, client=client)
-    assert stats[0].rows_clean == 1
-    assert stats[0].rows_quarantined == 0
+    report = ingest_range(Paths(root=root), d2, d2, client=client)
+    assert report.days[0].rows_clean == 1
+    assert report.days[0].rows_quarantined == 0
 
 
 def test_cli_help() -> None:
@@ -189,9 +191,9 @@ def test_backfill_earlier_day_does_not_use_future_baseline(tmp_path: Path) -> No
     ingest_range(Paths(root=root), d_late, d_late, client=client)
     # Backfilling June 1 after June 5 exists: the June 5 frame (a FUTURE day)
     # must not serve as the jump baseline, so the 50x difference is clean.
-    stats = ingest_range(Paths(root=root), d_early, d_early, client=client)
-    assert stats[0].rows_clean == 1
-    assert stats[0].rows_quarantined == 0
+    report = ingest_range(Paths(root=root), d_early, d_early, client=client)
+    assert report.days[0].rows_clean == 1
+    assert report.days[0].rows_quarantined == 0
 
 
 def _per_group_products(group_id: int, product_id: int, name: str) -> dict[str, Any]:
@@ -304,7 +306,171 @@ def test_refresh_products_dedupes_by_product_id(tmp_path: Path) -> None:
         Group(group_id=GROUP_ID, name="A", abbreviation="A", published_on=date(2025, 2, 20)),
         Group(group_id=3170, name="B", abbreviation="B", published_on=date(2020, 1, 1)),
     ]
-    rows = refresh_products(client, warehouse, groups)
+    refresh = refresh_products(client, warehouse, groups)
 
-    assert rows == 1, f"expected the duplicate to be collapsed, got {rows} rows"
+    assert refresh.rows == 1, f"expected the duplicate to be collapsed, got {refresh.rows} rows"
     assert warehouse.load_products()["product_id"].to_list() == [666906]
+
+
+# ---------------------------------------------------------------------------
+# Catalog durability: a partial fetch must never destroy a good catalog.
+# ---------------------------------------------------------------------------
+
+BIG_GROUP, SMALL_GROUP = GROUP_ID, 3170
+
+
+def _bulk_products(group_id: int, first_id: int, n: int) -> dict[str, Any]:
+    """A products payload with n rows, so a one-group loss is a small fraction."""
+    return {
+        "success": True,
+        "results": [
+            {
+                "productId": first_id + i,
+                "name": f"P{first_id + i}",
+                "groupId": group_id,
+                "presaleInfo": {"releasedOn": "2025-02-20T00:00:00"},
+                "extendedData": [],
+            }
+            for i in range(n)
+        ],
+    }
+
+
+def _two_groups() -> list[Group]:
+    return [
+        Group(group_id=BIG_GROUP, name="A", abbreviation="A", published_on=date(2025, 2, 20)),
+        Group(group_id=SMALL_GROUP, name="B", abbreviation="B", published_on=date(2020, 1, 1)),
+    ]
+
+
+def test_refresh_products_keeps_rows_of_a_group_that_failed_this_run(tmp_path: Path) -> None:
+    """A transient failure for one group must NOT delete that group's products.
+
+    Observed in production 2026-07-30 (data/results/daily.log): one
+    "[Errno 54] Connection reset by peer" on group 2534 during the unattended
+    09:00 run silently removed that group from the catalog, and the run still
+    reported success.
+    """
+    from pkmn_quant.data.ingest import refresh_products
+
+    fail = {"on": False}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path.endswith(f"/{BIG_GROUP}/products"):
+            return httpx.Response(200, json=_bulk_products(BIG_GROUP, 1000, 40))
+        if path.endswith(f"/{SMALL_GROUP}/products"):
+            if fail["on"]:
+                raise httpx.ConnectError("[Errno 54] Connection reset by peer")
+            return httpx.Response(200, json=_bulk_products(SMALL_GROUP, 90000, 2))
+        return httpx.Response(404)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    warehouse = Warehouse(Paths(root=tmp_path))
+    groups = _two_groups()
+    first = refresh_products(client, warehouse, groups)
+    assert first.rows == 42 and first.failed_groups == ()
+
+    fail["on"] = True
+    second = refresh_products(client, warehouse, groups)
+
+    ids = set(warehouse.load_products()["product_id"].to_list())
+    assert {90000, 90001} <= ids, "products of a group that failed THIS run were dropped"
+    assert second.rows == 42
+    assert second.failed_groups == (SMALL_GROUP,), "the failure was not reported to the caller"
+
+
+def test_refresh_products_fresh_row_wins_over_the_stored_one(tmp_path: Path) -> None:
+    """Merging must not freeze the catalog: a genuine upstream update wins."""
+    from pkmn_quant.data.ingest import refresh_products
+
+    name = {"value": "Old Name"}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith(f"/{BIG_GROUP}/products"):
+            return httpx.Response(200, json=_per_group_products(BIG_GROUP, 666906, name["value"]))
+        return httpx.Response(404)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    warehouse = Warehouse(Paths(root=tmp_path))
+    groups = [Group(group_id=BIG_GROUP, name="A", abbreviation="A", published_on=date(2025, 2, 20))]
+    refresh_products(client, warehouse, groups)
+
+    name["value"] = "New Name"
+    refresh_products(client, warehouse, groups)
+
+    products = warehouse.load_products()
+    assert products.height == 1
+    assert products["name"].to_list() == ["New Name"], "the stale stored row won over the fresh one"
+
+
+def test_refresh_products_refuses_to_write_an_undersized_catalog(tmp_path: Path) -> None:
+    """A mass fetch failure must raise, not quietly shrink the catalog."""
+    from pkmn_quant.data.ingest import refresh_products
+
+    fail = {"on": False}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path.endswith(f"/{BIG_GROUP}/products"):
+            if fail["on"]:
+                raise httpx.ConnectError("network down")
+            return httpx.Response(200, json=_bulk_products(BIG_GROUP, 1000, 40))
+        if path.endswith(f"/{SMALL_GROUP}/products"):
+            return httpx.Response(200, json=_bulk_products(SMALL_GROUP, 90000, 2))
+        return httpx.Response(404)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    warehouse = Warehouse(Paths(root=tmp_path))
+    groups = _two_groups()
+    refresh_products(client, warehouse, groups)
+    before = warehouse.load_products()
+
+    fail["on"] = True
+    with pytest.raises(RuntimeError, match="catalog"):
+        refresh_products(client, warehouse, groups)
+
+    after = warehouse.load_products()
+    assert after.height == before.height == 42, "the existing catalog was overwritten anyway"
+
+
+def test_refresh_products_survives_malformed_json(tmp_path: Path) -> None:
+    """A 200 carrying non-JSON raises json.JSONDecodeError (a ValueError) out of
+    tcgcsv.fetch_products; before the fix that aborted the whole ingest."""
+    from pkmn_quant.data.ingest import refresh_products
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path.endswith(f"/{BIG_GROUP}/products"):
+            return httpx.Response(200, content=b"<html>502 Bad Gateway</html>")
+        if path.endswith(f"/{SMALL_GROUP}/products"):
+            return httpx.Response(200, json=_per_group_products(SMALL_GROUP, 83542, "Ancient Mew"))
+        return httpx.Response(404)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    warehouse = Warehouse(Paths(root=tmp_path))
+    refresh = refresh_products(client, warehouse, _two_groups())
+
+    assert refresh.failed_groups == (BIG_GROUP,)
+    assert warehouse.load_products()["product_id"].to_list() == [83542]
+
+
+def test_refresh_products_survives_a_payload_missing_results(tmp_path: Path) -> None:
+    """A JSON body with no "results" key raises KeyError out of fetch_products;
+    before the fix that aborted the whole ingest."""
+    from pkmn_quant.data.ingest import refresh_products
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path.endswith(f"/{BIG_GROUP}/products"):
+            return httpx.Response(200, json={"success": False, "errors": ["rate limited"]})
+        if path.endswith(f"/{SMALL_GROUP}/products"):
+            return httpx.Response(200, json=_per_group_products(SMALL_GROUP, 83542, "Ancient Mew"))
+        return httpx.Response(404)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    warehouse = Warehouse(Paths(root=tmp_path))
+    refresh = refresh_products(client, warehouse, _two_groups())
+
+    assert refresh.failed_groups == (BIG_GROUP,)
+    assert warehouse.load_products()["product_id"].to_list() == [83542]

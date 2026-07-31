@@ -242,11 +242,17 @@ def ingest(
         end_date = dt.date.fromisoformat(end)
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
-    stats = ingest_range(Paths(root=root), start_date, end_date)
-    for s in stats:
+    report = ingest_range(Paths(root=root), start_date, end_date)
+    for s in report.days:
         typer.echo(f"{s.day}: {s.rows_clean} clean rows, {s.rows_quarantined} quarantined")
-    if not stats:
+    if not report.days:
         typer.echo("Nothing to do - all days already ingested.")
+    if report.catalog_failures:
+        typer.echo(
+            f"warning: catalog refresh: {len(report.catalog_failures)} group(s) failed to "
+            "fetch; their previously catalogued rows were kept",
+            err=True,
+        )
 
 
 @app.command("refresh-products")
@@ -260,14 +266,25 @@ def refresh_products_cmd(
     tracked set can end up listed under an untracked promo group. A product
     with no catalog row has no rarity, so it is tagged kind "other" and is
     invisible to every kind-filtered strategy.
+
+    The fetched catalog is merged into the stored one (fresh rows win), so a
+    group that fails to fetch keeps its previous products rather than
+    vanishing; the number of failed groups is reported.
     """
     from pkmn_quant.data.warehouse import Warehouse
 
     with tcgcsv.make_client() as client:
         groups = tcgcsv.fetch_groups(client)
         typer.echo(f"fetching product catalog for {len(groups)} sets...")
-        rows = refresh_products(client, Warehouse(Paths(root=root)), groups)
-    typer.echo(f"wrote {rows} products")
+        refresh = refresh_products(client, Warehouse(Paths(root=root)), groups)
+    typer.echo(f"wrote {refresh.rows} products")
+    if refresh.failed_groups:
+        typer.echo(
+            f"warning: {len(refresh.failed_groups)} of {len(groups)} groups failed to fetch "
+            f"({', '.join(str(g) for g in refresh.failed_groups)}); "
+            "their previously catalogued rows were kept",
+            err=True,
+        )
 
 
 def _read_holdings_csv(path: Path) -> list[SeededHolding]:
@@ -624,6 +641,7 @@ def daily(
     out_dir.mkdir(parents=True, exist_ok=True)
 
     notify_title_base = "pkmn daily (paper)" if paper else "pkmn daily"
+    catalog_failures: tuple[int, ...] = ()
 
     def finish(
         status: str, error: str | None, n_buys: int, n_sells: int, as_of: str | None
@@ -639,6 +657,10 @@ def daily(
                     "n_sells": n_sells,
                     "as_of": as_of,
                     "paper": paper,
+                    # Groups whose catalog fetch failed this run. Their previous
+                    # rows were kept (ingest.refresh_products merges), but an
+                    # unattended run must leave a durable trace of the degradation.
+                    "catalog_failures": len(catalog_failures),
                 },
                 indent=2,
             )
@@ -671,7 +693,10 @@ def daily(
             days = warehouse.stored_days()
             if days and days[-1] < yesterday:
                 try:
-                    ingest_range(Paths(root=root), days[-1] + dt.timedelta(days=1), yesterday)
+                    ingested = ingest_range(
+                        Paths(root=root), days[-1] + dt.timedelta(days=1), yesterday
+                    )
+                    catalog_failures = ingested.catalog_failures
                 except Exception as exc:  # scheduled run must never die silently
                     ingest_error = f"ingest failed: {exc}"
 
@@ -733,6 +758,15 @@ def daily(
             notify_title_base,
             f"{strategy}: {n_buys} buys, {n_sells} sells — see dashboard",
         )
+    if catalog_failures:
+        # Not fatal — refresh_products merges, so the failed groups kept their
+        # previous rows — but an unattended degradation must not be silent.
+        msg = (
+            f"catalog refresh: {len(catalog_failures)} group(s) failed to fetch "
+            f"({', '.join(str(g) for g in catalog_failures)}); previous rows kept"
+        )
+        notify.send_notification(f"{notify_title_base}: catalog degraded", msg)
+        typer.echo(f"warning: {msg}", err=True)
     if ingest_error:
         notify.send_notification(f"{notify_title_base}: ingest problem", ingest_error)
         typer.echo(ingest_error, err=True)
