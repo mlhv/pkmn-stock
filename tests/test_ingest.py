@@ -59,14 +59,16 @@ def price_row(market: float) -> dict[str, Any]:
     }
 
 
-def test_tracked_groups_filters_old_sets() -> None:
+def test_tracked_groups_has_no_lower_bound() -> None:
+    """Since full-set coverage, prices cover every group, matching the
+    catalog. Only the future-publication bound remains."""
     groups = [
-        Group(group_id=1, name="new", abbreviation="N", published_on=date(2025, 1, 1)),
-        Group(group_id=2, name="old", abbreviation="O", published_on=date(2020, 1, 1)),
-        Group(group_id=3, name="future", abbreviation="F", published_on=date(2030, 1, 1)),
+        Group(group_id=1, name="Base Set", abbreviation="BS", published_on=date(1999, 1, 9)),
+        Group(group_id=2, name="Recent", abbreviation="R", published_on=date(2025, 2, 20)),
+        Group(group_id=3, name="Unreleased", abbreviation="U", published_on=date(2027, 1, 1)),
     ]
-    tracked = tracked_groups(groups, today=date(2025, 6, 1))
-    assert [g.group_id for g in tracked] == [1]
+    tracked = tracked_groups(groups, today=date(2026, 6, 1))
+    assert [g.group_id for g in tracked] == [1, 2]
 
 
 def test_ingest_range_end_to_end(tmp_path: Path) -> None:

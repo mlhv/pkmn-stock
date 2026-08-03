@@ -10,15 +10,20 @@ POKEMON_CATEGORY_ID = 3
 TCGCSV_BASE_URL = "https://tcgcsv.com"
 # tcgcsv daily price archives exist from this date onward.
 EARLIEST_ARCHIVE_DATE = date(2024, 2, 8)
-# Sets released on/after this date form the tradeable universe.
-MIN_SET_RELEASE = date(2024, 1, 1)
 
 
 @dataclass(frozen=True)
 class Paths:
-    """Filesystem layout rooted at the project directory."""
+    """Filesystem layout rooted at the project directory.
+
+    `warehouse_name` exists so a full-set rebuild can write to a shadow
+    warehouse (`data/warehouse-full/`) while reading the SAME cached
+    archives — `raw_archives` stays derived from `root`, so nothing is
+    re-downloaded and the live warehouse is never written.
+    """
 
     root: Path
+    warehouse_name: str = "warehouse"
 
     @property
     def raw_archives(self) -> Path:
@@ -26,7 +31,7 @@ class Paths:
 
     @property
     def warehouse(self) -> Path:
-        return self.root / "data" / "warehouse"
+        return self.root / "data" / self.warehouse_name
 
     @property
     def prices(self) -> Path:

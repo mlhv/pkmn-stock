@@ -9,7 +9,7 @@ from datetime import date, timedelta
 import httpx
 import polars as pl
 
-from pkmn_quant.config import MIN_SET_RELEASE, Paths
+from pkmn_quant.config import Paths
 from pkmn_quant.data import tcgcsv
 from pkmn_quant.data.quality import apply_quality_gates
 from pkmn_quant.data.tcgcsv import Group
@@ -55,8 +55,14 @@ class IngestReport:
 
 
 def tracked_groups(groups: list[Group], today: date) -> list[Group]:
-    """The tradeable universe: sets released between MIN_SET_RELEASE and today."""
-    return [g for g in groups if MIN_SET_RELEASE <= g.published_on <= today]
+    """Every set published on or before `today`.
+
+    Full-set coverage (spec 2026-08-03) removed the MIN_SET_RELEASE lower
+    bound: prices now cover the same 217 groups the catalog does, so the
+    catalog-vs-prices scope split from the previous plan no longer exists.
+    The upper bound stays — a set published in the future has no prices.
+    """
+    return [g for g in groups if g.published_on <= today]
 
 
 def refresh_products(
@@ -167,8 +173,9 @@ def ingest_range(
     catalog_failures: tuple[int, ...] = ()
     try:
         groups = tcgcsv.fetch_groups(client)
-        # Prices come from tracked sets only (MIN_SET_RELEASE); NAMES come from
-        # every set, because TCGplayer re-files products across groups.
+        # Prices and names now cover the same groups (full-set coverage,
+        # spec 2026-08-03); the catalog fetch below still passes every group,
+        # unfiltered, because it also wants sets published in the future.
         tracked = tracked_groups(groups, today=end)
         group_ids = {g.group_id for g in tracked}
         print(f"fetching product catalog ({len(groups)} sets)...", file=sys.stderr)
