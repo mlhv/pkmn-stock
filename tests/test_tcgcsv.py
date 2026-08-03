@@ -57,11 +57,26 @@ def test_archive_url() -> None:
     )
 
 
-def make_archive(tmp_path: Path, day: date, group_id: int, rows: list[dict[str, Any]]) -> Path:
-    """Build a miniature tcgcsv daily archive: <date>/3/<groupId>/prices inside a 7z."""
+def make_archive(
+    tmp_path: Path,
+    day: date,
+    group_id: int,
+    rows: list[dict[str, Any]],
+    extra_groups: dict[int, list[dict[str, Any]]] | None = None,
+) -> Path:
+    """Build a miniature tcgcsv daily archive: <date>/3/<groupId>/prices inside a 7z.
+
+    `extra_groups` writes one additional `<date>/3/<groupId>/prices` file per
+    entry into the same archive, for tests that need a multi-group archive
+    (e.g. proving an untracked-under-the-old-rule set actually gets ingested).
+    """
     src = tmp_path / "archive-src" / day.isoformat() / "3" / str(group_id)
-    src.mkdir(parents=True)
+    src.mkdir(parents=True, exist_ok=True)
     (src / "prices").write_text(json.dumps({"success": True, "results": rows}))
+    for extra_group_id, extra_rows in (extra_groups or {}).items():
+        extra_src = tmp_path / "archive-src" / day.isoformat() / "3" / str(extra_group_id)
+        extra_src.mkdir(parents=True, exist_ok=True)
+        (extra_src / "prices").write_text(json.dumps({"success": True, "results": extra_rows}))
     archive = tmp_path / f"prices-{day.isoformat()}.ppmd.7z"
     with py7zr.SevenZipFile(archive, "w") as z:
         z.writeall(tmp_path / "archive-src" / day.isoformat(), arcname=day.isoformat())
