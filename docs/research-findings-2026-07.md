@@ -1,5 +1,20 @@
 # Walk-forward findings — 2026-07-04
 
+> **SUPERSEDED (2026-08-04). Read the "Full set coverage" section at the end
+> of this file first.** Every number in this document, including in the
+> catalog-completeness note immediately below and the section it points at,
+> was computed against a price warehouse covering **23 of tcgcsv's 217
+> groups**. Prices now cover all 217: 11.36x the rows, 4.75x the products.
+> The universe is derived from what is priced, so every strategy's candidate
+> set changed and every result moved — the benchmark from +183.67% to
+> +10.53%, and all six active strategies to between −8.59% and −99.81%. The
+> old rows are intact (the rebuild was verified bit-for-bit and is purely
+> additive); they are simply a measurement of a much narrower market. Cite
+> the numbers below only as "on the 23-group universe", and read the final
+> section before drawing any conclusion from them — it explains why the new
+> benchmark figure is itself an artifact and should not be used as a bar
+> either.
+
 **Catalog-completeness note (2026-07-29/30), read before anything below.**
 Every section in this file above the "Catalog completeness" section near the
 end was computed against a product catalog that only covered 23 of tcgcsv's
@@ -1063,3 +1078,382 @@ that don't filter at all.
   wall-clock. **Run ml-ranker-family walk-forwards sequentially, one at a
   time**, not in parallel, especially on a machine already under memory
   pressure.
+
+---
+
+## Full set coverage (2026-08-04): prices for all 217 groups, and what a 4.75x wider universe does to every number in this file
+
+**Everything above this section was computed on a 23-group price universe.
+This section supersedes all of it.** Not in the qualified way the
+catalog-completeness note at the top of this file supersedes things — that
+correction changed metadata for 32 in-window products and turned out to be
+immaterial for most strategies. This one changes the population being
+traded. Every prior number in this file is a measurement of a different,
+much narrower market.
+
+### What changed
+
+`pkmn ingest` previously fetched price archives for 23 tcgcsv groups: the
+`tracked_groups` filter kept only sets released on or after
+`MIN_SET_RELEASE` (2024-01-01). The product catalog had already been widened
+to all 217 groups by the previous plan; prices had not. That asymmetry was
+documented as deliberate. It no longer exists — `MIN_SET_RELEASE` is gone
+and `tracked_groups` returns every group tcgcsv publishes.
+
+The warehouse was rebuilt into a shadow directory from the cached raw
+archives (`scripts/rebuild_warehouse.py`, 17m08s for 907 days), every
+pre-existing product was verified to reproduce exactly
+(`scripts/verify_rebuild.py`, PASSED first try, exit 0), and only then
+swapped in. The pre-swap warehouse is retained at `data/warehouse-old/`.
+
+Measured at swap time (2024-02-08 .. 2026-08-02, 907 days both sides):
+
+| | pre-swap (23 groups) | post-swap (217 groups) | growth |
+|---|---:|---:|---:|
+| price rows | 3,197,600 | 36,337,465 | **11.36x** |
+| distinct priced products | 6,671 | 31,712 | **4.75x** |
+| quarantined rows | — | 1,010,597 | — |
+| on-disk | 38 MB | 416 MB | 11x |
+
+**The universe is not configured anywhere — it is derived from what is
+priced.** `products.kind` classifies each priced product, and the strategies
+filter on that, so widening ingestion widened every strategy's candidate set
+without a line of strategy code changing:
+
+| kind | distinct priced products |
+|---|---:|
+| `single` | 28,175 |
+| `sealed` | 2,439 |
+| `excluded` | 986 |
+| `null` (no catalog row) | 112 |
+
+**The change is additive in two ways, not one.** The obvious way is 25,041
+products that had no price history at all. The less obvious way: products
+that already existed gained history. In-window (2024-03-01..2026-06-30),
+products that existed pre-swap went from 2,918,425 rows across 4,687
+products to 4,211,405 rows across 6,513 products. Nothing was overwritten —
+verification proves the old rows reproduce bit-for-bit. The extra rows are
+days on which a product happened to be filed under an untracked group, which
+is the same TCGplayer re-filing behavior the previous plan documented on the
+catalog side, showing up on the price side.
+
+### Sparsity: how much of the new universe is meaningfully tradeable
+
+Fraction of the 907 warehouse days on which each product has a price row:
+
+| sparsity bucket | n products |
+|---|---:|
+| prices on >=90% of days | 22,677 |
+| 50-90% | 4,232 |
+| 10-50% | 3,828 |
+| <10% of days | 975 |
+
+The reassuring reading is that 71.5% of the new universe prints on almost
+every day, so this is not mostly a pile of one-print curiosities. The
+correct reading is less reassuring: **"has a price row" is not "is
+liquid"**, and on this data source it is barely evidence of a trade at all.
+tcgcsv publishes a `market` price daily whether or not anything sold; the
+carry-forward mark smoothing that has been caveated in every report in this
+file is now applied to ~7x more products, most of them thin vintage singles.
+The 4,803 products in the bottom two buckets are the visibly thin tail; the
+22,677 in the top bucket are the invisibly thin body. Every Sharpe and
+Sortino below is inflated by this, worse than before.
+
+### Before/after — stitched OOS total return, full zoo plus the benchmark
+
+All post-swap runs: `--start 2024-03-01 --end 2026-06-30 --trials 15`,
+11 folds, market impact **on** (CLI default). The "pre-swap" column is taken
+from this file's Catalog completeness section, which is the most recent
+impact-on set, so **both columns share the same cost regime** and the only
+difference is the universe. The benchmark row is a single full-window
+`pkmn backtest`, not a walk-forward, on both sides.
+
+| strategy | pre-swap, 23 groups (impact-on) | post-swap, 217 groups (impact-on) | delta |
+|---|---:|---:|---:|
+| buy-and-hold sealed (backtest) | +183.67% (`4aeaa9`) | **+10.53%** (`37a23f`) | −173.1 pts |
+| sealed-accumulation | −7.36% (`827311`) | **−8.59%** (`f7ec57`) | −1.2 pts |
+| xs-momentum | −9.30% (`45ba49`) | **−38.72%** (`dd024b`) | −29.4 pts |
+| dip-buyer | −21.15% (`356d78`) | **−99.80%** (`c3055a`) | −78.7 pts |
+| cost-aware-reversion | −22.45% (`c581f7`) | **−98.70%** (`fc1642`) | −76.3 pts |
+| ml-ranker | −5.05% (`db7880`) | **−81.64%** (`2862d3`) | −76.6 pts |
+| ml-ranker-v2 | −23.15% (`37eeeb`) | **−99.81%** (`452b23`) | −76.7 pts |
+
+Two of these numbers demand an explanation before anything else in this
+section can be read: the benchmark falling by an order of magnitude, and
+four strategies losing essentially everything. Both were investigated;
+neither is what it looks like at first glance.
+
+### The benchmark's fall is a capital-deployment artifact, not a market fact
+
+`BuyAndHold.on_bar` splits cash equally across the `kind` universe on the
+first bar and buys `floor(budget_per_asset / price)` of each. That rule has
+an integer floor, and the floor bites hard when the universe grows while the
+account does not:
+
+| | pre-swap | post-swap |
+|---|---:|---:|
+| sealed assets with a print on 2024-03-02 | 45 | 1,315 |
+| budget per asset ($10,000 account) | $222.22 | $7.60 |
+| assets actually filled | 39 | 79 |
+| **capital deployed** | **$6,012.55 (60.1%)** | **$466.78 (4.7%)** |
+| median fill price | $25.30 | $4.35 |
+| max fill price | $149.99 | $7.54 |
+
+The post-swap benchmark sat **95% in cash for the entire 22 months.** Its
++10.53% headline is a $1,052.73 gain earned on $550.77 of capital actually
+put to work (notional + fees + impact) — **+191% on the invested slice**,
+diluted to +10.53% by cash drag. That is also why its Sharpe reads 6.57 and
+its max drawdown −0.90%: those are the statistics of a portfolio that was
+95% a money-market account, not a risk-adjusted triumph.
+
+**The dilution hypothesis — that the newly-added sealed products are old,
+thin, non-appreciating junk that dragged the average down — is falsified by
+the data.** Over the identical window, for sealed assets priced at both ends
+of it:
+
+| sealed assets | n | median total return | mean | % that rose |
+|---|---:|---:|---:|---:|
+| already in the pre-swap warehouse | 298 | +170.8% | +191.7% | 97.0% |
+| newly added by this plan | 835 | **+212.3%** | +240.9% | 97.6% |
+
+The newly-added sealed products appreciated *more* than the ones that were
+already there. The wider sealed universe is not worse. The benchmark's
+headline number fell because the benchmark's sizing rule could no longer
+deploy the account, and because what it *could* still afford was restricted
+to the sub-$7.60 tail.
+
+**This means the +10.53% is not a usable benchmark**, and it is not a
+statement about the sealed market. It is a statement about equal-weighting
+integer quantities of 1,315 assets with $10,000. Any future comparison
+against "buy-and-hold sealed" on the wide universe needs the benchmark's
+sizing fixed (proportional sizing, a capped universe, or a larger notional)
+before the comparison means anything. That is a real defect this plan
+surfaced, and it is not fixed here.
+
+### The near-total losses: adversarial selection into inverted quotes
+
+−99.8% deserved scrutiny rather than acceptance, so the mechanism was traced
+directly. Diagnostic single-window runs (2024-03-01..2026-06-30, $10,000,
+impact on, each strategy's fold-1 walk-forward parameters held fixed — these
+are *probes*, not the reported walk-forward results, and they reproduce the
+ordering, not the exact numbers):
+
+| strategy (probe) | probe total return | buy notional | buy-side impact | impact / notional | share of buy impact from inverted quotes |
+|---|---:|---:|---:|---:|---:|
+| cost-aware-reversion | −92.0% | $8,292 | $18,624 | **225%** | 97% |
+| dip-buyer | −87.8% | $13,002 | $25,243 | **194%** | 92% |
+| xs-momentum | −78.3% | $10,505 | $7,944 | 76% | 93% |
+| sealed-accumulation | −2.6% | $6,419 | $779 | 12% | 38% |
+
+For dip-buyer, total frictions were **$35,533 on a $10,000 account** — 355%
+of starting capital — against $13,002 of gross buy notional. The market
+prices it sold at were, in aggregate, far above the market prices it bought
+at ($39,523 of sell notional against $13,002 of buy notional, 1,244 units
+sold against 1,285 bought), so the account was not destroyed by marks moving
+against it. The frictions consumed it.
+
+The frictions are not spread evenly. 92-97% of buy-side impact comes from
+fills where **`market < low`** — the day's market print sits below the
+lowest listed price, which is an internally inconsistent quote. A worked
+example, product 107010 (Venusaur, Base Set 1st Edition Holofoil, group
+1663 — a set this plan added):
+
+```
+date        market    low      mid      high
+2025-08-13  793.17   799.99   1300.0   1800.0
+2025-08-15   71.88   799.99   1300.0   1800.0    <- "91% dip"
+2025-08-19   71.88  1800.0    1800.0   1800.0
+```
+
+`market` fell 91% while every listing stayed at $800-1800. dip-buyer saw a
+91% dip, bought 3 units at a $71.88 "market" price, and the impact model
+charged `spread * qty * qty / (2 * cap)` = `(1800 − 71.88) * 3 * 3 / 6` =
+$2,592.18 — 12x the notional. The position was then marked at $71.88 while
+having cost ~$936/unit effective, so it was written down to a thirteenth of
+its cost the moment it filled.
+
+**The impact charge is defensible; the entry price is the problem.** You
+cannot buy at $71.88 when the cheapest listing is $799.99. Charging the walk
+from `market` toward `mid` produces an effective ~$936/unit against a $800
+low and $1,300 mid, which is approximately what you would really pay. The
+cost model is doing roughly the right thing with a price that does not
+exist. The engine is not miscounting anything — `impact` is computed exactly
+as specified in Plan 9, and every dollar is auditable in the fills.
+
+What makes this catastrophic rather than merely costly is **adversarial
+selection**: dip-buyer maximizes over "market fell most versus its own
+history" and cost-aware-reversion over "market cheapest versus fair value".
+Both are, by construction, maximizers over exactly the quantity that an
+inverted quote corrupts. They do not stumble into these rows; they seek them.
+The loss ordering across the zoo tracks how directly each selector
+maximizes over that quantity — dip-buyer and cost-aware-reversion (direct
+maximizers) worst, xs-momentum (maximizes the opposite sign) intermediate,
+sealed-accumulation (drawdown-gated, sealed-only) nearly flat, buy-and-hold
+(no selection at all) unaffected. That is a consistency check, not a proof.
+
+The wider universe supplies far more of this fuel, and a fatter tail of it.
+In-window, on rows where `market < low`:
+
+| | inverted rows | products | median mid/market | p99 mid/market | rows with mid > 10x market |
+|---|---:|---:|---:|---:|---:|
+| pre-swap products | 312,914 | 2,987 | 1.43 | 17.3 | 7,004 |
+| newly added products | 1,878,145 | 12,199 | 1.66 | **39.0** | **85,628** |
+
+Note what this does and does not say. The *rate* of inverted quotes is
+essentially unchanged (7.43% of pre-swap rows, 6.29% of new rows — the new
+data is very slightly cleaner per row). What changed is the absolute supply,
+6x more inverted rows, and the extremity of the tail, 12x more rows where
+`mid` exceeds 10x `market`. An extreme-value selector cares only about the
+tail, so a constant defect rate over a 11x larger sample is a much worse
+environment for it.
+
+**What remains unexplained.** Three things, stated as open:
+
+1. **The two ML strategies were not traced.** ml-ranker (−81.64%) and
+   ml-ranker-v2 (−99.81%) run through the per-bar Python callback bridge and
+   cost 75 and 140 minutes per walk-forward, so no diagnostic probe was run
+   for them. They have no hard `kind` filter, so they see all 31,712
+   products, and their features include price-ratio terms that inverted
+   quotes would corrupt — but that is a hypothesis, not a measurement. Do
+   not cite a mechanism for those two numbers.
+2. **Whether `market < low` is a tcgcsv data defect or a real (thin) print**
+   was not established. The two readings imply opposite fixes — quarantine
+   the row, or trust it and fix the impact model's "market is the front of
+   the book" premise — and this plan produced no evidence for either.
+3. **What a liquidity floor would do.** The obvious next experiment
+   (restrict the universe to products above some print-density or spread-
+   sanity threshold) was out of scope for this plan and has not been run, so
+   there is no measured statement about whether these strategies have any
+   edge on a cleaned wide universe.
+
+### Rigor comparison — DSR and joint Reality Check, before vs after
+
+`pkmn evaluate`, same seeded stationary block bootstrap both times
+(n_boot=10000, mean block 10 days, seed 42), 660 aligned days
+(2024-08-28..2026-06-18), benchmark
+`buy-and-hold-sealed-2024-03-01-2026-06-30`:
+
+| strategy | DSR pre-swap (`20260730T181818Z-75d38b`) | DSR post-swap (`20260804T184401Z-cf292c`) |
+|---|---:|---:|
+| cost-aware-reversion | 0.000 | 0.119 |
+| dip-buyer | 0.000 | 0.009 |
+| ml-ranker | 0.004 | 0.254 |
+| ml-ranker-v2 | 0.000 | 0.069 |
+| sealed-accumulation | 0.000 | 0.003 |
+| xs-momentum | 0.000 | 0.000 |
+
+**White's Reality Check, jointly over all six strategies: p = 1.0000 before
+and p = 1.0000 after — unchanged.** The observed best excess return sat at
+or below every one of 10,000 luck-only recentered resample maxima, both
+times.
+
+The deflated Sharpe values went *up* for four strategies, which is worth one
+sentence of caution so nobody misreads it as improvement: DSR is a
+probability that the true Sharpe exceeds zero after correcting for
+selection, and it rises when the return distribution gets wider and more
+skewed, not only when performance improves. ml-ranker's 0.254 sits beside a
+95% CI of [−99.58%, +331.57%] on a −81.64% point estimate — the number is
+large because the estimate is uninformative, not because the strategy got
+better. Every value remains far below the 0.5 coin-flip point, let alone
+the conventional 0.95 bar.
+
+### The honest conclusion
+
+**Nothing beats buy-and-hold sealed. The standing result across every prior
+plan in this repo holds — but it now means something weaker than it used
+to.**
+
+On the wide universe the benchmark returned +10.53% and every one of the six
+active strategies was negative, so the ordering is unchanged and the joint
+Reality Check is still p = 1.0000. What changed is that the benchmark is no
+longer a meaningful bar: it is 95% cash because of an integer-sizing
+artifact, so "nothing beats it" is now a much easier statement to satisfy
+than it was when the bar was a fully-deployed +183.67%. **A larger universe
+is not an improvement by itself**, and this one is not an improvement yet.
+What it delivered is:
+
+- **A correct, verified, purely additive data foundation** — 11.36x the
+  price rows, 4.75x the products, every pre-existing row proven identical.
+  That is real and it is the durable output of this plan.
+- **Two defects surfaced that the narrow universe was hiding**: the
+  benchmark's sizing rule does not survive a wide universe, and the impact
+  model's "market is the front of the book" premise does not survive
+  products whose market print sits below every listing. Both were invisible
+  on 23 recently-released sets and are unavoidable on 217.
+- **No new strategy result.** The six strategies' post-swap numbers measure
+  what happens when selectors tuned on a narrow, clean, monotonically-rising
+  slice are pointed at a wide, thin, quote-inconsistent one without any
+  liquidity filter. That is a statement about the strategies' robustness and
+  about the missing data hygiene layer, not a measurement of edge. Do not
+  cite −99.80% as "dip-buyer's performance"; cite it as "dip-buyer with no
+  liquidity floor on a universe containing 1.88M inverted quotes".
+
+The honest summary is that this plan moved the project from a small correct
+answer to a large one it is not yet equipped to ask questions of. The next
+work is a liquidity/quote-sanity layer and a benchmark sizing fix, in that
+order, and until both land, no cross-strategy comparison on the wide
+universe should be treated as a research result.
+
+### Plan amendment: `published_on` is a mutating timestamp, and the gate caught it
+
+The plan as written failed at the verification step, and it is worth
+recording why. `tracked_groups` filtered groups on `MIN_SET_RELEASE <=
+published_on <= today`. Removing the lower bound was the point of the plan;
+the upper bound looked harmless. It is not — `tcgcsv.Group.published_on` is
+a *last-touched* timestamp, not a release date, and for 19 promo and
+catch-all groups (POP Series, Nintendo Promos, EX Trainer Kits,
+Miscellaneous Cards & Products, and others) it reads as today's date and
+moves. Those 19 groups plus one more were dropped from the whole 907-day
+backfill: the rebuild logged "over 197 sets" instead of 217, and the shadow
+warehouse was missing ~1,842 rows/day across 2026-07-01..2026-08-02.
+
+**The verification gate caught it** — 64 problems reported, exit non-zero,
+no swap performed. The whole reason the plan built a shadow-rebuild-then-
+verify-then-swap pipeline instead of rebuilding in place was to have
+something fail here rather than silently in a research result three weeks
+later, and that is exactly what it bought. The fix (commit `6eb5903`)
+removes the date bound entirely; the re-run logged 217 sets, added 1,434,948
+clean rows over the failed attempt, and verification passed on the first
+try. Full diagnosis in the plan's `task-4-diagnosis.md`.
+
+### Known residual: 112 products with prices and no catalog row
+
+The coverage table above has a `null`-kind bucket of 112 products — priced
+product_ids with no matching row in `products.parquet` at all. These are
+distinct from the 986 `excluded` (a real catalog `kind` value).
+
+They are not a repeat of the pre-catalog-fix gap. All 112 stopped pricing
+before the warehouse's last day: the latest `max(date)` among them is
+2026-07-19 and most stopped much earlier (2025-01, 2025-07, 2026-02). The
+supported reading is that these are products **delisted upstream** — the
+catalog is a live snapshot of what tcgcsv publishes today, the prices are
+archival, so anything TCGplayer removed keeps its history and loses its
+catalog row. That reading was not proven, only checked for consistency, and
+no fix is proposed: the engine already tags catalog-missing assets kind
+`other` (Plan 10, commit `091b663`), which excludes them from every
+`kind`-filtered strategy and keeps them tradeable for cost-aware-reversion.
+0.35% of the priced universe, no action taken, recorded so it is not
+rediscovered as a surprise.
+
+### Operational notes for the next full re-run
+
+- **The ML walk-forwards must run `--workers 1` on this universe.** The
+  first ml-ranker attempt used the CLI default (`--workers 0` = auto = 8
+  threads here) and was killed after 7.4 hours with the machine thrashing:
+  load average 89 on 8 cores, 97 threads, 24.6 GB of 25.6 GB swap consumed.
+  The same run with `--workers 1` finished in 75 minutes. ml-ranker and
+  ml-ranker-v2 go through the per-bar Python callback bridge and hold the
+  GIL for the entire loop, so fold parallelism buys almost nothing while
+  costing N copies of the per-fold market window — and the window is now 11x
+  larger. Fold-serial and fold-parallel are bit-for-bit identical (the Plan
+  11 acceptance property), so this costs nothing in comparability.
+- **`caffeinate -i` is not enough for runs this long.** A second attempt
+  died silently at 64 minutes with a zero-byte log and no traceback. `-i`
+  blocks *idle* sleep only; use **`caffeinate -dimsu`**. This also
+  retroactively explains the unexplained zero-byte kill recorded in the
+  Catalog completeness section's operational notes, which was wrapped in
+  `caffeinate -i`.
+- **`pkmn walkforward` prints nothing until it completes**, so a redirected
+  run gives no progress signal regardless of `PYTHONUNBUFFERED`. Budget
+  ~4.5 minutes per native-strategy walk-forward and 75-140 minutes per ML
+  walk-forward on this universe, and check liveness with `ps`, not the log.
