@@ -380,7 +380,13 @@ tcgcsv.com). Design spec: `docs/superpowers/specs/2026-06-09-pkmn-quant-design.m
   the two runs returned +291.7% and +191.1%, so ~90% of the 17x headline
   collapse is the sizing rule, not the assets. The dilution reading is
   **falsified**: over the same window the newly-added sealed products
-  returned a median +212.3% vs +170.8% for the pre-existing ones. The
+  returned a median +212.3% vs +170.8% for the pre-existing ones — but note
+  the basis, which is narrower than it sounds: that compares only the 1,133
+  of 2,389 in-window sealed assets that priced across the **whole** window
+  (a survivorship-conditioned sample; the statistic is not a claim about the
+  1,256 assets that started or stopped pricing mid-window). It is the right
+  population for the dilution question specifically, because the benchmark
+  only ever bought day-1-priced assets and held them. The
   near-total losses of dip-buyer and cost-aware-reversion are adversarial
   selection into inverted quotes: 92-97% of their buy-side impact comes from
   fills where `market < low` (the market print sits below the lowest
