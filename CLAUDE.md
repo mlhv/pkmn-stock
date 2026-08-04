@@ -370,22 +370,34 @@ tcgcsv.com). Design spec: `docs/superpowers/specs/2026-06-09-pkmn-quant-design.m
   evaluate` (`20260804T184401Z-cf292c`): joint White's Reality Check
   **p = 1.0000, unchanged**; every deflated Sharpe still far below the 0.5
   coin-flip point (highest 0.254, ml-ranker, whose 95% CI is
-  [−99.58%, +331.57%] — wide, not good). **Both headline movements were
-  traced and neither is what it looks like.** The benchmark's fall is a
-  capital-deployment artifact: `BuyAndHold` equal-weights with integer
-  quantities, day-1 sealed assets went 45 → 1,315, per-asset budget went
-  $222.22 → $7.60, and deployed capital went $6,012.55 (60.1%) → $466.78
-  (4.7%) — the run is 95% cash. The dilution reading is **falsified**: over
-  the same window the newly-added sealed products returned a median +212.3%
-  vs +170.8% for the pre-existing ones. The near-total losses are
-  adversarial selection into inverted quotes: 92-97% of buy-side impact on
-  dip-buyer and cost-aware-reversion comes from fills where `market < low`
-  (the market print sits below the lowest listing), where the impact model's
-  market→mid walk correctly charges a multiple of notional — buy impact
-  reached 194% and 225% of buy notional, $35,533 of frictions on a $10,000
-  account for dip-buyer. Both selectors maximize over exactly the quantity
-  an inverted quote corrupts, and the wide universe supplies 6x more such
-  rows with a 12x fatter tail. **Honest conclusion: nothing beats
+  [−99.58%, +331.57%] — wide, not good). **The benchmark's movement and two
+  of the four wipeouts were traced; the two ML wipeouts were not.** The
+  benchmark's fall is a capital-deployment artifact: `BuyAndHold`
+  equal-weights with integer quantities, day-1 sealed assets went 45 →
+  1,315, per-asset budget went $222.22 → $7.60, and deployed capital went
+  $6,012.55 (60.1%) → $466.78 (4.7%) — the run is 95% cash. **The old bar
+  was not fully deployed either** (37% cash): on the slice actually at risk
+  the two runs returned +291.7% and +191.1%, so ~90% of the 17x headline
+  collapse is the sizing rule, not the assets. The dilution reading is
+  **falsified**: over the same window the newly-added sealed products
+  returned a median +212.3% vs +170.8% for the pre-existing ones. The
+  near-total losses of dip-buyer and cost-aware-reversion are adversarial
+  selection into inverted quotes: 92-97% of their buy-side impact comes from
+  fills where `market < low` (the market print sits below the lowest
+  listing), where the impact model's market→mid walk correctly charges a
+  multiple of notional — buy impact reached 194% and 225% of buy notional,
+  $35,533 of frictions on a $10,000 account for dip-buyer. Both selectors
+  maximize over exactly the quantity an inverted quote corrupts, and the
+  wide universe supplies 6x more such rows with a 12x fatter tail. **Those
+  impact/friction figures come from fixed-parameter diagnostic probes**
+  (fold-1 params over the full window), not from the walk-forward runs whose
+  returns are listed above — they reproduce the loss ordering, not the exact
+  numbers. **ml-ranker (−81.64%) and ml-ranker-v2 (−99.81%) were NOT
+  diagnosed** — no probe was run for them (75-140 min each through the
+  Python bridge), so do not cite a mechanism for those two numbers; see the
+  findings doc's three explicitly-open questions (untraced ML strategies;
+  whether `market < low` is a tcgcsv defect or a real thin print; what a
+  liquidity floor would do). **Honest conclusion: nothing beats
   buy-and-hold sealed — the standing result holds — but the bar is now
   95% cash, so it means much less.** No new strategy result; what shipped is
   a verified data foundation plus two surfaced defects (benchmark sizing,

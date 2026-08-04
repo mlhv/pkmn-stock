@@ -1154,7 +1154,9 @@ correct reading is less reassuring: **"has a price row" is not "is
 liquid"**, and on this data source it is barely evidence of a trade at all.
 tcgcsv publishes a `market` price daily whether or not anything sold; the
 carry-forward mark smoothing that has been caveated in every report in this
-file is now applied to ~7x more products, most of them thin vintage singles.
+file is now applied to 4.75x more products, most of them thin vintage singles
+(the plan predicted "roughly 7x" here; the measurement came in at 4.75x
+products and 11.36x rows — cite the measurement, not the prediction).
 The 4,803 products in the bottom two buckets are the visibly thin tail; the
 22,677 in the top bucket are the invisibly thin body. Every Sharpe and
 Sortino below is inflated by this, worse than before.
@@ -1196,15 +1198,39 @@ account does not:
 | budget per asset ($10,000 account) | $222.22 | $7.60 |
 | assets actually filled | 39 | 79 |
 | **capital deployed** | **$6,012.55 (60.1%)** | **$466.78 (4.7%)** |
+| all-in capital consumed (notional + fees + impact) | $6,296.27 (63.0%) | $550.77 (5.5%) |
 | median fill price | $25.30 | $4.35 |
 | max fill price | $149.99 | $7.54 |
+| final equity | $28,367.25 | $11,052.73 |
+| **headline total return** | **+183.67%** | **+10.53%** |
+| **return on the invested slice** (gain / all-in) | **+291.7%** | **+191.1%** |
 
-The post-swap benchmark sat **95% in cash for the entire 22 months.** Its
-+10.53% headline is a $1,052.73 gain earned on $550.77 of capital actually
-put to work (notional + fees + impact) — **+191% on the invested slice**,
-diluted to +10.53% by cash drag. That is also why its Sharpe reads 6.57 and
-its max drawdown −0.90%: those are the statistics of a portfolio that was
-95% a money-market account, not a risk-adjusted triumph.
+*Provenance:* rows 3-8 are read directly off the two runs' artifacts —
+`data/results/20260729T200904Z-4aeaa9/{fills,equity}.parquet` (pre-swap) and
+`data/results/20260804T061600Z-37a23f/{fills,equity}.parquet` (post-swap).
+Deployed = `sum(price * quantity)` over fills; all-in adds `sum(fees)` and
+`sum(impact)`; gain = last minus first `equity` value; invested-slice return
+= gain / all-in. Row 1 is `select count(*) from (select distinct product_id,
+sub_type from prices join products using(product_id) where kind='sealed' and
+date='2024-03-02')`, run against `data/warehouse-old/` and the live
+warehouse respectively. Row 2 is `10000 / row 1` — the actual `BuyAndHold`
+budget is over `ctx.marks`, which carries forward, so it can exceed the
+count of same-day prints; the $7.54 max fill price sitting just under
+$10,000/1,315 = $7.605 confirms the two agree here.
+
+**Both benchmarks are cash-dragged; they differ in degree, not in kind.** The
+pre-swap run left 37% of the account in cash and the post-swap run left 95%,
+so the like-for-like comparison is the last row: the invested slice returned
+**+291.7% pre-swap versus +191.1% post-swap** ($18,367.25 gain on $6,296.27,
+against $1,052.73 on $550.77). That is a real decline and it is not nothing —
+but it is a factor of 1.5 on the money actually at risk, against a factor of
+17 on the headline. **Roughly 90% of the headline collapse is the sizing rule
+running out of budget, not the assets performing worse.**
+
+The post-swap run's Sharpe of 6.57 and max drawdown of −0.90% should be read
+the same way: those are the statistics of a portfolio that was 95% a
+money-market account, not a risk-adjusted triumph. The pre-swap run's
+statistics carry a weaker version of the same distortion.
 
 **The dilution hypothesis — that the newly-added sealed products are old,
 thin, non-appreciating junk that dragged the average down — is falsified by
@@ -1215,6 +1241,29 @@ of it:
 |---|---:|---:|---:|---:|
 | already in the pre-swap warehouse | 298 | +170.8% | +191.7% | 97.0% |
 | newly added by this plan | 835 | **+212.3%** | +240.9% | 97.6% |
+
+*Provenance, and read the caveat — this table's basis is thinner than its
+n=1,133 suggests.* Source: the live warehouse's `prices` joined to
+`products` on `product_id`, filtered `kind='sealed'` and `date` between
+2024-03-01 and 2026-06-30, grouped by `(product_id, sub_type)`, taking
+`p0 = arg_min(market, date)` and `p1 = arg_max(market, date)` plus
+`d0 = min(date)`, `d1 = max(date)`; return is `p1/p0 - 1`. The bucket split
+is a left join against the set of `distinct product_id` in
+`data/warehouse-old/`'s `prices` table (null = newly added). **The row filter
+is `d0 <= 2024-03-08 and d1 >= 2026-06-23 and p0 > 0`** — a one-week
+tolerance at each end, which is what "priced at both ends" means here. That
+filter is doing a lot of work: **it keeps 1,133 of the 2,389 sealed assets
+priced anywhere in the window** (each sealed product has exactly one
+sub_type here, so assets and products coincide), because anything that
+started or stopped pricing mid-window is excluded. So this is a
+**survivorship-conditioned sample**, and the honest reading is narrower than
+"the new sealed products did better": it is "among sealed products that
+priced across the whole window, the newly added ones did better." That is
+still enough to falsify the dilution hypothesis as stated — which was about
+the added products dragging the *benchmark* down, and the benchmark only
+ever bought day-1-priced assets and held them, so full-window survivors are
+exactly the right population for that question. It is **not** a claim about
+the 1,256 sealed assets the filter drops, and none is made.
 
 The newly-added sealed products appreciated *more* than the ones that were
 already there. The wider sealed universe is not worse. The benchmark's
@@ -1244,6 +1293,38 @@ ordering, not the exact numbers):
 | dip-buyer | −87.8% | $13,002 | $25,243 | **194%** | 92% |
 | xs-momentum | −78.3% | $10,505 | $7,944 | 76% | 93% |
 | sealed-accumulation | −2.6% | $6,419 | $779 | 12% | 38% |
+
+*Provenance — these are not walk-forward artifacts and no run id exists for
+them.* The walk-forward artifact directories contain only
+`stitched_equity.parquet` and `walkforward.json`, no fills, so each row was
+produced by calling `NativeBacktest` directly (no registry record written,
+nothing added under `data/results/`). Configuration, identical across the
+four rows: `PreparedMarket.prepare(warehouse, 2024-03-01, 2026-06-30,
+warmup_days=0)` on the live warehouse; `CostModel(impact_enabled=True)`
+(all other cost parameters at their defaults); `initial_cash=10000.0`; no
+seeded holdings; `NativeStrategySpec(name, params)` with `params` set to
+that strategy's **fold-1** parameters copied from
+`data/results/wf-<strategy>-2024-03-01-2026-06-30/walkforward.json`:
+
+- cost-aware-reversion: `dip_window_days=47`, `dip_threshold=0.15299249746816473`,
+  `min_edge=0.14132806164993655`, `take_profit=1.5974985995449138`, `max_hold_days=180`
+- dip-buyer: `dip_threshold=0.21225580020730261`, `hold_days=89`, `take_profit=1.4799436244482758`
+- xs-momentum: `lookback_days=120`, `top_n=5`, `rebalance_days=51`
+- sealed-accumulation: `min_drawdown=0.39817723481147554`, `take_profit=1.2079283160822953`, `min_age_days=178`
+
+Parameters not listed fall to the C++ factory's defaults
+(`cpp/src/pkmn_engine/strategies/factory.cpp`), which are the same defaults
+the walk-forward uses — optuna only searches each strategy's declared
+`ParamSpec`s, and those are exactly the parameters listed above, so the
+probes differ from the reported runs only in holding one fold's parameters
+fixed across the whole window instead of rolling them. The columns are
+computed from the returned `Result.fills`: buy notional =
+`sum(price * quantity)` over `quantity > 0`; buy-side impact = `sum(impact)`
+over the same rows; the last column is that impact sum restricted to fills
+whose `(day, product_id, sub_type)` row in `prices` has `market < low`,
+divided by the total. **Because one fold's parameters are held fixed for
+22 months, these returns are not the reported results and must not be quoted
+as them** — they exist to establish the mechanism and the ordering.
 
 For dip-buyer, total frictions were **$35,533 on a $10,000 account** — 355%
 of starting capital — against $13,002 of gross buy notional. The market
@@ -1298,6 +1379,18 @@ In-window, on rows where `market < low`:
 |---|---:|---:|---:|---:|---:|
 | pre-swap products | 312,914 | 2,987 | 1.43 | 17.3 | 7,004 |
 | newly added products | 1,878,145 | 12,199 | 1.66 | **39.0** | **85,628** |
+
+*Provenance:* the live warehouse's `prices` table only (no `products` join —
+this is not restricted by `kind`), `date` between 2024-03-01 and 2026-06-30,
+filtered `market < low and market > 0`, grouped by bucket. The bucket split
+is the same left join used for the sealed-returns table above: against the
+set of `distinct product_id` in `data/warehouse-old/`'s `prices` table, null
+meaning newly added. Columns are `count(*)`,
+`count(distinct product_id)`, `median(mid/market)`,
+`quantile_cont(mid/market, 0.99)`, and `sum(mid > 10*market)`. The two rate
+figures in the next paragraph come from the same join and window **without**
+the `market < low` filter: `100.0 * sum(market < low) / count(*)` per bucket,
+over 4,211,405 pre-swap rows and 29,880,919 new rows.
 
 Note what this does and does not say. The *rate* of inverted quotes is
 essentially unchanged (7.43% of pre-swap rows, 6.29% of new rows — the new
@@ -1368,8 +1461,15 @@ active strategies was negative, so the ordering is unchanged and the joint
 Reality Check is still p = 1.0000. What changed is that the benchmark is no
 longer a meaningful bar: it is 95% cash because of an integer-sizing
 artifact, so "nothing beats it" is now a much easier statement to satisfy
-than it was when the bar was a fully-deployed +183.67%. **A larger universe
-is not an improvement by itself**, and this one is not an improvement yet.
+than it was when the bar was +183.67%. Be precise about that comparison
+rather than flattering the old number: **the old bar was not fully deployed
+either** — it left 37% of the account in cash (63.0% all-in deployed) and
+its +183.67% was +291.7% on the slice actually at risk. The new bar is the
+same defect an order of magnitude worse (5.5% deployed, +191.1% invested-
+slice). Neither figure is a clean market return; the old one was merely
+close enough to one that the defect never announced itself. **A larger
+universe is not an improvement by itself**, and this one is not an
+improvement yet.
 What it delivered is:
 
 - **A correct, verified, purely additive data foundation** — 11.36x the
