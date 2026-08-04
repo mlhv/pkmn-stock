@@ -45,7 +45,7 @@ def rebuild(
     stats: list[IngestStats] = []
     try:
         groups = tcgcsv.fetch_groups(client)
-        group_ids = {g.group_id for g in tracked_groups(groups, today=end)}
+        group_ids = {g.group_id for g in tracked_groups(groups)}
         print(f"rebuilding {start}..{end} over {len(group_ids)} sets", file=sys.stderr)
         refresh_products(client, shadow, groups)
 
