@@ -59,14 +59,45 @@ def price_row(market: float) -> dict[str, Any]:
     }
 
 
-def test_tracked_groups_filters_old_sets() -> None:
+def test_tracked_groups_has_no_date_bound() -> None:
+    """Since full-set coverage, prices cover every group, matching the
+    catalog — including groups published in the future. There is no lower
+    OR upper bound: `published_on` is a mutating "last touched" timestamp
+    for promo/catch-all groups, not a reliable publication date, so no bound
+    against it is safe (see `tracked_groups`'s docstring)."""
     groups = [
-        Group(group_id=1, name="new", abbreviation="N", published_on=date(2025, 1, 1)),
-        Group(group_id=2, name="old", abbreviation="O", published_on=date(2020, 1, 1)),
-        Group(group_id=3, name="future", abbreviation="F", published_on=date(2030, 1, 1)),
+        Group(group_id=1, name="Base Set", abbreviation="BS", published_on=date(1999, 1, 9)),
+        Group(group_id=2, name="Recent", abbreviation="R", published_on=date(2025, 2, 20)),
+        Group(group_id=3, name="Unreleased", abbreviation="U", published_on=date(2027, 1, 1)),
     ]
-    tracked = tracked_groups(groups, today=date(2025, 6, 1))
-    assert [g.group_id for g in tracked] == [1]
+    tracked = tracked_groups(groups)
+    assert [g.group_id for g in tracked] == [1, 2, 3]
+
+
+def test_tracked_groups_includes_promo_groups_stamped_today() -> None:
+    """Regression test for the bug that failed Task 4's real-data rebuild.
+
+    tcgcsv's promo/catch-all groups (POP Series, Nintendo Promos, EX Trainer
+    Kits, Burger King Promos, Miscellaneous Cards & Products, and others)
+    report `published_on` as whatever day TCGplayer last re-filed a product
+    into them, not a release date. During a historical backfill that reads
+    as "published in the future" relative to the backfill's own `today`, so
+    the old `published_on <= today` bound silently dropped all 19 such
+    groups for the ENTIRE 907-day rebuild even though their price files were
+    present in the archive every day. This test mimics exactly that: a group
+    whose `published_on` is later than a caller's `today` must still be
+    tracked.
+    """
+    groups = [
+        Group(
+            group_id=24541,
+            name="Miscellaneous Cards & Products",
+            abbreviation="MISC",
+            published_on=date(2026, 8, 3),
+        ),
+    ]
+    tracked = tracked_groups(groups)
+    assert [g.group_id for g in tracked] == [24541]
 
 
 def test_ingest_range_end_to_end(tmp_path: Path) -> None:

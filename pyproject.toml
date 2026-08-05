@@ -56,7 +56,11 @@ select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
 
 [tool.mypy]
 strict = true
-files = ["src"]
+# scripts/ as a whole is NOT typechecked (render_readme_chart, bench_engines
+# and bench_walkforward have pre-existing errors). These two are pinned
+# individually because they are documented operator tooling — the warehouse
+# rebuild and the swap gate — not throwaway benchmarks.
+files = ["src", "scripts/rebuild_warehouse.py", "scripts/verify_rebuild.py"]
 
 [[tool.mypy.overrides]]
 module = "sklearn.*"

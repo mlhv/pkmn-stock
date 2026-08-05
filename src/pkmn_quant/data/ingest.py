@@ -9,7 +9,7 @@ from datetime import date, timedelta
 import httpx
 import polars as pl
 
-from pkmn_quant.config import MIN_SET_RELEASE, Paths
+from pkmn_quant.config import Paths
 from pkmn_quant.data import tcgcsv
 from pkmn_quant.data.quality import apply_quality_gates
 from pkmn_quant.data.tcgcsv import Group
@@ -54,9 +54,20 @@ class IngestReport:
     catalog_failures: tuple[int, ...]
 
 
-def tracked_groups(groups: list[Group], today: date) -> list[Group]:
-    """The tradeable universe: sets released between MIN_SET_RELEASE and today."""
-    return [g for g in groups if MIN_SET_RELEASE <= g.published_on <= today]
+def tracked_groups(groups: list[Group]) -> list[Group]:
+    """Every tcgcsv group: prices now cover the same universe the catalog does.
+
+    There is deliberately no date bound in either direction. The old
+    MIN_SET_RELEASE lower bound went with full-set coverage (spec
+    2026-08-03). The upper bound (`published_on <= today`) went too, because
+    `published_on` is not a reliable publication date: for promo and
+    catch-all groups TCGplayer keeps re-filing products into, it is a
+    mutating "last touched" timestamp that reads as *today*, so any bound
+    against it drops those groups from a historical backfill while letting
+    them through a same-day ingest. A group with no price file in a given
+    day's archive simply contributes nothing, so no bound is needed.
+    """
+    return list(groups)
 
 
 def refresh_products(
@@ -167,9 +178,11 @@ def ingest_range(
     catalog_failures: tuple[int, ...] = ()
     try:
         groups = tcgcsv.fetch_groups(client)
-        # Prices come from tracked sets only (MIN_SET_RELEASE); NAMES come from
-        # every set, because TCGplayer re-files products across groups.
-        tracked = tracked_groups(groups, today=end)
+        # Prices and names now cover the same groups (full-set coverage,
+        # spec 2026-08-03) with no date bound in either direction (see
+        # tracked_groups); tracked is every group, same as the catalog fetch
+        # below.
+        tracked = tracked_groups(groups)
         group_ids = {g.group_id for g in tracked}
         print(f"fetching product catalog ({len(groups)} sets)...", file=sys.stderr)
         catalog = refresh_products(client, warehouse, groups)
