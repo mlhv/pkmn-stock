@@ -62,14 +62,17 @@ def plan_paper_fills(
             fees = round(qty * mark * costs.fee_rate + costs.shipping_per_line, 2)
             cash_remaining += qty * mark * (1 - costs.fee_rate) - costs.shipping_per_line - impact
         else:  # BUY
-            # Mirror executor _fill_buy: clip to liquidity cap, then to
-            # what cash_remaining can afford after shipping is reserved.
-            affordable = math.floor((cash_remaining - costs.shipping_per_line) / mark)
+            # Mirror executor _fill_buy: clip to liquidity cap, then to what
+            # cash_remaining can afford after shipping is reserved. Sizing runs
+            # off the executable-price floor, not the print — a buy cannot fill
+            # below the cheapest current listing (see CostModel.buy_impact).
+            base = mark if rec.low is None else max(mark, rec.low)
+            affordable = math.floor((cash_remaining - costs.shipping_per_line) / base)
             qty = min(rec.quantity, cap, max(affordable, 0))
-            impact = costs.buy_impact(mark, rec.mid, qty)
+            impact = costs.buy_impact(mark, rec.mid, rec.low, qty)
             while qty > 0 and qty * mark + costs.shipping_per_line + impact > cash_remaining:
                 qty -= 1
-                impact = costs.buy_impact(mark, rec.mid, qty)
+                impact = costs.buy_impact(mark, rec.mid, rec.low, qty)
             if qty <= 0:
                 continue
             fees = costs.shipping_per_line

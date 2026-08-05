@@ -60,6 +60,33 @@ def seed_impact(root: Path) -> None:
     )
 
 
+def seed_floor(root: Path) -> None:
+    """Like seed_impact(), but the LISTINGS sit above the sales print.
+
+    tcgcsv's `market` comes from recent completed sales while low/mid/high
+    describe current listings, so market < low is ordinary. price_row
+    hardcodes low=1.0, which is below every market in this module — no
+    fixture here would otherwise reach the executable-price floor.
+    """
+    w = Warehouse(Paths(root=root))
+    for day, market in ((D1, 10.0), (D2, 12.0), (D3, 15.0)):
+        r = row(day, 1, market)
+        r["low"], r["mid"], r["high"] = 20.0, 24.0, 30.0
+        w.write_prices(day, pl.DataFrame([r], schema=PRICE_SCHEMA))
+    w.write_products(
+        pl.DataFrame(
+            {
+                "product_id": [1],
+                "group_id": [1],
+                "name": ["Box"],
+                "rarity": [None],
+                "kind": ["sealed"],
+                "released_on": [D1],
+            }
+        )
+    )
+
+
 def run_cli(root: Path, *extra: str) -> object:
     return CliRunner().invoke(
         app,
@@ -149,6 +176,48 @@ def test_backtest_golden_numbers_with_impact(tmp_path: Path) -> None:
     assert f["price"] == pytest.approx(12.0)
     assert f["fees"] == pytest.approx(1.0)
     assert f["impact"] == pytest.approx(12.25)
+
+
+def test_backtest_golden_numbers_with_price_floor(tmp_path: Path) -> None:
+    """Golden regression for the executable-price floor (2026-08).
+
+    `market` is derived from recent completed SALES, low/mid/high from
+    current LISTINGS, so market < low is ordinary rather than corrupt. A buy
+    cannot lift an offer that does not exist, so it prices at
+    max(market, low) and walks to mid from there; the shortfall is charged
+    as impact, leaving Fill.price on the observable print.
+
+    Hand-verified arithmetic (CostModel defaults + impact_enabled; fixture
+    low 20.0, mid 24.0 on every day; $12 print -> liquidity cap Q=8):
+      D1: BuyAndHold's one-asset universe, target 100/1 = 100 ->
+          floor(100/10) = 10 units ordered, $0 left so the deficit sweep is a
+          no-op. T+1, so no fill yet. Equity = 100 (all cash).
+      D2: print 12.0, low 20.0 -> base = max(12, 20) = 20.
+          Clips: order 10, cap 8, cash floor((100-1)/20) = 4 -> qty 4.
+          Premium = (20 - 12) * 4 = 32. Walk spread = mid 24 - base 20 = 4
+          -> 4 * 4 * (0 + 4) / (2 * 8) = 4.0. Impact = 36.0.
+          Cost = 4*12 + 1 + 36 = 85 <= 100 -> fill 4 @ print 12, fees 1.
+          Cash = 15. Equity = 15 + 4*12 = 63.
+          (Sanity: cash out per unit is 12 + 8 = 20 = the lowest listing,
+          which is the whole point. Without the floor this same day fills 7
+          @ 12 for impact 4*7*7/16 = 12.25 -- 7 units bought below any offer
+          that actually existed.)
+      D3: BuyAndHold has already entered -> no orders. Equity = 15 + 4*15 = 75.
+    """
+    seed_floor(tmp_path)
+    result = run_cli(tmp_path)
+    assert result.exit_code == 0, result.output
+    out_dir = tmp_path / "data" / "results"
+    run_dir = next(iter(out_dir.iterdir()))
+    equity = pl.read_parquet(run_dir / "equity.parquet")["equity"].to_list()
+    assert equity == pytest.approx([100.0, 63.0, 75.0])
+    fills = pl.read_parquet(run_dir / "fills.parquet")
+    assert fills.height == 1
+    f = fills.row(0, named=True)
+    assert f["quantity"] == 4
+    assert f["price"] == pytest.approx(12.0)  # the print, never the floor
+    assert f["fees"] == pytest.approx(1.0)
+    assert f["impact"] == pytest.approx(36.0)
 
 
 def test_backtest_bad_dates_clean_error(tmp_path: Path) -> None:

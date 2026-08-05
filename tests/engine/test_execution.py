@@ -161,6 +161,52 @@ def test_split_orders_pay_same_impact_as_one() -> None:
     assert pf2.cash == pytest.approx(pf1.cash - 1.0)
 
 
+def test_buy_below_the_lowest_listing_pays_the_floor_premium() -> None:
+    """market (recent SALES) below low (cheapest current LISTING) must not
+    let the executor buy at the sales price: there is no such offer.
+
+    Hand-derivation: market 10.0 -> Q=8; low 25.0, mid 25.0, qty 2.
+    base = max(10, 25) = 25; premium = (25-10)*2 = 30; walk spread
+    mid-base = 0 -> impact 30.0. Print stays 10.0 (Fill.price is always the
+    observable print), so total cash out is 2*10 + 1 shipping + 30 = 51 —
+    i.e. 2 units at the $25 lowest listing plus shipping, exactly.
+    """
+    pf = Portfolio(cash=1000.0)
+    fills = IMPACT_SIM.execute(
+        [Order(asset=A, quantity=2)],
+        {A: 10.0},
+        pf,
+        DAY,
+        quotes={A: Quote(mid=25.0, low=25.0)},
+    )
+    assert len(fills) == 1
+    assert fills[0].price == pytest.approx(10.0)  # print unchanged
+    assert fills[0].impact == pytest.approx(30.0)
+    assert pf.cash == pytest.approx(1000.0 - (2 * 25.0 + 1.0))
+
+
+def test_buy_floor_binds_the_affordable_quantity() -> None:
+    """Cash must buy what the LISTINGS cost, not what the sales print says.
+
+    market 1.0 -> Q=20 (tier <5); low 10.0, mid 10.0; cash 26.0.
+    At the sales print $1 the naive clip would be floor(25/1)=20 units; at
+    the $10 floor only floor(25/10)=2 fit. Each unit costs 1 (print) + 9
+    (premium) = 10, so 2 units cost 2*1 + 1 + 18 = 21 <= 26 and 3 would
+    cost 3*1 + 1 + 27 = 31 > 26. Expect quantity 2, impact 18.0.
+    """
+    pf = Portfolio(cash=26.0)
+    fills = IMPACT_SIM.execute(
+        [Order(asset=A, quantity=20)],
+        {A: 1.0},
+        pf,
+        DAY,
+        quotes={A: Quote(mid=10.0, low=10.0)},
+    )
+    assert fills[0].quantity == 2
+    assert fills[0].impact == pytest.approx(18.0)
+    assert pf.cash == pytest.approx(26.0 - 21.0)
+
+
 def test_sell_fill_carries_impact() -> None:
     pf = Portfolio(cash=0.0)
     pf.apply(Fill(day=date(2025, 6, 1), asset=A, quantity=8, price=20.0, fees=0.0))

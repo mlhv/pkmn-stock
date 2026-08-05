@@ -8,28 +8,34 @@ namespace pkmn {
 
 namespace {
 
-// execution.py:74-104
+// execution.py:74-111
 std::optional<Fill> fill_buy(const Order& order, double market, const Portfolio& pf, Day day,
                              std::int64_t cap_left, std::int64_t used, const MarketView& mkt,
                              const CostModel& cm) {
-    std::int64_t qty = std::min(order.quantity, cap_left);
-    // afford: qty * market + shipping_per_line + impact(qty) <= cash
-    auto affordable =
-        static_cast<std::int64_t>(std::floor((pf.cash - cm.shipping_per_line) / market));
-    qty = std::min(qty, std::max<std::int64_t>(affordable, 0));
     double mid = mkt.mid(order.asset);  // NaN when the asset has no quote today
-    double impact = cm.buy_impact(market, mid, qty, used);
+    double low = mkt.low(order.asset);  // NaN when the asset has no quote today
+    // A buy cannot execute below the cheapest current listing; `market` is
+    // sales-derived and can sit under it (see CostModel::buy_impact).
+    double base = std::isnan(low) ? market : std::max(market, low);
+    std::int64_t qty = std::min(order.quantity, cap_left);
+    // afford: qty * base + shipping_per_line + walk-impact(qty) <= cash.
+    // Estimating off `base` only changes how many times the decrement loop
+    // below runs, never where it stops.
+    auto affordable =
+        static_cast<std::int64_t>(std::floor((pf.cash - cm.shipping_per_line) / base));
+    qty = std::min(qty, std::max<std::int64_t>(affordable, 0));
+    double impact = cm.buy_impact(market, mid, low, qty, used);
     double cost = static_cast<double>(qty) * market + cm.shipping_per_line + impact;
     while (qty > 0 && cost > pf.cash) {
         --qty;
-        impact = cm.buy_impact(market, mid, qty, used);
+        impact = cm.buy_impact(market, mid, low, qty, used);
         cost = static_cast<double>(qty) * market + cm.shipping_per_line + impact;
     }
     if (qty <= 0) return std::nullopt;
     return Fill{day, order.asset, qty, market, cm.shipping_per_line, impact};
 }
 
-// execution.py:106-132
+// execution.py:113-139
 std::optional<Fill> fill_sell(const Order& order, double market, const Portfolio& pf, Day day,
                               std::int64_t cap_left, std::int64_t used, const MarketView& mkt,
                               const CostModel& cm) {

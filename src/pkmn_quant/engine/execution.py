@@ -81,16 +81,23 @@ class ExecutionSimulator:
         used: int,
         quote: Quote | None,
     ) -> Fill | None:
-        qty = min(order.quantity, cap_left)
-        # afford: qty * market + shipping_per_line + impact(qty) <= cash
-        affordable = math.floor((portfolio.cash - self.cost_model.shipping_per_line) / market)
-        qty = min(qty, max(affordable, 0))
         mid = quote.mid if quote is not None else None
-        impact = self.cost_model.buy_impact(market, mid, qty, used)
+        low = quote.low if quote is not None else None
+        # A buy cannot execute below the cheapest current listing; `market` is
+        # sales-derived and can sit under it (see CostModel.buy_impact).
+        base = market if low is None else max(market, low)
+        qty = min(order.quantity, cap_left)
+        # afford: qty * base + shipping_per_line + walk-impact(qty) <= cash.
+        # Estimating off `base` only changes how many times the decrement loop
+        # below runs, never where it stops — but off `market` that loop can run
+        # hundreds of iterations when low >> market.
+        affordable = math.floor((portfolio.cash - self.cost_model.shipping_per_line) / base)
+        qty = min(qty, max(affordable, 0))
+        impact = self.cost_model.buy_impact(market, mid, low, qty, used)
         cost = qty * market + self.cost_model.shipping_per_line + impact
         while qty > 0 and cost > portfolio.cash:
             qty -= 1
-            impact = self.cost_model.buy_impact(market, mid, qty, used)
+            impact = self.cost_model.buy_impact(market, mid, low, qty, used)
             cost = qty * market + self.cost_model.shipping_per_line + impact
         if qty <= 0:
             return None

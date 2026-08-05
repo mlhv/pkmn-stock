@@ -134,6 +134,54 @@ def seed_rich_with_uncataloged(root: Path, n_days: int = 40) -> None:
     # seed_rich(), not rewritten here.
 
 
+# tcgcsv derives `market` from recent completed SALES but low/mid/high from
+# current LISTINGS, so market < low is ordinary (2.19M in-window warehouse rows
+# are in that state). Buys then floor at max(market, low). Every other fixture
+# here has low = 0.9 * market, so without this one the floor branch is never
+# executed and parity over it would pass vacuously.
+def seed_inverted_quote(root: Path, n_days: int = 40) -> None:
+    """seed_rich()'s price path, but the listings sit far ABOVE the sales print.
+
+    low = 3x market makes the floor premium (2 * market per unit) exceed the
+    print itself, which is what the non-vacuity guard in the tests below keys
+    on; mid = 3.5x leaves a real walk above the floor as well.
+    """
+    w = Warehouse(Paths(root=root))
+    for i in range(n_days):
+        day = START + timedelta(days=i)
+        if i % 9 == 4:  # market-wide gap day
+            continue
+        rows = []
+        for (pid, st), base in BASES.items():
+            if (pid * 3 + i) % 11 == 0:  # per-asset missing prints
+                continue
+            market = round(base * _path(i + pid), 2)
+            rows.append(
+                {
+                    "date": day,
+                    "product_id": pid,
+                    "sub_type": st,
+                    "low": round(market * 3.0, 2),
+                    "mid": round(market * 3.5, 2),
+                    "high": round(market * 4.0, 2),
+                    "market": market,
+                }
+            )
+        w.write_prices(day, pl.DataFrame(rows, schema=PRICE_SCHEMA))
+    w.write_products(PRODUCTS)
+
+
+def assert_floor_actually_fired(res: Result) -> None:
+    """Guard against a vacuous inverted-quote run.
+
+    On seed_inverted_quote the premium alone is (3*market - market) * qty =
+    2 * market * qty, so any buy whose impact exceeds qty * price can only
+    have gone through the floor branch; the pure walk-the-spread term is
+    bounded by half the (mid - base) spread per unit, which is 0.25 * market.
+    """
+    assert any(f.quantity > 0 and f.impact > f.quantity * f.price for f in res.fills)
+
+
 def assert_results_equal(py: Result, cpp: Result) -> None:
     assert py.equity_curve["date"].to_list() == cpp.equity_curve["date"].to_list()
     assert py.equity_curve["equity"].to_list() == cpp.equity_curve["equity"].to_list()
@@ -583,6 +631,81 @@ def test_cost_aware_reversion_parity(tmp_path: Path, impact: bool) -> None:
         initial_cash=1000.0,
     ).run()
     assert len(py.fills) > 0
+    assert_results_equal(py, cpp)
+
+
+def test_buy_and_hold_parity_when_market_prints_below_the_lowest_listing(
+    tmp_path: Path,
+) -> None:
+    """The executable-price floor must be bit-identical on both engines.
+
+    Python represents a missing quote as None and C++ as NaN, and the two
+    floors are written as `market if low is None else max(market, low)` and
+    `std::isnan(low) ? market : std::max(market, low)`. Only a fixture with
+    low > market executes either branch's max().
+    """
+    seed_inverted_quote(tmp_path)
+    wh = Warehouse(Paths(root=tmp_path))
+    cm = CostModel(impact_enabled=True)
+    end = START + timedelta(days=39)
+    py = Backtest(
+        warehouse=wh,
+        strategy=BuyAndHold(kind="sealed"),
+        cost_model=cm,
+        start=START,
+        end=end,
+        initial_cash=1000.0,
+    ).run()
+    cpp = NativeBacktest(
+        warehouse=wh,
+        strategy=NativeStrategySpec("buy-and-hold", {}, kind="sealed"),
+        cost_model=cm,
+        start=START,
+        end=end,
+        initial_cash=1000.0,
+    ).run()
+    assert len(py.fills) > 0
+    assert_floor_actually_fired(py)
+    assert_results_equal(py, cpp)
+
+
+def test_dip_buyer_parity_when_market_prints_below_the_lowest_listing(tmp_path: Path) -> None:
+    """Same fixture, but a strategy that both enters AND exits: proves the
+    sell side stayed on the unfloored path while the buy side moved.
+    """
+    from pkmn_quant.strategies.dip_buyer import DipBuyer
+
+    seed_inverted_quote(tmp_path)
+    wh = Warehouse(Paths(root=tmp_path))
+    cm = CostModel(impact_enabled=True)
+    end = START + timedelta(days=39)
+    params = {
+        "dip_window_days": 5,
+        "dip_threshold": 0.10,
+        "hold_days": 7,
+        "take_profit": 1.05,
+        "max_positions": 5,
+        "budget_frac": 0.4,
+        "min_price": 3.0,
+    }
+    py = Backtest(
+        warehouse=wh,
+        strategy=DipBuyer(**params),  # type: ignore[arg-type]
+        cost_model=cm,
+        start=START,
+        end=end,
+        initial_cash=1000.0,
+    ).run()
+    cpp = NativeBacktest(
+        warehouse=wh,
+        strategy=NativeStrategySpec("dip-buyer", {k: float(v) for k, v in params.items()}),
+        cost_model=cm,
+        start=START,
+        end=end,
+        initial_cash=1000.0,
+    ).run()
+    assert any(f.quantity < 0 for f in py.fills)  # exits happen too
+    assert_floor_actually_fired(py)
     assert_results_equal(py, cpp)
 
 

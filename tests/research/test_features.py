@@ -280,7 +280,15 @@ def test_cost_frac_expr_matches_scalar_cost_model() -> None:
     """The vectorized label cost must equal the scalar CostModel arithmetic:
     cost = (buy_price + buy_impact) - (sell_proceeds - sell_impact), as a
     fraction of market, for one unit. Swept across tier edges and quote
-    shapes (present / missing / crossed)."""
+    shapes (present / missing / crossed).
+
+    The scalar side passes low=None to buy_impact deliberately: cost_frac_expr
+    models the walk-the-spread component only, NOT the executable-price floor
+    (buy at max(market, low)) added to the executor in 2026-08. Passing the
+    real low here would fail on the crossed case, which is exactly the shape
+    the floor charges for. Known and deliberate gap: closing it would move
+    ml-ranker-v2's net-of-cost training labels, which is a research change,
+    not a cost-model change."""
     from pkmn_quant.engine.costs import CostModel
     from pkmn_quant.research.features import cost_frac_expr
 
@@ -297,7 +305,7 @@ def test_cost_frac_expr_matches_scalar_cost_model() -> None:
     for row in frame.iter_rows(named=True):
         m, mid, low = row["market"], row["mid"], row["low"]
         scalar = (
-            (cm.buy_price(m) + cm.buy_impact(m, mid, 1))
+            (cm.buy_price(m) + cm.buy_impact(m, mid, None, 1))
             - (cm.sell_proceeds(m) - cm.sell_impact(m, low, 1))
         ) / m
         assert abs(row["frac"] - scalar) < 1e-12, (m, mid, low)

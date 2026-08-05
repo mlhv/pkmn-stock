@@ -60,16 +60,37 @@ class CostModel:
                 return qty
         return self.fallback_max_qty
 
-    def buy_impact(self, market: float, mid: float | None, qty: int, used: int = 0) -> float:
+    def buy_impact(
+        self, market: float, mid: float | None, low: float | None, qty: int, used: int = 0
+    ) -> float:
         """Total $ impact for buying qty units after `used` already filled today.
 
-        Marginal price ramps linearly from market (front of the book) to mid
-        (median listing) at the daily cap Q; units used+1..used+qty cost
-        spread * qty * (2*used + qty) / (2Q) extra in total. Zero when
-        disabled, when mid is missing, or when the quote is crossed — never
-        negative, never invented from missing data.
+        tcgcsv's `market` is derived from recent completed SALES while `low`
+        is the cheapest current LISTING, so `market < low` is ordinary rather
+        than corrupt — it means recent sales cleared below today's cheapest
+        offer. A buy cannot execute below that offer, so the fill starts at
+        max(market, low) and the shortfall is charged as impact; the walk to
+        `mid` then starts from there.
+
+        Marginal price then ramps linearly from that base to mid (median
+        listing) at the daily cap Q; units used+1..used+qty cost
+        spread * qty * (2*used + qty) / (2Q) extra in total. That walk term
+        alone is zero when mid is missing or the quote is crossed — but the
+        floor premium is still charged in those cases, because a missing mid
+        says nothing about whether the cheapest listing was reachable. The
+        whole result is zero when impact is disabled. Never negative, never
+        invented from missing data: a missing `low` means no floor, not a
+        guessed one.
+
+        Sells are deliberately NOT symmetric: tcgcsv publishes no bid series
+        (low/mid/high are all ask-side), so there is nothing to floor a sell
+        against without inventing a price. See sell_impact.
         """
-        return self._impact(market, mid, market, qty, used)
+        if not self.impact_enabled or qty <= 0:
+            return 0.0
+        base = market if low is None else max(market, low)
+        premium = (base - market) * qty
+        return premium + self._impact(market, mid, base, qty, used)
 
     def sell_impact(self, market: float, low: float | None, qty: int, used: int = 0) -> float:
         """Total $ impact for selling: undercut from market toward low."""

@@ -3,6 +3,7 @@
 // Port of engine/costs.py. Every arithmetic expression mirrors the Python
 // operation order exactly (bit-for-bit parity contract).
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <utility>
@@ -28,18 +29,26 @@ struct CostModel {
         return fallback_max_qty;
     }
 
-    // costs.py:63-72 — mid NaN = Python None (missing).
-    double buy_impact(double market, double mid, std::int64_t qty, std::int64_t used) const {
-        return impact_(market, mid, market, qty, used);
+    // costs.py:63-93 — mid/low NaN = Python None (missing). `market` is
+    // sales-derived and `low` is the cheapest current listing, so market < low
+    // is ordinary: the fill starts at max(market, low) and the shortfall is
+    // charged as impact, with the walk to `mid` starting from there.
+    double buy_impact(double market, double mid, double low, std::int64_t qty,
+                      std::int64_t used) const {
+        if (!impact_enabled || qty <= 0) return 0.0;
+        double base = std::isnan(low) ? market : std::max(market, low);
+        double premium = (base - market) * static_cast<double>(qty);
+        return premium + impact_(market, mid, base, qty, used);
     }
 
-    // costs.py:74-76
+    // costs.py:95-97. Deliberately NOT symmetric with buy_impact: tcgcsv
+    // publishes no bid series to floor a sell against.
     double sell_impact(double market, double low, std::int64_t qty, std::int64_t used) const {
         return impact_(market, market, low, qty, used);
     }
 
   private:
-    // costs.py:78-87. Python: spread * qty * (2 * used + qty) / (2 * q_cap)
+    // costs.py:99-108. Python: spread * qty * (2 * used + qty) / (2 * q_cap)
     // — evaluated left-to-right; (2*used + qty) and (2*q_cap) are exact
     // int-to-double conversions at these magnitudes.
     double impact_(double market, double upper, double lower, std::int64_t qty,
