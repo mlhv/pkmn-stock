@@ -55,7 +55,10 @@ std::vector<Order> BuyAndHold::on_bar(const Context& ctx) {
         if (a.spread != b.spread) return a.spread < b.spread;
         return a.asset < b.asset;
     });
-    // n_assets_ is validated >= 1 upstream (research/backtest_run.py, factory.cpp).
+    // n_assets_ <= 0 means "hold nothing"; buy_and_hold.py guards identically
+    // (its list slice would otherwise read a negative n_assets as "all but the
+    // last N"). resolve_params pins [1, 10000], so only a direct constructor
+    // call gets here.
     if (universe.empty() || n_assets_ <= 0) return {};
     if (static_cast<std::int64_t>(universe.size()) > n_assets_)
         universe.resize(static_cast<std::size_t>(n_assets_));

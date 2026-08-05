@@ -232,6 +232,64 @@ def test_buy_and_hold_parity_screened_universe(tmp_path: Path, kind: str, n_asse
     assert_results_equal(py, cpp)
 
 
+@pytest.mark.parametrize("n_assets", [0, -1])
+def test_buy_and_hold_parity_non_positive_n_assets(tmp_path: Path, n_assets: int) -> None:
+    """n_assets <= 0 must mean "no orders" on BOTH engines.
+
+    Python's slice is the hazard: `candidates[:-1]` keeps all but the last
+    screened asset and trades them, where C++ returns none. Unreachable
+    through resolve_params (range [1, 10000]), but both constructors are
+    public, so the agreement is pinned here rather than left to the comment.
+    """
+    seed_rich(tmp_path)
+    wh = Warehouse(Paths(root=tmp_path))
+    cm = CostModel(impact_enabled=True)
+    end = START + timedelta(days=39)
+    py = Backtest(
+        warehouse=wh,
+        strategy=BuyAndHold(kind="sealed", n_assets=n_assets),
+        cost_model=cm,
+        start=START,
+        end=end,
+        initial_cash=1000.0,
+    ).run()
+    cpp = NativeBacktest(
+        warehouse=wh,
+        strategy=NativeStrategySpec("buy-and-hold", {"n_assets": float(n_assets)}, kind="sealed"),
+        cost_model=cm,
+        start=START,
+        end=end,
+        initial_cash=1000.0,
+    ).run()
+    assert py.fills == []
+    assert cpp.fills == []
+    assert_results_equal(py, cpp)
+
+
+def test_native_rejects_duplicate_asset_day_rows(tmp_path: Path) -> None:
+    """A duplicated (product_id, sub_type, date) row must fail loudly.
+
+    The C++ screen counts ROWS at or before today; research/screen.py counts
+    DISTINCT DATES. They agree only under uniqueness, so a duplicate would
+    silently change which assets the benchmark buys on the native engine
+    only. MarketView's constructor rejects it instead.
+    """
+    seed_rich(tmp_path, n_days=5)
+    wh = Warehouse(Paths(root=tmp_path))
+    day = START + timedelta(days=1)
+    existing = wh.load_day(day)
+    wh.write_prices(day, pl.concat([existing, existing.head(1)]))  # one row twice
+    with pytest.raises(ValueError, match="duplicate"):
+        NativeBacktest(
+            warehouse=wh,
+            strategy=NativeStrategySpec("buy-and-hold", {}, kind="sealed"),
+            cost_model=CostModel(),
+            start=START,
+            end=START + timedelta(days=4),
+            initial_cash=1000.0,
+        ).run()
+
+
 # Four sealed products for the stale-quote regression below. Product 1 has no
 # print on the entry bar but a very tight quote on the bar before; the other
 # three print on the entry bar with a wide quote. Every asset has exactly two

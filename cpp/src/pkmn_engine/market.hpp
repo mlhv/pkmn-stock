@@ -75,7 +75,9 @@ class MarketView {
     std::optional<double> max_in_window(AssetId a, Day from, Day to) const;
 
     // Count of distinct printed days for `a` at or before `d`. Mirrors
-    // research/screen.py's n_prints. Anti-look-ahead: callers pass d <= today.
+    // research/screen.py's n_prints (which counts distinct dates — the
+    // constructor enforces one row per (asset, day) so the two agree).
+    // Anti-look-ahead: callers pass d <= today.
     std::int64_t print_count_at_or_before(AssetId a, Day d) const;
 
     // mid/low of the most recent print at or before `d`; both NaN when there

@@ -41,6 +41,14 @@ class BuyAndHold(Strategy):
 
     def _universe(self, ctx: Context) -> list[tuple[Asset, float]]:
         """The screened, best-first slice of the `kind` universe."""
+        if self.n_assets <= 0:
+            # "Hold nothing", matching the C++ guard in buy_and_hold.cpp.
+            # Without this, `candidates[: self.n_assets]` reads a negative
+            # n_assets as Python's "all but the last N" and silently trades
+            # the rest, while C++ returns no orders — a divergence no
+            # production path reaches (resolve_params pins [1, 10000]) but
+            # both public constructors do.
+            return []
         wanted_ids = set(ctx.products.filter(pl.col("kind") == self.kind)["product_id"].to_list())
         # Rank every eligible mark. An asset with no history is not dropped —
         # it ranks last (0 prints, infinite spread) and stays buyable.

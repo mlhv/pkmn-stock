@@ -72,6 +72,18 @@ MarketView::MarketView(std::size_t n_assets, std::vector<Day> trading_days,
     for (std::size_t a = 0; a < n_assets_; ++a) {
         double running = -std::numeric_limits<double>::infinity();
         for (std::size_t i = h_off_[a]; i < h_off_[a + 1]; ++i) {
+            // (asset, day) must be unique. The whole view assumes it and
+            // fails DIFFERENTLY in each place if it does not hold:
+            // print_count_at_or_before counts rows where screen.py counts
+            // distinct dates (a benchmark that buys different assets in each
+            // engine), quote_at_or_before/load_day keep one row and drop the
+            // other, and the marks compaction upstream drops repeats. One
+            // loud throw here beats several quiet divergences there. The
+            // slice is day-sorted, so adjacent equality proves it, and this
+            // rides the pass that already builds h_prefmax_ — no extra pass,
+            // no extra memory.
+            if (i > h_off_[a] && h_day_[i] == h_day_[i - 1])
+                throw std::invalid_argument("duplicate (asset, day) in price rows");
             running = std::max(running, h_price_[i]);
             h_prefmax_[i] = running;
         }
@@ -135,8 +147,9 @@ std::optional<double> MarketView::peak_until(AssetId a, Day d) const {
 }
 
 std::int64_t MarketView::print_count_at_or_before(AssetId a, Day d) const {
-    // One row per (asset, day) upstream, so the row count IS the distinct-day
-    // count that screen.py's n_unique("date") computes.
+    // One row per (asset, day) — ENFORCED by the constructor above, not
+    // assumed — so the row count IS the distinct-day count that screen.py's
+    // n_unique("date") computes.
     auto [b, e] = range_(a);
     auto begin = h_day_.begin() + static_cast<std::ptrdiff_t>(b);
     auto it = std::upper_bound(begin, h_day_.begin() + static_cast<std::ptrdiff_t>(e), d);

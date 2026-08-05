@@ -108,3 +108,17 @@ TEST_CASE("constructor validates sortedness and asset range") {
     std::vector<PriceRow> bad_asset{{100, 5, 1.0, kNaN, kNaN}};
     CHECK_THROWS_AS(MarketView(1, ok, bad_asset, {}), std::invalid_argument);
 }
+
+TEST_CASE("constructor rejects a duplicated (asset, day) price row") {
+    // print_count_at_or_before counts ROWS where research/screen.py counts
+    // DISTINCT DATES: one duplicate would make the two engines disagree on
+    // the screen's PRIMARY sort key, changing which assets the benchmark
+    // buys. Uniqueness is the invariant, so it is checked, not assumed.
+    std::vector<Day> ok{100, 101};
+    std::vector<PriceRow> dupe{{100, 0, 1.0, kNaN, kNaN}, {100, 0, 2.0, kNaN, kNaN}};
+    CHECK_THROWS_AS(MarketView(1, ok, dupe, {}), std::invalid_argument);
+    // Same day, DIFFERENT assets is legal; same asset, different days too.
+    std::vector<PriceRow> fine{
+        {100, 0, 1.0, kNaN, kNaN}, {100, 1, 2.0, kNaN, kNaN}, {101, 0, 3.0, kNaN, kNaN}};
+    CHECK_NOTHROW(MarketView(2, ok, fine, {}));
+}

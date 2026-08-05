@@ -155,6 +155,20 @@ def test_buy_and_hold_sweep_is_deterministic_under_ties() -> None:
     assert runs[0] == [(1, 17), (2, 16)]
 
 
+def test_non_positive_n_assets_buys_nothing() -> None:
+    """n_assets <= 0 means "hold nothing", matching the C++ guard.
+
+    A bare `candidates[: self.n_assets]` reads -1 as Python's "all but the
+    last", which would quietly trade 4 of the 5 assets here while the native
+    engine traded none.
+    """
+    for n in (0, -1):
+        orders = BuyAndHold(kind="sealed", n_assets=n).on_bar(
+            _bh_ctx(n_products=5, cash=1000.0, price=10.0)
+        )
+        assert orders == [], f"n_assets={n}"
+
+
 def test_screen_keeps_assets_with_no_history() -> None:
     """An asset marked but absent from history must stay buyable.
 
