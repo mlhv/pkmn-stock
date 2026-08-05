@@ -344,11 +344,11 @@ tcgcsv.com). Design spec: `docs/superpowers/specs/2026-06-09-pkmn-quant-design.m
   it is scheduled as a first real-data exercise of this code. Note the fix
   only starts protecting the 09:00 job once it is committed and installed —
   until then every unattended run is another coin flip.
-- Full set coverage complete on feat/full-set-coverage (520 passed +
+- Full set coverage complete on feat/full-set-coverage (523 passed +
   1 skipped Python via a bare `uv run pytest` after `uv sync --group api`;
   the skip is `tests/test_dashboard.py`, which needs `streamlit` — run
   `uv run --group dashboard pytest tests/test_dashboard.py` separately for
-  it, 5 passed, i.e. 525 with the dashboard group installed; 26 web tests
+  it, 5 passed, i.e. 528 with the dashboard group installed; 26 web tests
   via `cd web && npm run check` plus a clean `npm run build`): **prices now
   cover all 217 tcgcsv groups, not 23.** `MIN_SET_RELEASE` is deleted and
   `tracked_groups` has no date bound in either direction;
@@ -356,29 +356,52 @@ tcgcsv.com). Design spec: `docs/superpowers/specs/2026-06-09-pkmn-quant-design.m
   `scripts/rebuild_warehouse.py` rebuilds the whole history from the cached
   raw archives (17m08s for 907 days, resumable) and `scripts/
   verify_rebuild.py` gates the swap on every pre-existing product
-  reproducing exactly. Measured at swap: 3,197,600 → 36,337,465 price rows
+  reproducing exactly — prices, quarantine decisions, **and** catalog
+  membership (the catalog check was added in the final review: a shadow's
+  catalog is one fresh fetch with nothing to merge into and no
+  `CATALOG_FLOOR` to refuse it, so a single reset connection could otherwise
+  ship a catalog smaller than the live one and pass the gate). Measured at
+  swap: 3,197,600 → 36,337,465 price rows
   (**11.36x**) and 6,671 → 31,712 priced products (**4.75x**) over the same
   907 days; verification PASSED first try, so **the change is purely
   additive** — no pre-existing row moved. Priced universe by kind: 28,175
-  `single`, 2,439 `sealed`, 986 `excluded`, 112 `null` (delisted upstream,
-  no catalog row; engine tags them kind `other`). Full re-run of all six
+  `single`, 2,439 `sealed`, 986 `excluded`, 112 `null` (priced, no catalog
+  row; engine tags them kind `other`). The supported reading of that 112 is
+  **delisted upstream** — all of them stopped pricing before the warehouse's
+  last day — but **that reading was checked for consistency, not proven**,
+  and no fix is proposed either way. Full re-run of all six
   strategies plus the benchmark, impact-on both sides, same window
   (2024-03-01..2026-06-30): buy-and-hold sealed **+183.67% → +10.53%**;
   sealed-accumulation −7.36% → −8.59%; xs-momentum −9.30% → −38.72%;
   dip-buyer −21.15% → −99.80%; cost-aware-reversion −22.45% → −98.70%;
   ml-ranker −5.05% → −81.64%; ml-ranker-v2 −23.15% → −99.81%. `pkmn
-  evaluate` (`20260804T184401Z-cf292c`): joint White's Reality Check
-  **p = 1.0000, unchanged**; every deflated Sharpe still far below the 0.5
-  coin-flip point (highest 0.254, ml-ranker, whose 95% CI is
-  [−99.58%, +331.57%] — wide, not good). **The benchmark's movement and two
+  evaluate` (`20260804T204825Z-fa07b8`, each era against its own benchmark):
+  joint White's Reality Check **p = 1.0000 pre-swap → p = 0.8038 post-swap**
+  — not "unchanged"; the post-swap best sat at or below 8,038 of 10,000
+  luck-only resample maxima rather than all 10,000. Both are far from the
+  p <= 0.05 bar, so the conclusion holds, but the extreme phrasing does not.
+  (The first post-swap run, `20260804T184401Z-cf292c`, published p = 1.0000
+  against a **stale pre-swap benchmark** — see the Gotchas entry; the error
+  made the test harder, never easier, so nothing was flattered.) Every
+  deflated Sharpe is still far below the 0.5 coin-flip point (highest 0.254,
+  ml-ranker, whose 95% CI is [−99.58%, +331.57%] — wide, not good); DSR does
+  not depend on the benchmark, so those six values are unaffected by the
+  correction. **The benchmark's movement and two
   of the four wipeouts were traced; the two ML wipeouts were not.** The
   benchmark's fall is a capital-deployment artifact: `BuyAndHold`
   equal-weights with integer quantities, day-1 sealed assets went 45 →
   1,315, per-asset budget went $222.22 → $7.60, and deployed capital went
   $6,012.55 (60.1%) → $466.78 (4.7%) — the run is 95% cash. **The old bar
   was not fully deployed either** (37% cash): on the slice actually at risk
-  the two runs returned +291.7% and +191.1%, so ~90% of the 17x headline
-  collapse is the sizing rule, not the assets. The dilution reading is
+  the two runs returned +291.7% and +191.1% (gain / all-in capital consumed,
+  i.e. $18,367.25/$6,296.27 and $1,052.73/$550.77 — the denominator is the
+  all-in figure incl. fees and impact, not the $6,012.55/$466.78 notional),
+  so **~85%** of the 17x headline collapse is the sizing rule, not the
+  assets. That 85% is the log
+  (Törnqvist) share of `R = deployment x invested-slice return`; Shapley
+  gives 80.1% and order-dependent sequential decompositions span 63.4-96.8%,
+  so deployment dominates on every basis but the earlier "~90%" sat above
+  three of the four. Derivation in the findings doc. The dilution reading is
   **falsified**: over the same window the newly-added sealed products
   returned a median +212.3% vs +170.8% for the pre-existing ones — but note
   the basis, which is narrower than it sounds: that compares only the 1,133
@@ -420,11 +443,12 @@ tcgcsv.com). Design spec: `docs/superpowers/specs/2026-06-09-pkmn-quant-design.m
 uv sync                      # install (uv manages everything; never pip)
 uv run pytest                # test suite
 uv run ruff check . && uv run ruff format --check . && uv run mypy
-                             # lint + format + strict typecheck (src/ only)
+                             # lint + format + strict typecheck (src/ plus the two
+                             # operator scripts: rebuild_warehouse, verify_rebuild)
 uv run pkmn ingest --start 2026-07-01 --end 2026-07-31   # extend price history
 uv run pkmn refresh-products                             # repair the catalog from all 217 groups, no price ingest
-uv run python scripts/rebuild_warehouse.py --root .      # rebuild the warehouse into data/warehouse-full/ from cached archives (~17 min, resumable)
-uv run python scripts/verify_rebuild.py --root .         # gate the swap: every pre-existing product must reproduce exactly (exit 0 = safe)
+uv run python scripts/rebuild_warehouse.py --root .      # rebuild the warehouse into data/warehouse-full/ from cached archives (~17 min, resumable; leave --start at its default)
+uv run python scripts/verify_rebuild.py --root .         # gate the swap: every pre-existing product must reproduce exactly, prices + quarantine + catalog (exit 0 = safe)
 uv run pkmn backtest --start 2024-03-01 --end 2026-06-30 # buy-and-hold benchmark (default strategy)
 uv run pkmn backtest --strategy sealed-accumulation --start 2024-03-01 \
     --end 2026-06-30 --param take_profit=2.0 --holdings holdings.csv   # any strategy + cash/holdings
@@ -609,6 +633,29 @@ uv.lock together).
   merge, the `CATALOG_FLOOR` refusal, and the wide `(httpx.HTTPError,
   ValueError, KeyError)` filter — a fetch failure must degrade to "stale
   rows kept, failure counted", never to "rows gone, run reports success".
+- **`pkmn evaluate`'s auto-discovered benchmark went stale across the
+  universe swap, and published a wrong statistic.** With no `--benchmark`,
+  `evaluate` globs `data/results/buy-and-hold-sealed-*` and takes the
+  longest curve; only if that matches nothing does it fall back to the run
+  registry. The 23-group directory written 2026-07-14 survived the swap, so
+  the first post-swap run (`20260804T184401Z-cf292c`) scored post-swap
+  strategies against a **pre-swap** benchmark (+203.03% over the 660 aligned
+  days instead of +10.74%) and published Reality Check p = 1.0000. The
+  corrected re-run (`20260804T204825Z-fa07b8`) gives **p = 0.8038**. Both
+  legacy directories are renamed, under `data/results/`, so the glob no
+  longer matches and plain `pkmn evaluate` falls through to the registry
+  (newest recorded buy-and-hold-sealed `backtest` run):
+  `STALE-preswap-23group-buy-and-hold-sealed-2024-03-01-2026-06-30/` and
+  `STALE-preswap-23group-buy-and-hold-sealed-2024-08-28-2026-06-30/`.
+  Nothing was deleted. **Do not re-create a `buy-and-hold-sealed-*`
+  directory name**; `pkmn backtest` has written to `data/results/<run_id>/`
+  since Plan 2b, so only a hand-made directory can resurrect this. Prefer
+  passing `--benchmark data/results/<run_id>` explicitly when it matters.
+  Related: `evaluate` names its artifact directory by **date**, not run id,
+  so two runs on one day overwrite each other — the superseded artifact here
+  is preserved as `data/results/evaluate-2026-08-04-stale-benchmark/`, and a
+  registry record's own `config.benchmark`/`results.reality_check_p` are the
+  authoritative per-run values, not whatever is in the directory today.
 - **Buy-and-hold benchmark reference figure, 2024-03-01→2026-06-30,
   impact-on: +10.53%** (run `20260804T061600Z-37a23f`) on the current
   217-group universe. The older +186.0% flat-cost / +183.7% impact-on
