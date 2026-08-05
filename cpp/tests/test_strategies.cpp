@@ -1,6 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "pkmn_engine/backtest.hpp"
+#include "pkmn_engine/strategies/buy_and_hold.hpp"
 #include "pkmn_engine/strategies/dip_buyer.hpp"
 #include "pkmn_engine/strategies/factory.hpp"
 #include "pkmn_engine/strategies/momentum.hpp"
@@ -78,6 +79,63 @@ TEST_CASE("momentum: flat portfolio rebalances immediately, holds winners") {
     for (const auto& f : res.fills) {
         if (f.quantity > 0) CHECK(f.asset == 0);  // only the winner is bought
     }
+}
+
+TEST_CASE("buy and hold: deficit sweep spends the integer-sizing remainder") {
+    // Mirrors tests/strategies/test_buy_and_hold.py::
+    // test_buy_and_hold_deficit_sweep_deploys_the_remainder exactly.
+    // Two sealed assets priced 30, cash 1000, n_assets 2.
+    // Pass 1: target 500 -> floor(500/30) = 16 each = 960 spent, 40 left.
+    // Pass 2: both sit 500 - 16*30 = 20 below target; strict > gives the tie
+    // to the earlier one in screen order -> 17 and 16, 990 spent.
+    std::vector<Day> days{100};
+    std::vector<PriceRow> rows{{100, 0, 30.0, 34.5, 27.0}, {100, 1, 30.0, 34.5, 27.0}};
+    std::vector<MarkEvent> events{{100, 0, 30.0}, {100, 1, 30.0}};
+    MarketView mkt(2, days, rows, events);
+    ProductTable prods{{1, 2}, {0, 0}, {100, 100}};
+    InsertionMap<Position> positions(2);
+    InsertionMap<double> marks(2);
+    marks.set(0, 30.0);
+    marks.set(1, 30.0);
+    BuyAndHold strat(0, 2);
+    Context ctx{100, mkt, prods, positions, 1000.0, marks};
+    auto orders = strat.on_bar(ctx);
+    REQUIRE(orders.size() == 2);
+    CHECK(orders[0].asset == 0);
+    CHECK(orders[0].quantity == 17);
+    CHECK(orders[1].asset == 1);
+    CHECK(orders[1].quantity == 16);
+    // Entered once: the second bar emits nothing.
+    CHECK(strat.on_bar(ctx).empty());
+}
+
+TEST_CASE("buy and hold: the screen keeps the densest, tightest n_assets") {
+    // asset 0 prints on all 3 days; assets 1 and 2 print only on the last,
+    // asset 1 with a 0.1 relative spread and asset 2 with 0.5. n_assets = 2
+    // must therefore keep 0 (density) then 1 (spread breaks the density tie).
+    std::vector<Day> days{100, 101, 102};
+    std::vector<PriceRow> rows{{100, 0, 10.0, 10.0, 9.0},
+                               {101, 0, 10.0, 10.0, 9.0},
+                               {102, 0, 10.0, 10.0, 9.0},
+                               {102, 1, 10.0, 10.0, 9.0},
+                               {102, 2, 10.0, 10.0, 5.0}};
+    std::vector<MarkEvent> events{{100, 0, 10.0}, {102, 1, 10.0}, {102, 2, 10.0}};
+    MarketView mkt(3, days, rows, events);
+    ProductTable prods{{1, 2, 3}, {0, 0, 0}, {100, 100, 100}};
+    InsertionMap<Position> positions(3);
+    InsertionMap<double> marks(3);
+    marks.set(2, 10.0);  // insertion order deliberately NOT screen order
+    marks.set(1, 10.0);
+    marks.set(0, 10.0);
+    BuyAndHold strat(0, 2);
+    Context ctx{102, mkt, prods, positions, 100.0, marks};
+    auto orders = strat.on_bar(ctx);
+    // target 100/2 = 50 -> 5 units each, 100 spent, nothing left to sweep.
+    REQUIRE(orders.size() == 2);
+    CHECK(orders[0].asset == 0);
+    CHECK(orders[0].quantity == 5);
+    CHECK(orders[1].asset == 1);
+    CHECK(orders[1].quantity == 5);
 }
 
 TEST_CASE("make_strategy: stray param key throws, valid params still work") {

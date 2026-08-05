@@ -74,6 +74,31 @@ TEST_CASE("history queries: last-at-or-before, prefix peak, window max") {
     CHECK(mkt.max_in_window(0, 104, 110) == std::nullopt);
 }
 
+TEST_CASE("screen queries: print count and the latest quote at or before a day") {
+    auto mkt = make_view();
+    // asset 0 prints on 100/101/103, asset 1 on 100/103.
+    CHECK(mkt.print_count_at_or_before(0, 99) == 0);
+    CHECK(mkt.print_count_at_or_before(0, 100) == 1);
+    CHECK(mkt.print_count_at_or_before(0, 102) == 2);  // day 102 has no print
+    CHECK(mkt.print_count_at_or_before(0, 103) == 3);
+    CHECK(mkt.print_count_at_or_before(1, 102) == 1);
+
+    // The quote is the LAST print at or before the day, not the first, and
+    // not today's (which would be absent across a gap).
+    auto stale = mkt.quote_at_or_before(0, 102);
+    CHECK(stale.mid == 14.0);  // day 101's row
+    CHECK(stale.low == 11.0);
+    auto none = mkt.quote_at_or_before(0, 99);
+    CHECK(std::isnan(none.mid));
+    CHECK(std::isnan(none.low));
+    auto null_mid = mkt.quote_at_or_before(1, 100);
+    CHECK(std::isnan(null_mid.mid));
+    CHECK(null_mid.low == 45.0);
+    auto null_low = mkt.quote_at_or_before(1, 103);
+    CHECK(null_low.mid == 66.0);
+    CHECK(std::isnan(null_low.low));
+}
+
 TEST_CASE("constructor validates sortedness and asset range") {
     std::vector<Day> days{100, 100};  // not strictly increasing
     CHECK_THROWS_AS(MarketView(1, days, {}, {}), std::invalid_argument);

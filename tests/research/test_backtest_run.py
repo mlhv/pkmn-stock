@@ -110,10 +110,13 @@ def test_resolve_params_rejects_non_numeric_string() -> None:
         resolve_params("sealed-accumulation", {"min_drawdown": "abc"})
 
 
-def test_resolve_params_buy_and_hold_takes_none() -> None:
-    assert resolve_params("buy-and-hold", {}) == {}
-    with pytest.raises(ValueError, match="no tunable"):
+def test_resolve_params_buy_and_hold_takes_only_n_assets() -> None:
+    assert resolve_params("buy-and-hold", {}) == {"n_assets": 100}
+    assert resolve_params("buy-and-hold", {"n_assets": "25"}) == {"n_assets": 25}
+    with pytest.raises(ValueError, match="unknown param"):
         resolve_params("buy-and-hold", {"x": 1})
+    with pytest.raises(ValueError, match="n_assets"):
+        resolve_params("buy-and-hold", {"n_assets": 0})
 
 
 def test_resolve_params_unknown_strategy() -> None:

@@ -97,8 +97,10 @@ def test_backtest_golden_numbers(tmp_path: Path) -> None:
 
     Hand-verified arithmetic (CostModel defaults: fee 12.75%, shipping $1,
     liquidity tier for $12 price -> cap 8):
-      D1: no fills; BuyAndHold sees mark 10.0, budget 100 -> orders 10 units.
-          Equity = 100 (all cash).
+      D1: no fills; BuyAndHold screens a one-asset universe (n_assets=100 is
+          not binding), target 100/1 = 100 -> floor(100/10) = 10 units, $100
+          spent, $0 left, so the deficit sweep buys nothing and these numbers
+          are unchanged by it. Equity = 100 (all cash).
       D2: fill at print 12.0. Clips: liquidity cap 8; cash floor((100-1)/12)=8.
           -> buy 8 @ 12, fees $1. Cash = 100 - 96 - 1 = 3. Equity = 3 + 8*12 = 99.
       D3: no orders. Equity = 3 + 8*15 = 123.
@@ -124,8 +126,8 @@ def test_backtest_golden_numbers_with_impact(tmp_path: Path) -> None:
 
     Hand-verified arithmetic (CostModel defaults + impact_enabled; $12 price
     -> liquidity cap Q=8):
-      D1: no fills; BuyAndHold sees mark 10.0, budget 100 -> orders 10 units.
-          Equity = 100 (all cash).
+      D1: no fills; one-asset universe, target 100 -> 10 units, $0 left, so
+          the deficit sweep is a no-op here. Equity = 100 (all cash).
       D2: print 12.0, mid 16.0 -> spread 4. Flat clip: min(10, cap 8,
           floor((100-1)/12)=8) = 8. Impact(8) = 4*8*8/(2*8) = 16;
           8*12+1+16 = 113 > 100 -> shrink. Impact(7) = 4*7*7/16 = 12.25;

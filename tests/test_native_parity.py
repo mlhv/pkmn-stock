@@ -199,6 +199,121 @@ def test_buy_and_hold_parity_single_universe(tmp_path: Path) -> None:
     assert_results_equal(py, cpp)
 
 
+@pytest.mark.parametrize(("kind", "n_assets"), [("sealed", 1), ("single", 2), ("single", 3)])
+def test_buy_and_hold_parity_screened_universe(tmp_path: Path, kind: str, n_assets: int) -> None:
+    """n_assets below the universe size exercises the screen's ORDER, which
+    the default-100 cases never reach (they keep everything, so a wrong sort
+    is invisible). On this fixture the sealed pair's relative spreads agree to
+    ~15 significant digits, so the winner is decided in the last bits of
+    (mid - low) / mid — exactly the arithmetic that must not be rearranged.
+    """
+    seed_rich(tmp_path)
+    wh = Warehouse(Paths(root=tmp_path))
+    cm = CostModel(impact_enabled=True)
+    end = START + timedelta(days=39)
+    py = Backtest(
+        warehouse=wh,
+        strategy=BuyAndHold(kind=kind, n_assets=n_assets),
+        cost_model=cm,
+        start=START,
+        end=end,
+        initial_cash=1000.0,
+    ).run()
+    cpp = NativeBacktest(
+        warehouse=wh,
+        strategy=NativeStrategySpec("buy-and-hold", {"n_assets": float(n_assets)}, kind=kind),
+        cost_model=cm,
+        start=START,
+        end=end,
+        initial_cash=1000.0,
+    ).run()
+    assert len(py.fills) > 0
+    assert len({f.asset for f in py.fills}) == n_assets  # the screen really truncated
+    assert_results_equal(py, cpp)
+
+
+# Four sealed products for the stale-quote regression below. Product 1 has no
+# print on the entry bar but a very tight quote on the bar before; the other
+# three print on the entry bar with a wide quote. Every asset has exactly two
+# prints as of the entry bar, so density ties and the spread alone decides.
+STALE_START = START + timedelta(days=2)
+
+
+def seed_stale_quote(root: Path) -> None:
+    w = Warehouse(Paths(root=root))
+    plan: dict[int, tuple[list[int], float]] = {
+        1: ([0, 1, 3], 99.0),  # tight (spread 0.01), gaps on the entry bar
+        2: ([1, 2, 3], 50.0),  # wide (spread 0.50)
+        3: ([1, 2, 3], 50.0),
+        4: ([1, 2, 3], 50.0),
+    }
+    for i in range(4):
+        rows = [
+            {
+                "date": START + timedelta(days=i),
+                "product_id": pid,
+                "sub_type": "Normal",
+                "low": low,
+                "mid": 100.0,
+                "high": 200.0,
+                "market": 100.0,
+            }
+            for pid, (offsets, low) in plan.items()
+            if i in offsets
+        ]
+        w.write_prices(START + timedelta(days=i), pl.DataFrame(rows, schema=PRICE_SCHEMA))
+    w.write_products(
+        pl.DataFrame(
+            {
+                "product_id": [1, 2, 3, 4],
+                "group_id": [1, 1, 1, 1],
+                "name": ["Box 1", "Box 2", "Box 3", "Box 4"],
+                "rarity": [None, None, None, None],
+                "kind": ["sealed"] * 4,
+                "released_on": [date(2024, 11, 1)] * 4,
+            }
+        )
+    )
+
+
+def test_buy_and_hold_parity_screens_on_the_last_quote_not_todays(tmp_path: Path) -> None:
+    """The screened quote is the last print AT OR BEFORE today, not today's.
+
+    An asset carrying a stale mark still has a real quote, and dropping it to
+    "no quote" would rank it last. Here that flips which two of four products
+    the screen keeps, so the two engines can only agree if the C++ side reads
+    MarketView::quote_at_or_before rather than MarketView::mid/low (which are
+    today's print only, NaN across a gap).
+    """
+    seed_stale_quote(tmp_path)
+    wh = Warehouse(Paths(root=tmp_path))
+    cm = CostModel()
+    end = START + timedelta(days=3)
+    py = Backtest(
+        warehouse=wh,
+        strategy=BuyAndHold(kind="sealed", n_assets=2),
+        cost_model=cm,
+        start=STALE_START,
+        end=end,
+        initial_cash=1000.0,
+        warmup_days=2,
+    ).run()
+    cpp = NativeBacktest(
+        warehouse=wh,
+        strategy=NativeStrategySpec("buy-and-hold", {"n_assets": 2.0}, kind="sealed"),
+        cost_model=cm,
+        start=STALE_START,
+        end=end,
+        initial_cash=1000.0,
+        warmup_days=2,
+    ).run()
+    assert len(py.fills) > 0
+    # Product 1 gapped on the entry bar; the stale tight quote is what keeps
+    # it in the top 2. If either engine read today's print it would be last.
+    assert {f.asset.product_id for f in py.fills} == {1, 2}
+    assert_results_equal(py, cpp)
+
+
 def test_warmup_days_parity(tmp_path: Path) -> None:
     seed_rich(tmp_path)
     wh = Warehouse(Paths(root=tmp_path))

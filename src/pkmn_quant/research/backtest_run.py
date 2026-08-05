@@ -27,11 +27,19 @@ from pkmn_quant.engine.native import (
 )
 from pkmn_quant.engine.prepared import PreparedMarket
 from pkmn_quant.engine.strategy import Strategy
-from pkmn_quant.research.registry import REGISTRY, Params
+from pkmn_quant.research.registry import REGISTRY, Params, ParamSpec
 from pkmn_quant.research.runs import new_run_id, record_run
 
 # A param may arrive as a string (CLI --param k=v) or a number (web JSON).
 ParamValue = str | float | int
+
+# buy-and-hold stays out of REGISTRY on purpose: it is the benchmark, not a
+# tunable research strategy, so it has no optuna search space and nothing
+# walk-forward should be tuning. It does take one knob — how many screened
+# assets to spread across — so it carries its own ParamSpec here.
+BUY_AND_HOLD_PARAMS: tuple[ParamSpec, ...] = (
+    ParamSpec(name="n_assets", kind="int", default=100, low=1, high=10_000),
+)
 
 
 @dataclass(frozen=True)
@@ -43,7 +51,8 @@ class BacktestRunResult:
 
 def resolve_params(strategy_name: str, params: dict[str, ParamValue]) -> Params:
     """Validate + coerce + default-fill user params against the strategy's
-    ParamSpecs. Accepts str or numeric values. buy-and-hold takes none.
+    ParamSpecs. Accepts str or numeric values. buy-and-hold takes exactly one
+    (`n_assets`); every other strategy takes its RegistryEntry's specs.
     Raises ValueError on any problem.
 
     Note on int coercion: an "int"-kind param is coerced via
@@ -55,18 +64,17 @@ def resolve_params(strategy_name: str, params: dict[str, ParamValue]) -> Params:
     need stricter validation, add it as a new, separate check.
     """
     if strategy_name == "buy-and-hold":
-        if params:
-            raise ValueError("buy-and-hold has no tunable parameters")
-        return {}
-    entry = REGISTRY.get(strategy_name)
-    if entry is None:
-        raise ValueError(f"unknown strategy {strategy_name!r}; known: {sorted(REGISTRY)}")
-    by_name = {p.name: p for p in entry.params}
-    unknown = set(params) - set(by_name)
+        specs = BUY_AND_HOLD_PARAMS
+    else:
+        entry = REGISTRY.get(strategy_name)
+        if entry is None:
+            raise ValueError(f"unknown strategy {strategy_name!r}; known: {sorted(REGISTRY)}")
+        specs = entry.params
+    unknown = set(params) - {p.name for p in specs}
     if unknown:
         raise ValueError(f"unknown param(s) {sorted(unknown)} for {strategy_name}")
     out: Params = {}
-    for spec in entry.params:
+    for spec in specs:
         raw = params.get(spec.name, spec.default)
         try:
             # int(float(raw)) handles str/float/int uniformly ("2.0" -> 2).
@@ -85,7 +93,9 @@ def resolve_params(strategy_name: str, params: dict[str, ParamValue]) -> Params:
 
 def _build_strategy(strategy_name: str, params: Params, kind: str) -> NativeStrategySpec | Strategy:
     if strategy_name == "buy-and-hold":
-        return NativeStrategySpec("buy-and-hold", {}, kind=kind)
+        return NativeStrategySpec(
+            "buy-and-hold", {k: float(v) for k, v in params.items()}, kind=kind
+        )
     if strategy_name in NATIVE_STRATEGY_NAMES:
         return NativeStrategySpec(strategy_name, {k: float(v) for k, v in params.items()})
     # ml-ranker / ml-ranker-v2: Python Strategy via the callback bridge.
@@ -283,8 +293,11 @@ def run_with_benchmark(
     curves differ only by trading policy. The benchmark record carries
     ``benchmark_for: <primary run_id>``; that tag is the only linkage.
 
-    Returns benchmark=None when the primary IS buy-and-hold-sealed — pairing
-    a run with a copy of itself buys nothing.
+    Returns benchmark=None when the primary IS the benchmark — buy-and-hold
+    over the sealed universe on default params — since pairing a run with a
+    copy of itself buys nothing. A buy-and-hold run with a NON-default
+    n_assets is a different allocation, so it still gets the benchmark beside
+    it.
     """
     primary = run_single_backtest(
         root=root,
@@ -298,7 +311,11 @@ def run_with_benchmark(
         warmup_days=warmup_days,
         kind=kind,
     )
-    if strategy_name == "buy-and-hold" and kind == "sealed":
+    if (
+        strategy_name == "buy-and-hold"
+        and kind == "sealed"
+        and resolve_params(strategy_name, params) == resolve_params(strategy_name, {})
+    ):
         return PairedRunResult(primary=primary, benchmark=None)
     benchmark = run_single_backtest(
         root=root,

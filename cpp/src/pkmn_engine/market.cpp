@@ -57,11 +57,15 @@ MarketView::MarketView(std::size_t n_assets, std::vector<Day> trading_days,
     for (std::size_t a = 0; a < n_assets_; ++a) h_off_[a + 1] = h_off_[a] + counts[a];
     h_day_.resize(rows_.size());
     h_price_.resize(rows_.size());
+    h_mid_.resize(rows_.size());
+    h_low_.resize(rows_.size());
     std::vector<std::size_t> cursor(h_off_.begin(), h_off_.end() - 1);
     for (const auto& r : rows_) {
         auto& c = cursor[static_cast<std::size_t>(r.asset)];
         h_day_[c] = r.day;
         h_price_[c] = r.market;
+        h_mid_[c] = r.mid;
+        h_low_[c] = r.low;
         ++c;
     }
     h_prefmax_.resize(rows_.size());
@@ -128,6 +132,24 @@ std::optional<double> MarketView::peak_until(AssetId a, Day d) const {
     auto it = std::upper_bound(h_day_.begin() + b, h_day_.begin() + e, d);
     if (it == h_day_.begin() + b) return std::nullopt;
     return h_prefmax_[static_cast<std::size_t>(it - h_day_.begin()) - 1];
+}
+
+std::int64_t MarketView::print_count_at_or_before(AssetId a, Day d) const {
+    // One row per (asset, day) upstream, so the row count IS the distinct-day
+    // count that screen.py's n_unique("date") computes.
+    auto [b, e] = range_(a);
+    auto begin = h_day_.begin() + static_cast<std::ptrdiff_t>(b);
+    auto it = std::upper_bound(begin, h_day_.begin() + static_cast<std::ptrdiff_t>(e), d);
+    return static_cast<std::int64_t>(it - begin);
+}
+
+HistoricalQuote MarketView::quote_at_or_before(AssetId a, Day d) const {
+    auto [b, e] = range_(a);
+    auto begin = h_day_.begin() + static_cast<std::ptrdiff_t>(b);
+    auto it = std::upper_bound(begin, h_day_.begin() + static_cast<std::ptrdiff_t>(e), d);
+    if (it == begin) return {kNaN, kNaN};
+    auto i = static_cast<std::size_t>(it - h_day_.begin()) - 1;
+    return {h_mid_[i], h_low_[i]};
 }
 
 std::optional<double> MarketView::max_in_window(AssetId a, Day from, Day to) const {
