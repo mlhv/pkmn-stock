@@ -37,6 +37,17 @@ def rebuild(
 
     Resumable: days already present in the shadow are skipped and loaded as
     the next day's gate baseline, so a crash costs only the unfinished tail.
+
+    `--start` is only safe at the shadow's TRUE beginning (the default: the
+    live warehouse's first stored day). The first day built here runs with
+    `previous=None`, i.e. no gate baseline, so pointing `--start` at the
+    middle of an already-populated shadow would re-gate that day against
+    nothing instead of against the day before it, and any check that compares
+    to the previous day would silently not fire. `ingest_range` does seed
+    `previous` from the day before its start (with a GAP_RESET_DAYS guard);
+    this deliberately does not, because a full rebuild has no earlier day to
+    seed from. Resuming an interrupted rebuild is unaffected — leave `--start`
+    at its default and the loop picks the baseline up from the stored days.
     """
     src = Paths(root=root)  # archives live under the project root
     shadow = Warehouse(Paths(root=root, warehouse_name=warehouse_name))
