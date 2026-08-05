@@ -1504,13 +1504,34 @@ environment for it.
 | sealed-accumulation | 0.000 | 0.003 |
 | xs-momentum | 0.000 | 0.000 |
 
-Each column uses its own era's benchmark: pre-swap
-`buy-and-hold-sealed-2024-03-01-2026-06-30` (final equity $28,367.25,
-+203.03% over the 660 aligned days), post-swap
-`20260804T061600Z-37a23f` (final equity $11,052.73, +10.74% over the same
-660 days). The deflated Sharpe column does not depend on the benchmark at
-all — DSR is computed from each strategy's own returns — so those values are
-unaffected by which benchmark is used. The Reality Check is.
+Each column uses its own era's benchmark. **Two different windows are in
+play, so both are stated rather than mixed**: the artifact's full-window
+equity (2024-03-01..2026-06-30, 852 rows) and the 660-day aligned slice
+(2024-08-28..2026-06-18) the statistics actually run on.
+
+| benchmark | full-window final equity | aligned slice, first → last day | aligned-slice return |
+|---|---:|---:|---:|
+| pre-swap `buy-and-hold-sealed-2024-03-01-2026-06-30` | $28,367.25 | $9,187.06 → $27,839.87 | +203.03% |
+| post-swap `20260804T061600Z-37a23f` | $11,052.73 | $9,946.86 → $11,015.43 | +10.74% |
+
+The aligned-slice percentages are exactly `last / first - 1` on the two
+middle columns and reconstruct from them. Do not instead divide a
+full-window final equity by the $10,000 starting cash and expect the same
+number: for the pre-swap benchmark that gives +183.67%, which is the
+full-window headline quoted elsewhere in this document — a real figure, but
+not the one these statistics use.
+
+The deflated Sharpe column is **identical across the two runs to the full
+float** (verified against both `evaluate.json` artifacts, all six
+strategies), and `deflated_sharpe` takes no benchmark argument — only the
+strategy's own aligned returns plus the zoo of strategy Sharpes (`cli.py`).
+Do not over-generalize that into "DSR cannot depend on the benchmark",
+though: the aligned date set is **seeded from the benchmark curve** and then
+intersected with every strategy curve (`cli.py`), so a benchmark with
+different date coverage would change which days feed DSR and move it. Here
+the two benchmarks span the same 852 days and yield the same 660-day
+intersection, which is *why* the column is unchanged. The Reality Check
+consumes the benchmark's returns directly and does move.
 
 **White's Reality Check, jointly over all six strategies: p = 1.0000
 pre-swap and p = 0.8038 post-swap.** Pre-swap, the observed best excess
@@ -1529,7 +1550,7 @@ was wrong. `pkmn evaluate` auto-discovers its benchmark by globbing
 (`cli.py`), and that legacy directory — written 2026-07-14, on the 23-group
 universe — still existed after the swap. So cf292c measured six post-swap
 strategies against a **pre-swap** benchmark that returned +203.03% over the
-window instead of the post-swap +10.74%. The registry fallback that finds
+660-day aligned slice instead of the post-swap +10.74%. The registry fallback that finds
 the current run only fires when the glob matches nothing, so it never ran.
 Fixed by renaming both legacy directories out of the glob's path, nothing
 deleted; they are now, under `data/results/`:
@@ -1547,6 +1568,46 @@ Rigor pack, ml-ranker-v2, and catalog-completeness runs — has a
 `config.benchmark` naming the pre-rename path; those runs were correct for
 their era, and their artifact now lives under the `STALE-preswap-23group-`
 name.
+
+**The rename also left one dangling `artifact_path`, and this is the
+complete list.** Auditing all 37 registry records against the filesystem,
+exactly one record's `artifact_path` points at a directory that no longer
+exists under that name:
+
+| record | command | recorded | `artifact_path` (stale) | now lives at |
+|---|---|---|---|---|
+| `20260714T045104Z-8d084f` | `backtest` buy-and-hold-sealed | 2026-07-14 | `data/results/buy-and-hold-sealed-2024-03-01-2026-06-30` | `data/results/STALE-preswap-23group-buy-and-hold-sealed-2024-03-01-2026-06-30` |
+
+That is the run behind the pre-swap +183.67% headline. No registry record
+points at the second renamed directory
+(`...-2024-08-28-2026-06-30`) at all, so the table above is exhaustive. The
+four `evaluate` records that name the old path — the three earlier-era runs
+in the preceding paragraph (`20260719T145313Z-dd9f28`,
+`20260720T034508Z-241dd9`, `20260730T181818Z-75d38b`) plus the stale
+post-swap `20260804T184401Z-cf292c` — carry it in `config.benchmark`, not in
+`artifact_path`, and their own artifact directories all still exist.
+
+**Nothing breaks, and the three consumers were checked rather than
+assumed:** `pkmn runs show 20260714T045104Z-8d084f` prints the full record
+including its results (the registry is a self-contained JSONL; it never
+reads the directory). The API returns **404 by design** — `_artifact_dir`
+in `api/data.py` guards with `art.exists()` and raises `NotFound`, which
+`api/app.py` maps to `HTTPException(404)`, so `GET
+/api/backtest/20260714T045104Z-8d084f` is a clean not-found rather than a
+crash. The Streamlit dashboard's `benchmark_runs()` (`app/dashboard.py`)
+filters on `(art / "equity.parquet").exists()`, so the record silently
+drops out of the overlay selector; its legacy directory scan matches names
+starting with `buy-and-hold`, which the `STALE-preswap-23group-` prefix no
+longer does, so the renamed artifact does not reappear there either.
+
+**If you hit it:** the data is not lost, only moved. Read the artifact
+directly from the `STALE-preswap-23group-` path, or pass it explicitly
+(`--benchmark data/results/STALE-preswap-23group-buy-and-hold-sealed-2024-03-01-2026-06-30`)
+if you deliberately want the pre-swap 23-group bar. Do **not** repair this
+by renaming the directory back — that resurrects the glob match this whole
+correction removed. Rewriting the registry line is also not recommended:
+`registry.jsonl` is append-only history, and the record is accurate about
+where its artifact was written at the time.
 
 The error made the test **strictly harder**, not easier: a benchmark that
 returned +203% is a higher bar than one that returned +10.7%, so every

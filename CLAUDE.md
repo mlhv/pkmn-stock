@@ -384,9 +384,12 @@ tcgcsv.com). Design spec: `docs/superpowers/specs/2026-06-09-pkmn-quant-design.m
   against a **stale pre-swap benchmark** — see the Gotchas entry; the error
   made the test harder, never easier, so nothing was flattered.) Every
   deflated Sharpe is still far below the 0.5 coin-flip point (highest 0.254,
-  ml-ranker, whose 95% CI is [−99.58%, +331.57%] — wide, not good); DSR does
-  not depend on the benchmark, so those six values are unaffected by the
-  correction. **The benchmark's movement and two
+  ml-ranker, whose 95% CI is [−99.58%, +331.57%] — wide, not good); all six
+  DSR values are identical to the full float across the stale and corrected
+  runs, and `deflated_sharpe` takes no benchmark argument — but the aligned
+  date set is seeded from the benchmark curve, so that independence holds
+  here because both benchmarks cover the same 852 days, not
+  unconditionally. **The benchmark's movement and two
   of the four wipeouts were traced; the two ML wipeouts were not.** The
   benchmark's fall is a capital-deployment artifact: `BuyAndHold`
   equal-weights with integer quantities, day-1 sealed assets went 45 →
@@ -651,6 +654,20 @@ uv.lock together).
   directory name**; `pkmn backtest` has written to `data/results/<run_id>/`
   since Plan 2b, so only a hand-made directory can resurrect this. Prefer
   passing `--benchmark data/results/<run_id>` explicitly when it matters.
+  The rename left **exactly one** dangling `artifact_path` in the registry
+  (audited across all 37 records): `20260714T045104Z-8d084f`, the `backtest`
+  behind the pre-swap +183.67% headline, still records
+  `data/results/buy-and-hold-sealed-2024-03-01-2026-06-30`, which now lives
+  under the `STALE-preswap-23group-` prefix. Nothing breaks — `pkmn runs
+  show` prints it from the self-contained JSONL, the API 404s by design
+  (`api/data.py`'s `art.exists()` guard → `NotFound` → 404), and the
+  dashboard's `.exists()` filter silently drops it from the overlay
+  selector. Read the artifact at its `STALE-preswap-23group-` path if you
+  want it; do not rename the directory back and do not rewrite the
+  append-only registry line. No record points at the second renamed
+  directory; the four earlier `evaluate` records name the old path in
+  `config.benchmark`, not `artifact_path`. Details in the findings doc's
+  Full set coverage section.
   Related: `evaluate` names its artifact directory by **date**, not run id,
   so two runs on one day overwrite each other — the superseded artifact here
   is preserved as `data/results/evaluate-2026-08-04-stale-benchmark/`, and a
