@@ -84,13 +84,22 @@ class ExecutionSimulator:
         mid = quote.mid if quote is not None else None
         low = quote.low if quote is not None else None
         # A buy cannot execute below the cheapest current listing; `market` is
-        # sales-derived and can sit under it (see CostModel.buy_impact).
-        base = market if low is None else max(market, low)
+        # sales-derived and can sit under it (see CostModel.buy_impact). The
+        # premium is routed through `impact`, so with the impact model OFF the
+        # floor is not a cost and must not constrain sizing — gating on
+        # impact_enabled keeps flat-cost runs bit-identical to pre-floor.
+        base = market
+        if self.cost_model.impact_enabled and low is not None:
+            base = max(market, low)
         qty = min(order.quantity, cap_left)
         # afford: qty * base + shipping_per_line + walk-impact(qty) <= cash.
-        # Estimating off `base` only changes how many times the decrement loop
-        # below runs, never where it stops — but off `market` that loop can run
-        # hundreds of iterations when low >> market.
+        # With impact ON, qty*base <= qty*market + impact(qty), so `base` is a
+        # valid upper bound: it only changes how many times the decrement loop
+        # below runs, never where it stops — and off `market` that loop can run
+        # hundreds of iterations when low >> market. With impact OFF the true
+        # constraint is qty*market + shipping <= cash and a `base` clip would
+        # bind BELOW it, cutting real quantities (10x on a 10x floor); hence
+        # the gate above.
         affordable = math.floor((portfolio.cash - self.cost_model.shipping_per_line) / base)
         qty = min(qty, max(affordable, 0))
         impact = self.cost_model.buy_impact(market, mid, low, qty, used)

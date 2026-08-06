@@ -15,12 +15,18 @@ std::optional<Fill> fill_buy(const Order& order, double market, const Portfolio&
     double mid = mkt.mid(order.asset);  // NaN when the asset has no quote today
     double low = mkt.low(order.asset);  // NaN when the asset has no quote today
     // A buy cannot execute below the cheapest current listing; `market` is
-    // sales-derived and can sit under it (see CostModel::buy_impact).
-    double base = std::isnan(low) ? market : std::max(market, low);
+    // sales-derived and can sit under it (see CostModel::buy_impact). The
+    // premium is routed through `impact`, so with the impact model OFF the
+    // floor is not a cost and must not constrain sizing.
+    double base = market;
+    if (cm.impact_enabled && !std::isnan(low)) base = std::max(market, low);
     std::int64_t qty = std::min(order.quantity, cap_left);
     // afford: qty * base + shipping_per_line + walk-impact(qty) <= cash.
-    // Estimating off `base` only changes how many times the decrement loop
-    // below runs, never where it stops.
+    // With impact ON, qty*base <= qty*market + impact(qty), so `base` is a
+    // valid upper bound: it only changes how many times the decrement loop
+    // below runs, never where it stops. With impact OFF the true constraint is
+    // qty*market + shipping <= cash and a `base` clip would bind BELOW it;
+    // hence the gate above.
     auto affordable =
         static_cast<std::int64_t>(std::floor((pf.cash - cm.shipping_per_line) / base));
     qty = std::min(qty, std::max<std::int64_t>(affordable, 0));

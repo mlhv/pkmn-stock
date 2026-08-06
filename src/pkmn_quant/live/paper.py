@@ -65,8 +65,12 @@ def plan_paper_fills(
             # Mirror executor _fill_buy: clip to liquidity cap, then to what
             # cash_remaining can afford after shipping is reserved. Sizing runs
             # off the executable-price floor, not the print — a buy cannot fill
-            # below the cheapest current listing (see CostModel.buy_impact).
-            base = mark if rec.low is None else max(mark, rec.low)
+            # below the cheapest current listing (see CostModel.buy_impact) —
+            # but only when impact is ON, since that is where the premium is
+            # charged; with it OFF the floor is not a cost and must not size.
+            base = mark
+            if costs.impact_enabled and rec.low is not None:
+                base = max(mark, rec.low)
             affordable = math.floor((cash_remaining - costs.shipping_per_line) / base)
             qty = min(rec.quantity, cap, max(affordable, 0))
             impact = costs.buy_impact(mark, rec.mid, rec.low, qty)

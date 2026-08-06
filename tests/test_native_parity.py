@@ -174,12 +174,26 @@ def seed_inverted_quote(root: Path, n_days: int = 40) -> None:
 def assert_floor_actually_fired(res: Result) -> None:
     """Guard against a vacuous inverted-quote run.
 
-    On seed_inverted_quote the premium alone is (3*market - market) * qty =
-    2 * market * qty, so any buy whose impact exceeds qty * price can only
-    have gone through the floor branch; the pure walk-the-spread term is
-    bounded by half the (mid - base) spread per unit, which is 0.25 * market.
+    On seed_inverted_quote (low = 3x market, mid = 3.5x) the two regimes are
+    separated by a factor of 2 in impact-per-unit:
+
+      floor ON:  premium alone is (3*market - market) = 2 * market per unit,
+                 and the walk term on top is non-negative, so impact/unit >=
+                 2.0 * price always.
+      floor OFF: base collapses to market, so the walk spread is the FULL
+                 mid - market = 2.5 * market. A fill at the daily cap costs
+                 spread/2 = 1.25 * market per unit, which is the maximum the
+                 unfloored engine can charge.
+
+    So `impact >= 2.0 * qty * price` is reachable only through the floor
+    branch, while the unfloored ceiling is 1.25.
+
+    An earlier version of this guard used `impact > qty * price`, which the
+    unfloored engine clears comfortably at 1.25 — it passed with the floor
+    fully removed and guarded nothing. The bound 0.25 * market it cited is
+    the post-floor spread (mid - low = 0.5 * market), not the pre-floor one.
     """
-    assert any(f.quantity > 0 and f.impact > f.quantity * f.price for f in res.fills)
+    assert any(f.quantity > 0 and f.impact >= 2.0 * f.quantity * f.price for f in res.fills)
 
 
 def assert_results_equal(py: Result, cpp: Result) -> None:
@@ -634,8 +648,9 @@ def test_cost_aware_reversion_parity(tmp_path: Path, impact: bool) -> None:
     assert_results_equal(py, cpp)
 
 
+@pytest.mark.parametrize("impact", [False, True])
 def test_buy_and_hold_parity_when_market_prints_below_the_lowest_listing(
-    tmp_path: Path,
+    tmp_path: Path, impact: bool
 ) -> None:
     """The executable-price floor must be bit-identical on both engines.
 
@@ -643,10 +658,16 @@ def test_buy_and_hold_parity_when_market_prints_below_the_lowest_listing(
     floors are written as `market if low is None else max(market, low)` and
     `std::isnan(low) ? market : std::max(market, low)`. Only a fixture with
     low > market executes either branch's max().
+
+    Parametrized over impact because the floor is gated on impact_enabled in
+    BOTH engines (the premium is charged through `impact`, so with impact off
+    the floor is not a cost and must not size the order either). The gate is
+    two separate conditionals in two languages; impact=False is what pins them
+    to the same answer.
     """
     seed_inverted_quote(tmp_path)
     wh = Warehouse(Paths(root=tmp_path))
-    cm = CostModel(impact_enabled=True)
+    cm = CostModel(impact_enabled=impact)
     end = START + timedelta(days=39)
     py = Backtest(
         warehouse=wh,
@@ -665,7 +686,12 @@ def test_buy_and_hold_parity_when_market_prints_below_the_lowest_listing(
         initial_cash=1000.0,
     ).run()
     assert len(py.fills) > 0
-    assert_floor_actually_fired(py)
+    if impact:
+        assert_floor_actually_fired(py)
+    else:
+        # Flat cost: the floor is inert, so every fill carries zero impact and
+        # sizing is the pre-floor sizing.
+        assert all(f.impact == 0.0 for f in py.fills)
     assert_results_equal(py, cpp)
 
 

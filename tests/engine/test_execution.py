@@ -207,6 +207,40 @@ def test_buy_floor_binds_the_affordable_quantity() -> None:
     assert pf.cash == pytest.approx(26.0 - 21.0)
 
 
+def test_flat_cost_sizing_ignores_the_floor_entirely() -> None:
+    """With impact OFF the floor must not exist at all — not in the cost, and
+    not in the affordability clip either.
+
+    The premium is routed through `impact` by design, so when the impact model
+    is disabled there is no premium to reserve cash for and the true constraint
+    is the pre-floor one: qty*market + shipping <= cash. Clipping off `base`
+    here would bind BELOW that and silently cut real quantities.
+
+    Same fixture as test_buy_floor_binds_the_affordable_quantity (market 1.0 ->
+    Q=20, low 10.0, cash 26.0), which fills 2 with impact on. Flat-cost:
+    affordable = floor((26-1)/1) = 25, clipped by cap 20 -> 20 units, cost
+    20*1 + 1 = 21, cash left 5.0. Identical to the pre-floor engine.
+    """
+    sim = ExecutionSimulator(CostModel())  # impact_enabled defaults False
+    pf = Portfolio(cash=26.0)
+    fills = sim.execute(
+        [Order(asset=A, quantity=20)],
+        {A: 1.0},
+        pf,
+        DAY,
+        quotes={A: Quote(mid=10.0, low=10.0)},
+    )
+    assert fills[0].quantity == 20
+    assert fills[0].impact == 0.0
+    assert pf.cash == pytest.approx(5.0)
+    # And the floor genuinely is inert, not merely coincidental: the same run
+    # without any quote at all must be identical.
+    pf_noquote = Portfolio(cash=26.0)
+    no_quote = sim.execute([Order(asset=A, quantity=20)], {A: 1.0}, pf_noquote, DAY)
+    assert no_quote == fills
+    assert pf_noquote.cash == pytest.approx(pf.cash)
+
+
 def test_sell_fill_carries_impact() -> None:
     pf = Portfolio(cash=0.0)
     pf.apply(Fill(day=date(2025, 6, 1), asset=A, quantity=8, price=20.0, fees=0.0))
