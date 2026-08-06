@@ -5,7 +5,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, NoReturn
 
 import polars as pl
 import typer
@@ -17,10 +17,24 @@ from pkmn_quant.data.ingest import ingest_range, refresh_products
 if TYPE_CHECKING:
     from pkmn_quant.data.warehouse import Warehouse
     from pkmn_quant.engine.native import SeededHolding
+    from pkmn_quant.research.horizon import HorizonReport
+    from pkmn_quant.research.runs import RunRecord
 
 app = typer.Typer(no_args_is_help=True, help="Pokemon card quant toolkit.")
 
 DEFAULT_SIGNALS_CASH = 10_000.0
+
+# Holding-period buckets, in report order. These mirror research/horizon.py's
+# private _BUCKET_ORDER verbatim; listed here so `pkmn horizon` can print
+# EVERY bucket, including ones with no trades (HorizonReport only carries the
+# occupied ones). tests/test_cli_horizon.py pins the two together so they
+# cannot drift.
+HORIZON_BUCKETS = ("<1m", "1-3m", "3-6m", ">6m")
+# The bucket this command exists to produce: the owner wants a strategy that
+# enters and exits within 1-3 months, so that median edge is the headline.
+HORIZON_HEADLINE_BUCKET = "1-3m"
+# Registry-key-safe names for the bucket labels above ("<"/">"/"-" out).
+HORIZON_BUCKET_SLUGS = {"<1m": "lt_1m", "1-3m": "1_3m", "3-6m": "3_6m", ">6m": "gt_6m"}
 
 portfolio_app = typer.Typer(no_args_is_help=True, help="Record and inspect real positions.")
 app.add_typer(portfolio_app, name="portfolio")
@@ -967,6 +981,252 @@ def evaluate(
     if run_id is not None:
         typer.echo(f"run recorded: {run_id}")
     typer.echo(f"Reality Check p = {p_value:.4f}")
+    typer.echo(f"results written to {out_dir}")
+
+
+def _benchmark_candidates(records: list[RunRecord]) -> list[RunRecord]:
+    """Buy-and-hold benchmark runs from the REGISTRY, newest first.
+
+    Never a directory glob, and there is deliberately no glob fallback.
+    `pkmn evaluate` used to auto-discover its benchmark by globbing
+    `data/results/buy-and-hold-sealed-*` and taking the longest curve; the
+    directory it matched was a stale pre-swap artifact, so a post-swap
+    evaluation was scored against a pre-swap bar and a Reality Check p-value
+    of 1.0000 was published where the correct value was 0.8038. A directory
+    name carries no identity; a registry record carries the config, the git
+    SHA and the data fingerprint of the run that produced the curve, which is
+    what makes "is this benchmark comparable to that run?" answerable at all.
+    That matters again right now: this branch changed buy-and-hold's
+    allocation rule, so every buy-and-hold artifact produced before it is
+    measured on a different rule and only the record says which.
+
+    The filter is the same rule /api/runs (`api/data.py`) and the dashboard's
+    `benchmark_runs()` already apply: a `backtest` run of a buy-and-hold
+    strategy, minus the paired sidecar benchmarks tagged `benchmark_for`
+    (those cover somebody else's, often very short, window).
+    """
+    return sorted(
+        (
+            r
+            for r in records
+            if r.command == "backtest"
+            and r.strategy.startswith("buy-and-hold")
+            and not r.config.get("benchmark_for")
+            and (Path(r.artifact_path) / "equity.parquet").is_file()
+        ),
+        key=lambda r: r.recorded_at,
+        reverse=True,
+    )
+
+
+def _horizon_headline(report: HorizonReport) -> str:
+    """The one line this command exists to produce: the 1-3m median edge."""
+    n = report.holding_buckets.get(HORIZON_HEADLINE_BUCKET, 0)
+    if n == 0:
+        return f"{HORIZON_HEADLINE_BUCKET} median edge: n/a (no round trips in this bucket)"
+    edge = report.edge_by_bucket[HORIZON_HEADLINE_BUCKET]
+    return f"{HORIZON_HEADLINE_BUCKET} median edge: {edge:+.2%} over {n} round trip(s)"
+
+
+def _horizon_report_md(
+    report: HorizonReport,
+    run: RunRecord,
+    bench: RunRecord,
+    first_day: dt.date,
+    last_day: dt.date,
+) -> str:
+    n_open = sum(1 for t in report.trips if t.still_open)
+    lines = [
+        "# Horizon-matched trade report",
+        "",
+        f"Backtest run `{run.run_id}` (`{run.strategy}`) vs benchmark run "
+        f"`{bench.run_id}` (`{bench.strategy}`), {first_day} .. {last_day}.",
+        "",
+        "Every OTHER report in this project scores a strategy against one",
+        "28-month buy-and-hold, which measures exposure time as much as skill.",
+        "Here each round trip is scored against holding the sealed index over",
+        "that trip's OWN entry and exit dates, so a six-week trade is compared",
+        "with six weeks of the index. `edge` = trip return - index return over",
+        "the same days.",
+        "",
+        f"**{_horizon_headline(report)}**",
+        "",
+        "| metric | value |",
+        "|---|---|",
+        f"| round trips | {len(report.trips)} |",
+        f"| still open at {last_day} (closed at that day's mark) | {n_open} |",
+        f"| median edge | {report.median_edge:+.2%} |",
+        f"| mean edge | {report.mean_edge:+.2%} |",
+        f"| win rate (edge > 0) | {report.win_rate:.1%} |",
+        "",
+        "## Holding period",
+        "",
+        "| bucket | round trips | median edge |",
+        "|---|---|---|",
+    ]
+    for bucket in HORIZON_BUCKETS:
+        count = report.holding_buckets.get(bucket, 0)
+        edge = f"{report.edge_by_bucket[bucket]:+.2%}" if count else "n/a"
+        lines += [f"| {bucket} | {count} | {edge} |"]
+    lines += [
+        "",
+        "Caveats: marks on this data are smoothed (thin markets, carry-forward",
+        "marks), so a still-open trip's return is a mark, not a realized exit.",
+        "A per-trip edge is not a portfolio return either -- it ignores how much",
+        "capital sat idle between trips.",
+        "",
+    ]
+    return "\n".join(lines)
+
+
+@app.command()
+def horizon(
+    run_id: str = typer.Argument(..., help="Backtest run id; see `pkmn runs list`."),
+    benchmark: str | None = typer.Option(
+        None,
+        help="Benchmark run id (NOT a directory); default: newest buy-and-hold "
+        "backtest in the run registry.",
+    ),
+    root: Path = typer.Option(Path("."), help="Project root holding the data/ directory."),
+) -> None:
+    """Per-trade edge against the sealed index over each trade's OWN window.
+
+    Pairs a backtest's fills into FIFO round trips and scores each one against
+    holding the sealed index between that trip's entry and exit dates. Answers
+    "did this strategy beat the index on the trades it actually made", which a
+    stitched return against a 28-month buy-and-hold does not. Writes
+    data/results/horizon-<run-id>/{report.md,horizon.json} and records a
+    registry entry like every other run.
+    """
+    from pkmn_quant.data.warehouse import Warehouse
+    from pkmn_quant.engine.data import MarketData
+    from pkmn_quant.research.horizon import horizon_report
+    from pkmn_quant.research.runs import load_runs, record_run
+
+    def fail(msg: str) -> NoReturn:
+        typer.echo(f"error: {msg}", err=True)
+        raise typer.Exit(1)
+
+    records = load_runs(root)
+    by_id = {r.run_id: r for r in records}
+
+    run = by_id.get(run_id)
+    if run is None:
+        fail(f"no run matching {run_id!r}; see `pkmn runs list`")
+    if run.command != "backtest":
+        fail(f"run {run_id} is a {run.command} run; horizon needs a backtest run (it pairs fills)")
+
+    art = Path(run.artifact_path)
+    for name in ("fills.parquet", "equity.parquet"):
+        if not (art / name).is_file():
+            fail(f"run {run_id} is missing {name} under {art}")
+    fills = pl.read_parquet(art / "fills.parquet")
+    if fills.height == 0:
+        fail(f"run {run_id} has no fills; there is nothing to pair")
+    equity = pl.read_parquet(art / "equity.parquet").sort("date")
+    if equity.height == 0:
+        fail(f"run {run_id} has an empty equity curve")
+    first_day: dt.date = equity["date"][0]
+    last_day: dt.date = equity["date"][-1]
+
+    # -- benchmark: registry only, see _benchmark_candidates --
+    if benchmark is not None:
+        bench = by_id.get(benchmark)
+        if bench is None:
+            fail(f"no run matching benchmark {benchmark!r}; see `pkmn runs list`")
+        if not (Path(bench.artifact_path) / "equity.parquet").is_file():
+            fail(f"benchmark run {benchmark} has no equity.parquet under {bench.artifact_path}")
+    else:
+        candidates = _benchmark_candidates(records)
+        if not candidates:
+            fail(
+                "no buy-and-hold benchmark backtest in the run registry; run "
+                "`pkmn backtest` to make one, or pass --benchmark <run-id> "
+                "(a run id, never a directory)"
+            )
+        bench = candidates[0]
+    index = pl.read_parquet(Path(bench.artifact_path) / "equity.parquet")
+
+    # -- final marks: the engine's own mark source (MarketData.marks_on), so a
+    # still-open lot is closed at exactly the price the run's last equity point
+    # was computed from, not at a separately re-derived price.
+    wh = Warehouse(Paths(root=root))
+    market = MarketData.from_warehouse(wh, first_day, last_day)
+    final_marks = {(a.product_id, a.sub_type): v for a, v in market.marks_on(last_day).items()}
+
+    try:
+        report = horizon_report(fills, index, final_marks, last_day)
+    except ValueError as exc:
+        fail(str(exc))
+
+    out_dir = root / "data" / "results" / f"horizon-{run_id}"
+    if out_dir.exists():
+        typer.echo(f"warning: overwriting existing results in {out_dir}", err=True)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    payload: dict[str, Any] = {
+        "backtest_run_id": run_id,
+        "strategy": run.strategy,
+        "benchmark_run_id": bench.run_id,
+        "benchmark_strategy": bench.strategy,
+        "benchmark_artifact": bench.artifact_path,
+        "start": first_day.isoformat(),
+        "last_day": last_day.isoformat(),
+        "n_trips": len(report.trips),
+        "n_open": sum(1 for t in report.trips if t.still_open),
+        "median_edge": report.median_edge,
+        "mean_edge": report.mean_edge,
+        "win_rate": report.win_rate,
+        "holding_buckets": report.holding_buckets,
+        "edge_by_bucket": report.edge_by_bucket,
+        "trips": [
+            {
+                "product_id": t.product_id,
+                "sub_type": t.sub_type,
+                "entry": t.entry.isoformat(),
+                "exit": t.exit.isoformat(),
+                "holding_days": t.holding_days,
+                "quantity": t.quantity,
+                "strategy_return": t.strategy_return,
+                "index_return": t.index_return,
+                "edge": t.edge,
+                "still_open": t.still_open,
+            }
+            for t in report.trips
+        ],
+    }
+    (out_dir / "horizon.json").write_text(json.dumps(payload, indent=2, default=str))
+    (out_dir / "report.md").write_text(_horizon_report_md(report, run, bench, first_day, last_day))
+
+    flat: dict[str, float] = {
+        "n_trips": float(len(report.trips)),
+        "median_edge": report.median_edge,
+        "mean_edge": report.mean_edge,
+        "win_rate": report.win_rate,
+    }
+    for bucket, edge in report.edge_by_bucket.items():
+        flat[f"median_edge_{HORIZON_BUCKET_SLUGS[bucket]}"] = edge
+    recorded = record_run(
+        root=root,
+        command="horizon",
+        strategy=run.strategy,
+        config={
+            "command": "horizon",
+            "backtest_run_id": run_id,
+            "benchmark_run_id": bench.run_id,
+            "benchmark_artifact": bench.artifact_path,
+            "start": first_day.isoformat(),
+            "end": last_day.isoformat(),
+        },
+        results=flat,
+        artifact_path=out_dir,
+        warehouse=wh,
+    )
+    if recorded is not None:
+        typer.echo(f"run recorded: {recorded}")
+    typer.echo(f"{len(report.trips)} round trips vs benchmark {bench.run_id} ({bench.strategy})")
+    typer.echo(_horizon_headline(report))
+    typer.echo(f"median edge (all trips): {report.median_edge:+.2%}")
     typer.echo(f"results written to {out_dir}")
 
 
