@@ -1042,6 +1042,20 @@ def _horizon_report_md(
         f"Backtest run `{run.run_id}` (`{run.strategy}`) vs benchmark run "
         f"`{bench.run_id}` (`{bench.strategy}`), {first_day} .. {last_day}.",
         "",
+        f"Benchmark provenance: recorded {bench.recorded_at}, git "
+        f"`{bench.git_sha or 'unknown'}`{'*' if bench.git_dirty else ''}. Buy-and-hold's",
+        "allocation rule changed on this branch, so the strategy name alone does",
+        "not identify the bar -- the sha does.",
+        "",
+    ]
+    if bench.git_sha != run.git_sha:
+        lines += [
+            f"**Warning: the benchmark was produced at git `{bench.git_sha or 'unknown'}` "
+            f"but this backtest at `{run.git_sha or 'unknown'}`.** Check the two curves",
+            "were computed under the same buy-and-hold rule before trusting the edges.",
+            "",
+        ]
+    lines += [
         "Every OTHER report in this project scores a strategy against one",
         "28-month buy-and-hold, which measures exposure time as much as skill.",
         "Here each round trip is scored against holding the sealed index over",
@@ -1145,7 +1159,34 @@ def horizon(
                 "(a run id, never a directory)"
             )
         bench = candidates[0]
-    index = pl.read_parquet(Path(bench.artifact_path) / "equity.parquet")
+
+    index = pl.read_parquet(Path(bench.artifact_path) / "equity.parquet").sort("date")
+    if index.height == 0:
+        fail(f"benchmark run {bench.run_id} has an empty equity curve")
+    index_first: dt.date = index["date"][0]
+    index_last: dt.date = index["date"][-1]
+    # A benchmark that does not SPAN the run's window silently corrupts every
+    # trip: horizon.py's _index_at guards only the left edge, so past the
+    # curve's end it carries the last available value forward and a trip that
+    # ran four months past the benchmark's end is scored as if the index moved
+    # 0% over those months. That is reachable on the DEFAULT path, not just
+    # --benchmark: the newest buy-and-hold backtest may well be a two-month
+    # ad-hoc run. Refuse rather than under-report the bar.
+    if index_first > first_day or index_last < last_day:
+        fail(
+            f"benchmark run {bench.run_id} covers {index_first} .. {index_last}, which does "
+            f"not span the run's window {first_day} .. {last_day}; every trip outside that "
+            "range would be scored against a flat index. Pass --benchmark <run-id> for a "
+            "buy-and-hold run covering the whole window."
+        )
+    if bench.git_sha != run.git_sha:
+        typer.echo(
+            f"warning: benchmark run {bench.run_id} was produced at git "
+            f"{bench.git_sha or 'unknown'} but this backtest at {run.git_sha or 'unknown'}; "
+            "buy-and-hold's allocation rule has changed on this branch, so check the two "
+            "curves are comparable",
+            err=True,
+        )
 
     # -- final marks: the engine's own mark source (MarketData.marks_on), so a
     # still-open lot is closed at exactly the price the run's last equity point
@@ -1164,12 +1205,30 @@ def horizon(
         typer.echo(f"warning: overwriting existing results in {out_dir}", err=True)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    payload: dict[str, Any] = {
-        "backtest_run_id": run_id,
-        "strategy": run.strategy,
+    # Which BUILD of buy-and-hold produced this bar. Task 1 of this branch
+    # rewrote buy-and-hold's allocation rule, so "buy-and-hold-sealed" alone
+    # does not identify a benchmark: a pre-Task-1 run is a valid most-recent
+    # candidate measured under a different rule. The git sha + recorded_at +
+    # both windows make that recoverable from the artifact instead of only
+    # from the registry.
+    bench_info: dict[str, Any] = {
         "benchmark_run_id": bench.run_id,
         "benchmark_strategy": bench.strategy,
         "benchmark_artifact": bench.artifact_path,
+        "benchmark_git_sha": bench.git_sha,
+        "benchmark_git_dirty": bench.git_dirty,
+        "benchmark_recorded_at": bench.recorded_at,
+        "benchmark_config_start": bench.config.get("start"),
+        "benchmark_config_end": bench.config.get("end"),
+        "benchmark_index_start": index_first.isoformat(),
+        "benchmark_index_end": index_last.isoformat(),
+    }
+
+    payload: dict[str, Any] = {
+        "backtest_run_id": run_id,
+        "strategy": run.strategy,
+        "git_sha": run.git_sha,
+        **bench_info,
         "start": first_day.isoformat(),
         "last_day": last_day.isoformat(),
         "n_trips": len(report.trips),
@@ -1213,8 +1272,7 @@ def horizon(
         config={
             "command": "horizon",
             "backtest_run_id": run_id,
-            "benchmark_run_id": bench.run_id,
-            "benchmark_artifact": bench.artifact_path,
+            **bench_info,
             "start": first_day.isoformat(),
             "end": last_day.isoformat(),
         },

@@ -32,6 +32,11 @@ FINAL_MARK = MARKET[-1]  # 35.0
 
 RUN_ID = "20260801T120000Z-aaa111"
 BENCH_ID = "20260801T110000Z-bbb222"
+# A second, OLDER, fully valid buy-and-hold benchmark. Its curve moves five
+# times as fast as BENCH_ID's, so which one the resolver picks is visible in
+# every trip's index_return -- not just in the recorded id.
+OLDER_BENCH_ID = "20260801T090000Z-eee555"
+OLDER_BENCH_EQUITY = [200.0 * (1.0 + 0.05 * i) for i in range(26)]
 
 FILLS_SCHEMA = {
     "day": pl.Date,
@@ -116,13 +121,16 @@ def record(
     command: str = "backtest",
     config: dict[str, Any] | None = None,
     recorded_at: str | None = None,
+    git_sha: str = "abc1234",
 ) -> dict[str, Any]:
     return {
         "run_id": run_id,
+        # recorded_at derives from the id's hour so "newest first" is readable
+        # straight off the constants: BENCH_ID is 11:00, OLDER_BENCH_ID 09:00.
         "recorded_at": recorded_at or f"2026-08-01T{run_id[9:11]}:00:00+00:00",
         "command": command,
         "strategy": strategy,
-        "git_sha": "abc1234",
+        "git_sha": git_sha,
         "git_dirty": False,
         "config_hash": "deadbeef",
         "config": config or {},
@@ -138,7 +146,11 @@ def write_registry(root: Path, records: list[dict[str, Any]]) -> None:
     reg.write_text("".join(json.dumps(r, sort_keys=True) + "\n" for r in records))
 
 
-def seed(root: Path, extra_records: list[dict[str, Any]] | None = None) -> None:
+def seed(
+    root: Path,
+    extra_records: list[dict[str, Any]] | None = None,
+    bench_git_sha: str = "abc1234",
+) -> None:
     """A strategy run (fills + equity) and a buy-and-hold benchmark run."""
     seed_warehouse(root)
     results = root / "data" / "results"
@@ -146,11 +158,12 @@ def seed(root: Path, extra_records: list[dict[str, Any]] | None = None) -> None:
     write_equity(results / RUN_ID, [1000.0 + 10.0 * i for i in range(len(WEEKS))])
     # Benchmark index: 100 * (1 + 0.01 * i) -- exactly computable returns.
     write_equity(results / BENCH_ID, [100.0 * (1.0 + 0.01 * i) for i in range(len(WEEKS))])
+    window = {"start": START.isoformat(), "end": LAST_DAY.isoformat()}
     write_registry(
         root,
         [
-            record(root, BENCH_ID, "buy-and-hold-sealed"),
-            record(root, RUN_ID, "sealed-accumulation"),
+            record(root, BENCH_ID, "buy-and-hold-sealed", config=window, git_sha=bench_git_sha),
+            record(root, RUN_ID, "sealed-accumulation", config=window),
             *(extra_records or []),
         ],
     )
@@ -226,21 +239,25 @@ def test_horizon_resolves_benchmark_through_the_registry(tmp_path: Path) -> None
     stale pre-swap artifact and a wrong Reality Check p-value was published.
     This test plants exactly that trap: a stale directory whose curve is
     LONGER than the real benchmark's and whose index returns are different,
-    a newer non-benchmark backtest, and a newer buy-and-hold run tagged
-    `benchmark_for`. Only the registry rule picks the right one.
+    a newer non-benchmark backtest, a newer buy-and-hold run tagged
+    `benchmark_for`, and an OLDER valid buy-and-hold run. Only the registry
+    rule -- filters plus newest-first -- picks the right one.
     """
     other_id = "20260801T130000Z-ccc333"  # newer, but not buy-and-hold
     paired_id = "20260801T140000Z-ddd444"  # newer buy-and-hold, but a sidecar
+    older_id = OLDER_BENCH_ID  # valid buy-and-hold, but older than BENCH_ID
     seed(
         tmp_path,
         extra_records=[
             record(tmp_path, other_id, "sealed-accumulation"),
             record(tmp_path, paired_id, "buy-and-hold-sealed", config={"benchmark_for": other_id}),
+            record(tmp_path, older_id, "buy-and-hold-sealed"),
         ],
     )
     results = tmp_path / "data" / "results"
     write_equity(results / other_id, [500.0] * len(WEEKS))
     write_equity(results / paired_id, [700.0 + i for i in range(len(WEEKS))])
+    write_equity(results / older_id, OLDER_BENCH_EQUITY)
 
     # The glob bait: a longer, flat-named curve with a DIFFERENT index return.
     stale = results / "buy-and-hold-sealed-2024-03-01-2026-06-30"
@@ -260,6 +277,104 @@ def test_horizon_resolves_benchmark_through_the_registry(tmp_path: Path) -> None
     # The registry benchmark's index return, not the stale directory's and not
     # the paired sidecar's.
     assert closed["index_return"] == 1.10 - 1.0
+
+
+def test_horizon_picks_the_most_recent_benchmark(tmp_path: Path) -> None:
+    """Two equally valid buy-and-hold benchmarks: the newer one must win.
+
+    The filters alone cannot decide this -- both records pass every one of
+    them -- so this is the only test that observes the newest-first sort.
+    Resolving to the older record IS "resolve to a stale benchmark", the
+    failure this command was written to prevent, so the assertion checks the
+    resulting index_return and not merely the recorded id.
+    """
+    seed(tmp_path, extra_records=[record(tmp_path, OLDER_BENCH_ID, "buy-and-hold-sealed")])
+    write_equity(tmp_path / "data" / "results" / OLDER_BENCH_ID, OLDER_BENCH_EQUITY)
+
+    result = run_horizon(tmp_path)  # no --benchmark
+    assert result.exit_code == 0, result.output
+
+    payload = read_payload(tmp_path)
+    assert payload["benchmark_run_id"] == BENCH_ID
+    closed = min(payload["trips"], key=lambda t: t["entry"])
+    # BENCH_ID's index over WEEKS[0] .. WEEKS[10] is 110/100 - 1 = 0.10;
+    # OLDER_BENCH_ID's is 300/200 - 1 = 0.50.
+    assert closed["index_return"] == 1.10 - 1.0
+    assert closed["index_return"] != 300.0 / 200.0 - 1.0
+
+
+def test_horizon_rejects_benchmark_that_ends_before_the_run(tmp_path: Path) -> None:
+    """A benchmark truncated inside the run's window scores every later trip
+    against a FLAT index: horizon.py's _index_at carries the last value
+    forward past the curve's end, so a 140-day trip gets index_return 0.0 and
+    the reported edge is inflated by the whole index move. Refuse it."""
+    seed(tmp_path)
+    short = tmp_path / "data" / "results" / BENCH_ID
+    pl.DataFrame(
+        {"date": WEEKS[:5], "equity": [100.0 * (1.0 + 0.01 * i) for i in range(5)]}
+    ).write_parquet(short / "equity.parquet")
+
+    result = run_horizon(tmp_path, "--benchmark", BENCH_ID)
+    assert result.exit_code != 0, result.output
+    assert "does not span" in result.output
+    assert str(WEEKS[4]) in result.output  # the benchmark's own window
+    assert str(LAST_DAY) in result.output  # the run's window
+    assert "Traceback" not in result.output
+    assert not (tmp_path / "data" / "results" / f"horizon-{RUN_ID}").exists()
+
+
+def test_horizon_rejects_benchmark_that_starts_after_the_run(tmp_path: Path) -> None:
+    seed(tmp_path)
+    late = tmp_path / "data" / "results" / BENCH_ID
+    pl.DataFrame(
+        {"date": WEEKS[3:], "equity": [100.0 + i for i in range(len(WEEKS) - 3)]}
+    ).write_parquet(late / "equity.parquet")
+
+    result = run_horizon(tmp_path, "--benchmark", BENCH_ID)
+    assert result.exit_code != 0, result.output
+    assert "does not span" in result.output
+    assert "Traceback" not in result.output
+
+
+def test_horizon_rejects_short_benchmark_on_the_default_path(tmp_path: Path) -> None:
+    """The coverage guard must hold without --benchmark too: the newest
+    buy-and-hold backtest is routinely a short ad-hoc run (CLAUDE.md's own
+    smoke test is a two-month window)."""
+    seed(tmp_path)
+    pl.DataFrame({"date": WEEKS[:5], "equity": [100.0] * 5}).write_parquet(
+        tmp_path / "data" / "results" / BENCH_ID / "equity.parquet"
+    )
+    result = run_horizon(tmp_path)
+    assert result.exit_code != 0, result.output
+    assert "does not span" in result.output
+
+
+def test_horizon_records_benchmark_provenance(tmp_path: Path) -> None:
+    """`buy-and-hold-sealed` does not identify a benchmark: Task 1 of this
+    branch rewrote the allocation rule, so the artifact must say WHICH build
+    produced the bar."""
+    seed(tmp_path)
+    assert run_horizon(tmp_path, "--benchmark", BENCH_ID).exit_code == 0
+    payload = read_payload(tmp_path)
+    assert payload["benchmark_git_sha"] == "abc1234"
+    assert payload["benchmark_git_dirty"] is False
+    assert payload["benchmark_recorded_at"] == "2026-08-01T11:00:00+00:00"
+    assert payload["benchmark_config_start"] == START.isoformat()
+    assert payload["benchmark_config_end"] == LAST_DAY.isoformat()
+    assert payload["benchmark_index_start"] == START.isoformat()
+    assert payload["benchmark_index_end"] == LAST_DAY.isoformat()
+
+    report = (tmp_path / "data" / "results" / f"horizon-{RUN_ID}" / "report.md").read_text()
+    assert "abc1234" in report
+
+
+def test_horizon_warns_when_benchmark_git_sha_differs(tmp_path: Path) -> None:
+    seed(tmp_path, bench_git_sha="0000dead")
+    result = run_horizon(tmp_path, "--benchmark", BENCH_ID)
+    assert result.exit_code == 0, result.output
+    assert "0000dead" in result.output
+    report = (tmp_path / "data" / "results" / f"horizon-{RUN_ID}" / "report.md").read_text()
+    assert "Warning" in report and "0000dead" in report
 
 
 def test_horizon_unknown_run_id(tmp_path: Path) -> None:
@@ -349,6 +464,10 @@ def test_horizon_records_run(tmp_path: Path) -> None:
     assert rec.strategy == "sealed-accumulation"
     assert rec.config["backtest_run_id"] == RUN_ID
     assert rec.config["benchmark_run_id"] == BENCH_ID
+    # Provenance lands in the registry too, not only in horizon.json.
+    assert rec.config["benchmark_git_sha"] == "abc1234"
+    assert rec.config["benchmark_recorded_at"] == "2026-08-01T11:00:00+00:00"
+    assert rec.config["benchmark_index_end"] == LAST_DAY.isoformat()
     assert rec.results["n_trips"] == 2.0
     assert "median_edge" in rec.results
     assert "median_edge_1_3m" in rec.results
