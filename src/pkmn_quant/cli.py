@@ -1083,7 +1083,8 @@ def _horizon_report_md(
         "| metric | value |",
         "|---|---|",
         f"| round trips | {len(report.trips)} |",
-        f"| still open at {last_day} (closed at that day's mark) | {n_open} |",
+        f"| still open at {last_day} (closed at that day's mark, net of a "
+        f"modelled exit) | {n_open} |",
         f"| median edge | {report.median_edge:+.2%} |",
         f"| mean edge | {report.mean_edge:+.2%} |",
         f"| win rate (edge > 0) | {report.win_rate:.1%} |",
@@ -1101,6 +1102,11 @@ def _horizon_report_md(
         "",
         "Caveats: marks on this data are smoothed (thin markets, carry-forward",
         "marks), so a still-open trip's return is a mark, not a realized exit.",
+        "That exit IS charged, though -- fees, shipping and the sell-side walk",
+        "through the run's own cost model -- because a closed trip's proceeds",
+        "are already net and scoring open ones gross would hand them roughly 13",
+        "free points. The modelled exit ignores the per-day liquidity cap, so a",
+        "large lot is charged as one same-day sale.",
         "A per-trip edge is not a portfolio return either -- it ignores how much",
         "capital sat idle between trips.",
         "",
@@ -1128,6 +1134,7 @@ def horizon(
     registry entry like every other run.
     """
     from pkmn_quant.data.warehouse import Warehouse
+    from pkmn_quant.engine.costs import CostModel
     from pkmn_quant.engine.data import MarketData
     from pkmn_quant.research.horizon import horizon_report
     from pkmn_quant.research.runs import load_runs, record_run
@@ -1208,10 +1215,25 @@ def horizon(
     # was computed from, not at a separately re-derived price.
     wh = Warehouse(Paths(root=root))
     market = MarketData.from_warehouse(wh, first_day, last_day)
-    final_marks = {(a.product_id, a.sub_type): v for a, v in market.marks_on(last_day).items()}
+    marks_on_last = market.marks_on(last_day)
+    final_marks = {(a.product_id, a.sub_type): v for a, v in marks_on_last.items()}
+    # ...and last_day's cheapest listings, so the modelled exit on a still-open
+    # lot carries sell-side impact and not only fees. Only assets that printed
+    # on last_day have a quote; the rest simply pay no walk.
+    final_lows = {
+        (a.product_id, a.sub_type): q.low
+        for a, q in market.quotes_on(last_day, list(marks_on_last)).items()
+        if q.low is not None
+    }
+    # The run's own cost model: run_single_backtest builds CostModel(
+    # impact_enabled=impact) and varies nothing else, and `impact` is in the
+    # registry config. A still-open lot is scored net of a modelled exit
+    # through it — closed trips already paid fees, shipping and impact, so
+    # scoring open ones gross put them ~13 points ahead for free.
+    run_costs = CostModel(impact_enabled=bool(run.config.get("impact", True)))
 
     try:
-        report = horizon_report(fills, index, final_marks, last_day)
+        report = horizon_report(fills, index, final_marks, last_day, run_costs, final_lows)
     except ValueError as exc:
         fail(str(exc))
 

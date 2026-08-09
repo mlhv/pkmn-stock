@@ -83,6 +83,15 @@ FILLS: list[dict[str, Any]] = [
 CLOSED_BASIS = 10.0 + 0.5 / 2  # 10.25
 CLOSED_PROCEEDS = 20.0 - 1.0 / 2  # 19.5
 OPEN_BASIS = 12.0
+# The still-open lot (1 unit) exits at LAST_DAY's mark net of a MODELLED sale
+# through the run's CostModel -- the registry config carries no "impact" key,
+# so it defaults to on, matching `pkmn backtest`.
+#   fees   = 1 * 35.00 * 0.1275 + 1.00 shipping = 5.4625
+#   impact = sell walk from market 35.00 toward price_row's low of 1.00:
+#            spread 34, q_cap for a $35 sale is 8 (tier <50)
+#            -> 34 * 1 * (0 + 1) / (2 * 8) = 2.125
+#   proceeds/unit = 35.00 - (5.4625 + 2.125) / 1 = 27.4125
+OPEN_PROCEEDS = FINAL_MARK - (FINAL_MARK * 0.1275 + 1.0 + 34.0 / 16.0)
 
 
 def seed_warehouse(root: Path) -> None:
@@ -200,8 +209,12 @@ def test_horizon_end_to_end(tmp_path: Path) -> None:
     assert open_trip["still_open"] is True
     assert open_trip["exit"] == LAST_DAY.isoformat()
     assert open_trip["holding_days"] == 140
-    # The still-open lot is closed at the WAREHOUSE mark on the last equity day.
-    assert open_trip["strategy_return"] == FINAL_MARK / OPEN_BASIS - 1.0
+    # The still-open lot is closed at the WAREHOUSE mark on the last equity
+    # day, NET of a modelled exit through the run's own CostModel -- a closed
+    # trip's proceeds are already net, so scoring this one gross would have
+    # handed it ~13 free points. See OPEN_PROCEEDS for the derivation.
+    assert open_trip["strategy_return"] == OPEN_PROCEEDS / OPEN_BASIS - 1.0
+    assert open_trip["strategy_return"] < FINAL_MARK / OPEN_BASIS - 1.0  # the gross number
 
     report = (out / "report.md").read_text()
     assert "1-3m" in report

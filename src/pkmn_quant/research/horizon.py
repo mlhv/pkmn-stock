@@ -9,7 +9,9 @@ entry and exit dates — the index series is just the benchmark run's
 ``equity.parquet``, read as-is.
 
 Pure Python: no engine changes, no C++, no parity concerns. It reads run
-artifacts (a fills frame and an index/equity frame) after the fact.
+artifacts (a fills frame and an index/equity frame) after the fact, plus the
+run's CostModel so a still-open lot is scored net of a modelled exit rather
+than gross against closed trips that already paid one.
 """
 
 from __future__ import annotations
@@ -22,6 +24,8 @@ from datetime import date
 from typing import Any
 
 import polars as pl
+
+from pkmn_quant.engine.costs import CostModel
 
 _BUCKET_LT_1M = "<1m"
 _BUCKET_1_3M = "1-3m"
@@ -80,13 +84,20 @@ def pair_round_trips(
 ) -> list[tuple[int, str, date, date, int, int, float, float, bool]]:
     """FIFO-pair buys and sells per ``(product_id, sub_type)``.
 
-    Returns one tuple per closed round trip: ``(product_id, sub_type, entry,
-    exit, holding_days, quantity, strategy_return_numerator_basis,
-    strategy_return_numerator_proceeds, still_open)`` — actually returns the
-    per-unit basis and proceeds so callers can compute strategy_return
-    without re-deriving cost apportionment. Open lots at the end of the
-    frame are NOT included here; the caller closes them against
-    ``final_marks``.
+    Returns one tuple per trip::
+
+        (product_id, sub_type, entry, exit, holding_days, quantity,
+         basis_per_unit, proceeds_per_unit, still_open)
+
+    ``basis_per_unit`` and ``proceeds_per_unit`` are per-unit rather than
+    per-trip so callers get ``strategy_return`` without re-deriving the cost
+    apportionment.
+
+    Lots still open at the end of the frame ARE included, flagged
+    ``still_open=True`` with ``exit == entry``, ``holding_days == 0`` and
+    ``proceeds_per_unit == 0.0`` — placeholders the caller must replace,
+    which ``horizon_report`` does from ``final_marks`` net of a modelled
+    exit. Nothing here is a usable return on its own.
     """
     ordered = fills.sort("day", maintain_order=True)
     open_lots: dict[tuple[int, str], deque[_Lot]] = {}
@@ -172,6 +183,8 @@ def horizon_report(
     index: pl.DataFrame,
     final_marks: dict[tuple[int, str], float],
     last_day: date,
+    costs: CostModel,
+    final_lows: dict[tuple[int, str], float] | None = None,
 ) -> HorizonReport:
     """Pair round trips from ``fills`` and score each against the sealed
     index over that trip's own entry/exit window.
@@ -181,6 +194,32 @@ def horizon_report(
     any lot still open at ``last_day``, keyed ``(product_id, sub_type)``;
     a still-open lot with no entry there raises rather than fabricating a
     0% return.
+
+    ``costs`` prices that hypothetical exit, and is required rather than
+    defaulted because getting it wrong is silent. A closed trip's proceeds
+    are already net — the engine charged ~12.75% seller fees, shipping and
+    impact, and they are in the fills frame — so scoring an open lot at the
+    raw mark flattered it by roughly 13 points against every closed trip
+    beside it. That is not a rounding concern: it lands on the two least-bad
+    strategies hardest (10 of sealed-accumulation's 33 trips, 4 of
+    cost-aware-reversion's 41 in-band), i.e. exactly where a spurious edge
+    would matter. Pass the same CostModel the run used;
+    ``CostModel(impact_enabled=run.config["impact"])`` reproduces it, since
+    `run_single_backtest` builds it that way and never varies the other
+    knobs.
+
+    ``final_lows`` supplies ``last_day``'s cheapest-listing quote per asset so
+    the modelled exit can carry sell-side impact too; omit it and only fees
+    and shipping are charged.
+
+    Two honest limits of the modelled exit, neither of which the old gross
+    treatment avoided — it just also omitted the fees:
+
+    * It ignores the per-day liquidity cap, so a large lot is charged as one
+      same-day sale rather than the several days it would really take.
+    * It is a mark, not a fill. The standing mark-smoothing caveat applies:
+      a still-open trip's return is what the last print says, not what a
+      buyer paid.
     """
     index_sorted = index.sort("date")
     raw_trips = pair_round_trips(fills)
@@ -204,7 +243,18 @@ def horizon_report(
                     f"no final mark for still-open position product_id={product_id} "
                     f"sub_type={sub_type!r}"
                 )
-            proceeds_per_unit = float(final_marks[key])
+            mark = float(final_marks[key])
+            # Model the exit the same way the engine charges a real one
+            # (execution.py _fill_sell): fees on the proceeds, one shipping
+            # charge on the line, and the walk down toward the cheapest
+            # listing when that quote is available. Identical shape to the
+            # closed-trip line above, so open and closed trips are on one
+            # scale.
+            exit_fees = quantity * mark * costs.fee_rate + costs.shipping_per_line
+            exit_impact = costs.sell_impact(
+                mark, None if final_lows is None else final_lows.get(key), quantity
+            )
+            proceeds_per_unit = mark - (exit_fees + exit_impact) / quantity
             exit_date = last_day
             holding_days = (last_day - entry).days
 
