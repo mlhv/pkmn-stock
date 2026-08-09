@@ -439,6 +439,65 @@ tcgcsv.com). Design spec: `docs/superpowers/specs/2026-06-09-pkmn-quant-design.m
   research result. Full findings in `docs/research-findings-2026-07.md`
   (Full set coverage section) — that section supersedes **every** earlier
   section in the file, all of which were computed on 23 groups.
+- Instrument repair + horizon-matched evaluation complete on
+  feat/instrument-repair-horizon (`uv sync --group api && uv run pytest`
+  reads **583 passed + 1 skipped** without the dashboard group and **588
+  passed** once it is installed — the skip is `tests/test_dashboard.py`'s 5
+  tests, which also pass standalone via `uv run --group dashboard pytest
+  tests/test_dashboard.py`; ruff clean, mypy clean over 57 source files;
+  26 web tests + a clean `npm run build`; 37 Catch2 tests via ctest). Two broken measurement instruments repaired and one
+  missing measurement added, all on the same 217-group, 908-day warehouse and
+  the same 2024-03-01..2026-06-30 window, impact-on. **(1) The benchmark is
+  now actually invested.** `buy_and_hold` gained a liquidity screen
+  (`research/screen.py`: print density desc, relative spread `(mid-low)/mid`
+  asc, then `product_id`/`sub_type`) plus an equal-dollar allocation and a
+  deficit sweep, C++-ported bit-for-bit: **4.7% → 99.9% of capital deployed**
+  ($7,423.07 notional + $38.00 fees + $2,530.36 impact = $9,991.43 of
+  $10,000), total return **+10.53% → +24.93%** (run
+  `20260807T135424Z-8362bc`, 38 fills, Sharpe 0.63, max drawdown −25.73%;
+  the figure carries an implicit `warmup_days=0` — see Conventions).
+  **(2) Buys price at `max(market, low)`.** tcgcsv's `market` is
+  sales-derived and `low` is the cheapest current listing, so `market < low`
+  is ordinary (2.19M in-window rows) and the old model priced fills at a
+  number nothing was offered at; this **closes findings-doc open question 2**
+  — the answer was neither "data defect" nor "thin print" but a category
+  error in the consumer. **(3) `pkmn horizon <run-id>`** (`research/
+  horizon.py`) pairs a backtest's fills into FIFO round trips and scores each
+  against holding the sealed index over that trip's **own** entry/exit dates.
+  Full zoo re-run, all six strategies, before → after (before = the Full set
+  coverage figures, same universe/window/cost regime; the buy floor is the
+  only instrument difference for the strategy rows): sealed-accumulation
+  −8.59% → −10.31%; xs-momentum −38.72% → −54.46%; ml-ranker −81.64% →
+  −84.48%; ml-ranker-v2 −99.81% → −99.43%; cost-aware-reversion −98.70% →
+  −99.98%; dip-buyer −99.80% → −100.00%. **Five of six got worse and that is
+  the instrument working, not a regression** — they now pay the cheapest
+  listing that actually existed (the design spec predicted this in writing
+  and committed to not treating it as failure); ml-ranker-v2's small
+  improvement is noise at that magnitude. `pkmn evaluate`
+  (`20260809T013934Z-a453f5`, 660 aligned days, against the repaired
+  benchmark): joint White's Reality Check **p = 1.0000**, every deflated
+  Sharpe far below the 0.5 coin-flip point — the move from the prior
+  branch's 0.8038 is the bar getting harder, not the strategies getting
+  worse. `parity_full.py` PASSes bit-for-bit on all five native strategies
+  after both repairs (the ml-ranker bridge case did **not** appear in that
+  run's output and is not claimed re-verified). **Horizon result, the number
+  this branch exists to produce: over the owner's target 1-3 month band,
+  none of the six beats holding sealed, and not narrowly.** Median 1-3m edge
+  per trade: cost-aware-reversion −16.57% (41 trips), ml-ranker −37.96%
+  (109), xs-momentum −45.33% (99), dip-buyer −51.21% (116), ml-ranker-v2
+  −84.32% (20, and it beat the index on **0 of 20** trades). **The one
+  positive 1-3m figure is sealed-accumulation's +13.90% over exactly ONE
+  round trip**, against its own all-trip median of −10.98% — never quote it
+  without the sample size; same for xs-momentum's 3-6m +55.40% (5 trips) and
+  sealed-accumulation's 3-6m +6.91% (8). Method caveat that changes what
+  these mean: **walk-forward artifacts carry no `fills.parquet`**, so horizon
+  ran on **default-parameter backtests** over the same window, not the
+  walk-forward parameter sets. Honest conclusion: this branch delivered a bar
+  worth measuring against, fills priced at something you could transact at,
+  and a per-trade measurement matched to the holding period that matters —
+  and **no strategy**. Full findings in `docs/research-findings-2026-07.md`
+  (Instrument repair section), which supersedes the Full set coverage
+  section's benchmark figure and every strategy number in it.
 
 ## Commands
 
@@ -469,6 +528,8 @@ uv run pkmn daily --skip-ingest --paper                  # paper mode dry-run
 uv run pkmn runs list                                     # experiment registry: recorded runs
 uv run pkmn runs show <run-id>                             # full record for one run
 uv run pkmn evaluate                                     # cross-strategy rigor: CIs, DSR, Reality Check
+uv run pkmn horizon <backtest-run-id>                     # per-trade edge vs holding sealed over each trip's OWN dates
+uv run pkmn horizon <backtest-run-id> --benchmark <run-id> # pin the index run explicitly (registry ids, never a directory)
 uv run pkmn backtest --start ... --end ... --no-impact    # flat-cost, skip market-impact model
 uv run pkmn walkforward --strategy sealed-accumulation --start ... --end ... \
     --trials 15 --engine python                          # reference (slow) Python engine, walkforward only
@@ -526,6 +587,17 @@ uv.lock together).
   `data/runs/registry.jsonl`; `pkmn runs list`/`show` inspect it.
   `stats.py`: seeded bootstrap statistics (CIs, deflated Sharpe, Reality
   Check) feeding `pkmn evaluate` and walkforward reports.
+  `screen.py`: `rank_assets(history, today)` — tradeability ranking (print
+  density desc, then relative spread `(mid-low)/mid` asc, then
+  `product_id`/`sub_type`), leakage-bounded by `today` and mirrored
+  bit-for-bit by the C++ `BuyAndHold`. Used by the benchmark's allocation
+  today; it is also the machinery the not-yet-run liquidity-floor experiment
+  (findings-doc open question 3) needs, so keep it strategy-agnostic. Any
+  change to the sort key or the undefined-spread rule must land on both
+  language sides in the same commit. `horizon.py`: FIFO round-trip pairing
+  of a backtest's `fills.parquet` plus per-trip edge against the sealed
+  index over each trip's own entry/exit dates (`horizon_report`); Python-only
+  by design — it reads artifacts after a run and is not on the hot path.
 - `src/pkmn_quant/live/` — `pkmn signals`: one on_bar at the latest warehouse
   date using the last fold's params from the latest walk-forward artifact;
   markdown + JSON reports that carry the strategy's OOS record.
@@ -673,19 +745,66 @@ uv.lock together).
   is preserved as `data/results/evaluate-2026-08-04-stale-benchmark/`, and a
   registry record's own `config.benchmark`/`results.reality_check_p` are the
   authoritative per-run values, not whatever is in the directory today.
+  **Still true as of 2026-08-09: the glob was never removed**
+  (`cli.py:837-860`). The 2026-08-08 evaluate run picked the correct
+  benchmark only because those renames are still in place, so nothing
+  matched. Treat this as armed, not fixed. `pkmn horizon` deliberately does
+  not work this way: it takes benchmark **run ids** from the registry (never
+  a directory) and refuses one whose window does not span the run's.
 - **Buy-and-hold benchmark reference figure, 2024-03-01→2026-06-30,
-  impact-on: +10.53%** (run `20260804T061600Z-37a23f`) on the current
-  217-group universe. The older +186.0% flat-cost / +183.7% impact-on
-  figures are **dead** — they were measured on the 23-group universe and
-  cannot be compared to anything run today. **Do not use +10.53% as a bar
-  either without reading the caveat**: `BuyAndHold` equal-weights the sealed
-  universe with integer quantities, and on 1,315 day-1 sealed assets a
-  $10,000 account gives a $7.60 per-asset budget, so the run deploys only
-  $466.78 (4.7%) and sits 95% in cash for 22 months. Its Sharpe of 6.57 and
-  max drawdown of −0.90% are money-market artifacts, not risk-adjusted
-  quality. The benchmark's sizing rule needs fixing before any wide-universe
-  comparison means anything (see the findings doc's Full set coverage
-  section); until then, state the deployment fraction alongside the return.
+  impact-on, 217-group universe: +24.93%** (run `20260807T135424Z-8362bc`,
+  $10,000, `n_assets=100`). CAGR +10.02%, max drawdown −25.73%, Sharpe
+  0.6336, equity $10,000.00 → $12,492.97, 38 fills. **This is the bar; use
+  it, and state the deployment fraction with it: 99.9% all-in**
+  ($7,423.07 notional + $38.00 fees + $2,530.36 impact = $9,991.43; impact
+  alone is 34.1% of notional under the buy floor). Every earlier benchmark
+  figure is **dead as a comparison point**: +186.0% flat-cost / +183.67%
+  impact-on were the 23-group universe at 63.0% all-in deployment, and
+  +10.53% (`20260804T061600Z-37a23f`) was the 217-group universe at 5.5%
+  all-in — a 95%-cash account whose Sharpe 6.57 and −0.90% drawdown were
+  money-market artifacts. **+24.93% is not "the market fell then recovered"
+  relative to those numbers; the allocation rule changed, not the market**,
+  so never chart the three as a series. Two caveats survive the repair.
+  (a) 38 of the 100 screened assets actually hold units (the pre-floor
+  day-one measurement predicted 73), so the bar is less diversified than
+  designed. (b) **The figure carries an implicit `warmup_days=0`** — the
+  screen ranks on `ctx.history`, so the bar moves with how much history
+  exists at the first bar: measured on the native engine, same window/cash/
+  impact, warmup 0 gives 38 fills / +24.93% (reproducing the run exactly)
+  and warmup 120 gives 42 fills / +16.07%. `pkmn backtest` exposes no
+  `--warmup-days` flag and defaults to 0, while `pkmn walkforward` defaults
+  to 120, so the bar and the walk-forward rows compared against it are not
+  on the same warmup. See the findings doc's Instrument repair section.
+- **The benchmark is deliberately NOT walk-forward-searchable.**
+  `buy-and-hold` stays out of `REGISTRY`; its one knob lives in
+  `BUY_AND_HOLD_PARAMS` (`research/backtest_run.py`, `n_assets`, default
+  100, bounds [1, 10000]) so it is CLI-settable and declarative but has no
+  optuna search space. This is a deliberate deviation from the
+  instrument-repair design spec, which asked for it to be searchable.
+  Reason: buy-and-hold is the bar, not a candidate — tuning the bar to
+  maximise its own return makes every comparison against it self-serving,
+  and tuning it to anything else makes it arbitrary. If you change
+  `n_assets`, you have changed the bar: re-run the benchmark, say so, and
+  do not compare across the change.
+- **Buys price at `max(market, low)`; sells are deliberately asymmetric.**
+  tcgcsv's `market` is derived from completed **sales** while `low`/`mid`/
+  `high` describe current **listings**, so `market < low` is ordinary (2.19M
+  in-window rows), not corrupt — a buy simply cannot execute below the
+  cheapest live offer. `CostModel.buy_impact` floors the base at
+  `max(market, low)` and charges the premium through the **`impact` column**,
+  leaving a fill's `price` as the day's `market` print, then walks toward
+  `mid` from the floored base. A null `low` means no floor, never a guessed
+  one. **No sell-side floor exists and none should be invented**: tcgcsv
+  publishes no bid series (`low`/`mid`/`high` are all ask-side), so a
+  symmetric fix would be fabricating a price. **Marking is also unchanged** —
+  positions mark at `market`, so buying at the ask and marking at the last
+  sale books an immediate unrealised loss; that is correct, not a bug.
+  One consequence to know: the floor is **gated on `impact_enabled`**
+  (`engine/execution.py:86-102`), because the premium has no column to live
+  in with impact off and sizing off a floored base without it cut real
+  quantities up to 10x. So `--no-impact` runs again size and price buys at a
+  sales print that may sit below any live offer — they are a comparability
+  tool, not a model of executable prices.
 - Sharpe/Sortino on this data are inflated by mark smoothing (thin markets,
   carry-forward marks), and the full-set-coverage swap made this **worse,
   not better**: the same carry-forward marks now apply to 31,713 priced

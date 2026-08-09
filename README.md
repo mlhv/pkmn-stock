@@ -6,13 +6,13 @@
 ![Python 3.12](https://img.shields.io/badge/python-3.12-3776ab)
 ![C++20 / nanobind](https://img.shields.io/badge/C%2B%2B20-nanobind-00599c)
 ![mypy strict](https://img.shields.io/badge/mypy-strict-2a6db2)
-![tests](https://img.shields.io/badge/tests-528%20pytest%20%2B%2026%20vitest%20%2B%2025%20Catch2-2ea44f)
+![tests](https://img.shields.io/badge/tests-583%20pytest%20%2B%2026%20vitest%20%2B%2037%20Catch2-2ea44f)
 
 <p align="center">
   <img src="docs/assets/oos_equity.png" alt="Out-of-sample equity: buy-and-hold sealed rises about 151 percent while five active strategies end flat to negative" width="850">
 </p>
 
-*Stitched out-of-sample equity, 2024-08 to 2026-06, **on the 23-group price universe this project used through 2026-08-03**. Each strategy shows its most rigorous available run at that time: sealed-accumulation and ml-ranker include the market-impact cost model, the rest are flat-cost, and the legend says which. Prices now cover all 217 tcgcsv groups and every number in this chart moved — see [Results](#results-walk-forward-out-of-sample-only) below. Regenerate with `uv run --group viz python scripts/render_readme_chart.py`.*
+*Stitched out-of-sample equity, 2024-08 to 2026-06, **on the 23-group price universe this project used through 2026-08-03**. Each strategy shows its most rigorous available run at that time: sealed-accumulation and ml-ranker include the market-impact cost model, the rest are flat-cost, and the legend says which. This chart is kept as a historical artifact and every number in it has since moved twice — prices now cover all 217 tcgcsv groups, and the benchmark and buy-price instruments were repaired on 2026-08-09. See [Results](#results-walk-forward-out-of-sample-only) below for the current figures. Regenerate with `uv run --group viz python scripts/render_readme_chart.py`.*
 
 ## What this is
 
@@ -25,33 +25,53 @@ A quant research system for TCGplayer card prices (via tcgcsv.com), built end to
 - **Walk-forward validation only**: seeded optuna tunes parameters in-sample, they are frozen, then tested strictly out-of-sample. The headline curve contains zero in-sample days and every run reports its overfitting gap.
 - **An experiment registry**: every run appends its config hash, git SHA, data fingerprint, and results to an append-only log (`pkmn runs list` / `pkmn runs show`), so any number in this README is reproducible.
 
-> **The honest headline:** no active strategy has ever beaten buy-and-hold sealed product here, on either universe this project has measured. On the narrow 23-group universe used through 2026-08-03, buy-and-hold returned +183.7% full-period with the impact model on while every active strategy was negative. Widening prices to all 217 groups did not change that ordering — but it did expose that the benchmark itself is a weak bar on the wide universe (it sits 95% in cash, an equal-weight integer-sizing artifact) and that four strategies lose almost everything on it — for two of them (dip-buyer, cost-aware-reversion) traced to thin, quote-inconsistent products entering their candidate set, and for the two ML strategies not diagnosed at all. The system's value is that it can prove and dismantle its own results honestly: out-of-sample discipline, transaction-cost and market-impact realism, an explicit overfitting measurement, and reproducibility from a config hash.
+> **The honest headline:** no active strategy has ever beaten buy-and-hold sealed product here — on either price universe, and now not even scored over its own holding windows. The comparison used to be soft in two ways the project has since fixed: the benchmark deployed only 4.7% of the account (an equal-weight integer-sizing artifact, so it was 95% idle cash), and buys were priced from `market`, a sales-derived print that on 2.19M rows sits *below* the cheapest listing anyone was actually offering. With a liquidity-screened, **99.9%-deployed** benchmark (**+24.93%**, 2024-03 to 2026-06, impact on) and buys floored at `max(market, low)`, all six strategies remain negative — and scored *per round trip against holding sealed over that trip's own entry and exit dates*, the answer over the owner's target 1-3 month window is a clear no: median edge −16.6% to −84.3% per trade on samples of 20-116 trips, beating the index on 0.9%-22% of them. Five of the six also got worse than before the repairs, which is the instrument working: they now pay the cheapest listing that existed. The system's value is that it can prove and dismantle its own results honestly: out-of-sample discipline, transaction-cost and market-impact realism, an explicit overfitting measurement, and reproducibility from a config hash.
 
 ## Results (walk-forward, out-of-sample only)
 
-**Prices cover all 217 tcgcsv groups as of 2026-08-04** (previously 23: sets released since 2024). The universe is derived from what is priced, so widening ingestion widened every strategy's candidate set — 6,671 → 31,713 priced products, 3.2M → 36.4M price rows — and every number below moved. Both columns are **impact-on** over the identical window (2024-03-01..2026-06-30, 11 folds, 15 trials), so the only difference is the universe. Run IDs are in `data/runs/registry.jsonl` and cited in the findings doc.
+**Prices cover all 217 tcgcsv groups as of 2026-08-04** (previously 23: sets released since 2024). The universe is derived from what is priced, so widening ingestion widened every strategy's candidate set — 6,671 → 31,713 priced products, 3.2M → 36.4M price rows. **Two measurement instruments were then repaired (2026-08-09):** the benchmark's allocation rule (4.7% → 99.9% of capital deployed) and the price a buy executes at (now floored at the cheapest live listing). All three columns are **impact-on** over the identical window (2024-03-01..2026-06-30, 11 folds, 15 trials). Run IDs are in `data/runs/registry.jsonl` and cited in the findings doc.
 
-| Strategy             | Stitched OOS, 23 groups | Stitched OOS, 217 groups |
-|----------------------|-------------------------:|--------------------------:|
-| buy-and-hold sealed  | *(full-period backtest)* **+183.7%** | *(full-period backtest)* **+10.5%** |
-| sealed-accumulation  | −7.4%                    | **−8.6%**                  |
-| ml-ranker            | −5.1%                    | **−81.6%**                 |
-| xs-momentum          | −9.3%                    | **−38.7%**                 |
-| dip-buyer            | −21.2%                   | **−99.8%**                 |
-| cost-aware-reversion | −22.5%                   | **−98.7%**                 |
-| ml-ranker-v2         | −23.2%                   | **−99.8%**                 |
+| Strategy             | Stitched OOS, 23 groups | Stitched OOS, 217 groups | Stitched OOS, 217 groups + repaired instruments |
+|----------------------|-------------------------:|--------------------------:|--------------------------:|
+| buy-and-hold sealed  | *(backtest)* **+183.7%**<br>60.1% deployed | *(backtest)* **+10.5%**<br>4.7% deployed | *(backtest)* **+24.9%**<br>**99.9% deployed** |
+| sealed-accumulation  | −7.4%                    | −8.6%                     | **−10.3%**                 |
+| ml-ranker            | −5.1%                    | −81.6%                    | **−84.5%**                 |
+| xs-momentum          | −9.3%                    | −38.7%                    | **−54.5%**                 |
+| dip-buyer            | −21.2%                   | −99.8%                    | **−100.0%**                |
+| cost-aware-reversion | −22.5%                   | −98.7%                    | **−99.98%**                |
+| ml-ranker-v2         | −23.2%                   | −99.8%                    | **−99.4%**                 |
 
-11 folds each: optimize 180 days in-sample, freeze params, test 60 days out-of-sample, roll, stitch the OOS segments. The overfitting gap (mean IS CAGR minus mean OOS CAGR) is reported on every run. White's Reality Check over the whole zoo is **p = 1.0000 on the 23-group universe and p = 0.8038 on the 217-group one**, each measured against its own era's benchmark — the best candidate does not beat a typical best-of-six luck draw on either. (Both are far from the p ≤ 0.05 bar, but they are not the same number. This project published 1.0000 for both and it was wrong: a recorded run with a registry record, `20260804T184401Z-cf292c`, not a draft — `pkmn evaluate` auto-discovers its benchmark by globbing a directory name, and the stale pre-swap directory was still on disk, so six post-swap strategies were scored against a pre-swap benchmark. The error made the test *harder*, never easier, so nothing published was flattered by it; the corrected run is `20260804T204825Z-fa07b8`. Full correction in the findings doc.)
+**The three benchmark numbers are not comparable to each other as returns.** They are the same command on the same market with three different allocation rules, deploying 60.1%, 4.7% and 99.9% of the account respectively; only the last is a return on a substantially invested position, and it is the only one that should be used as a bar. **Five of the six strategies got worse under the repairs, and that is the instrument working, not a regression** — they now pay the cheapest listing that actually existed instead of a sales print nothing was offered at. (ml-ranker-v2's −99.8% → −99.4% is noise on a near-total loss.)
 
-**Neither headline movement means what it looks like.** The benchmark's fall is mostly a sizing artifact: `BuyAndHold` equal-weights the sealed universe with integer quantities, so 45 → 1,315 day-1 assets took the per-asset budget from $222 to $7.60 and deployed capital from 60.1% to 4.7% of a $10,000 account. Neither run was fully deployed — on the slice actually at risk the two returned +291.7% and +191.1% (gain / all-in capital consumed, i.e. $18,367.25/$6,296.27 and $1,052.73/$550.77; the denominator includes fees and impact, so it is above the 60.1%/4.7% notional), so about 85% of the 17x headline collapse is the sizing rule rather than the assets — that share is the log/Törnqvist decomposition of `return = deployment × invested-slice return`; Shapley gives 80%, and order-dependent decompositions span 63-97%, so deployment dominates on every basis. The obvious "the new products are junk" explanation is falsified: among the 1,133 of 2,389 in-window sealed assets that priced across the whole window, the newly added ones returned a median +212% versus +171% for the pre-existing ones (a survivorship-conditioned sample, and the right one for this question — the benchmark only ever bought day-1-priced assets and held them). The near-total losses of dip-buyer and cost-aware-reversion are adversarial selection — 92-97% of their buy-side impact comes from fills where the day's `market` print sits *below the lowest listing*, and both strategies are by construction maximizers over exactly the quantity that inconsistency corrupts. **Those impact figures come from fixed-parameter diagnostic probes, not from the walk-forward runs in the table**, and the two ML strategies' losses were **not** diagnosed at all. Full derivation, provenance for every derived figure, and the three things that remain unexplained: [docs/research-findings-2026-07.md](docs/research-findings-2026-07.md).
+11 folds each: optimize 180 days in-sample, freeze params, test 60 days out-of-sample, roll, stitch the OOS segments. The overfitting gap (mean IS CAGR minus mean OOS CAGR) is reported on every run. White's Reality Check over the whole zoo is **p = 1.0000 on the 23-group universe, p = 0.8038 on the 217-group one, and p = 1.0000 again against the repaired benchmark** — each measured against its own era's bar, so the three are not a trend; the best candidate does not beat a typical best-of-six luck draw in any of them, and every deflated Sharpe stays far below the 0.5 coin-flip point. (All are far from the p ≤ 0.05 bar, but they are not the same number. This project once published 1.0000 where 0.8038 was correct — a recorded run with a registry record, `20260804T184401Z-cf292c`, not a draft: `pkmn evaluate` auto-discovers its benchmark by globbing a directory name, and the stale pre-swap directory was still on disk, so six post-swap strategies were scored against a pre-swap benchmark. The error made the test *harder*, never easier, so nothing published was flattered by it; the corrected run is `20260804T204825Z-fa07b8`. **That glob is still in the code** — the 2026-08-08 run resolved correctly only because the stale directories stay renamed. Full correction in the findings doc.)
+
+### Does anything beat holding sealed over 1-3 months?
+
+This is the question the project exists to answer, and a stitched 28-month return cannot: it scores a strategy that is in the market a third of the days against one that is in it all of them. `pkmn horizon` pairs a backtest's fills into FIFO round trips and scores each trip against holding the sealed index **over that trip's own entry and exit dates**.
+
+| Strategy | round trips | median edge, all trips | win rate | **1-3m median edge** | **trips in 1-3m** |
+|---|---:|---:|---:|---:|---:|
+| sealed-accumulation | 33 | −10.98% | 33.3% | +13.90% | **1** |
+| cost-aware-reversion | 132 | −39.25% | 15.9% | −16.57% | 41 |
+| ml-ranker | 145 | −33.63% | 20.7% | −37.96% | 109 |
+| xs-momentum | 106 | −44.02% | 6.6% | −45.33% | 99 |
+| dip-buyer | 175 | −46.12% | 9.7% | −51.21% | 116 |
+| ml-ranker-v2 | 20 | −84.32% | **0.0%** | −84.32% | 20 |
+
+**The answer is no, and not narrowly.** The single positive 1-3m figure in the whole study is sealed-accumulation's **+13.90% over exactly one round trip**, against that strategy's own all-trip median of −10.98%; it is an anecdote and is never quoted without its sample size. Every strategy with a real sample in the band loses to simply holding the index over identical dates by 16.6 to 84.3 percentage points per trade, and beats it on 0.9%-22.0% of those trades. Method caveat, stated because it changes what these mean: walk-forward artifacts carry no `fills.parquet`, so these come from **default-parameter backtests** over the same window, not the walk-forward parameter sets.
+
+**How the middle column came to be so misleading, and what fixed it.** The 23 → 217 group benchmark "fall" was mostly a sizing artifact: `BuyAndHold` equal-weighted the sealed universe with integer quantities, so 45 → 1,315 day-1 assets took the per-asset budget from $222 to $7.60 and deployed capital from 60.1% to 4.7% of a $10,000 account. Neither run was fully deployed — on the slice actually at risk the two returned +291.7% and +191.1% (gain / all-in capital consumed) — so about 85% of the 17x headline collapse was the sizing rule rather than the assets (log/Törnqvist decomposition of `return = deployment × invested-slice return`; Shapley gives 80%, order-dependent decompositions span 63-97%). The "new products are junk" explanation was falsified separately: among the 1,133 of 2,389 in-window sealed assets that priced across the whole window, the newly added ones returned a median +212% versus +171% for the pre-existing ones. **The benchmark now screens for tradeability and sweeps residual cash into the largest dollar deficit until nothing is affordable, reaching 99.9% deployment** — so the right-hand column is the first benchmark figure in this project that is a return on an invested account rather than on a cash sleeve.
+
+**The strategies' near-total losses were an entry-price artifact too, and only half of it is fixed.** dip-buyer and cost-aware-reversion select on `market`, and 92-97% of their buy-side impact came from fills where the day's `market` print sits *below the lowest listing* — both are by construction maximizers over exactly the quantity that gap corrupts. Buys are now floored at `max(market, low)`, so those fills cost what the cheapest live offer cost; what is **not** fixed is that the strategies still *select* on a price they cannot transact at, which is a strategy-design question and untouched here. (Those impact figures come from fixed-parameter diagnostic probes, not from the walk-forward runs in the table, and the two ML strategies' losses were **never** diagnosed.) Full derivation, provenance for every derived figure, and the open questions: [docs/research-findings-2026-07.md](docs/research-findings-2026-07.md).
 
 ## Why the numbers are believable
 
 - **No look-ahead by construction:** strategies receive a `Context` (history up to today, positions, cash) and cannot tell backtest from live mode.
-- **Cost realism:** ~15% round-trip friction before impact; the impact model walks fills from `market` toward `mid` (buys) or `low` (sells), scaled by order size against the daily liquidity cap. Opt out per-command with `--no-impact`.
+- **Cost realism:** ~15% round-trip friction before impact; a buy's base price is floored at `max(market, low)` — `market` is sales-derived and `low` is the cheapest current listing, so you cannot lift an offer that does not exist — and the impact model then walks fills from that floor toward `mid` (buys) or from `market` toward `low` (sells), scaled by order size against the daily liquidity cap. Sells have no floor on purpose: tcgcsv publishes no bid series, so a symmetric fix would be fabricating a price. On the repaired benchmark, impact is 34% of buy notional. Opt out per-command with `--no-impact` — which also disables the buy floor, so flat-cost runs are a comparability tool, not a model of executable prices.
+- **A bar that is actually invested:** the buy-and-hold benchmark screens the sealed universe for tradeability (print density, then relative spread) and sweeps residual cash into the largest dollar deficit, deploying 99.9% of the account. It is deliberately **not** walk-forward-searchable: tuning the bar to maximise its own return would make every comparison against it self-serving.
 - **Walk-forward only:** parameters are frozen before touching out-of-sample data; zero in-sample days in the headline curve.
 - **Reproducible:** every run's config hash, git SHA (+dirty flag), and data fingerprint land in the registry.
-- **Stated limitations:** ~2.5 years of data, one bull regime for sealed; Sharpe/Sortino are inflated by thin-market mark smoothing, now across 31,713 products rather than 6,671, so worse than before (documented in every report); tcgcsv publishes a daily `market` price whether or not anything sold, so "prints every day" (22,677 products) is not "trades every day"; ~6% of price rows have `market` below the day's lowest listing, which no liquidity or quote-sanity filter currently screens out; stitched seams assume mark-value carryover without liquidation costs. Methodology over significance.
+- **Stated limitations:** ~2.5 years of data, one bull regime for sealed; Sharpe/Sortino are inflated by thin-market mark smoothing, now across 31,713 products rather than 6,671, so worse than before (documented in every report); tcgcsv publishes a daily `market` price whether or not anything sold, so "prints every day" (22,677 products) is not "trades every day"; ~6% of price rows have `market` below the day's lowest listing — buys are now priced at the listing, but no liquidity or quote-sanity filter screens those products out of any strategy's candidate set, and the selectors still rank on `market`; stitched seams assume mark-value carryover without liquidation costs. Methodology over significance.
 
 ## Architecture
 
@@ -108,15 +128,16 @@ ctest --test-dir cpp/build --output-on-failure
 
 ```bash
 uv sync                                                   # installs everything, builds the C++ extension
-uv run pytest                                             # 523 tests (+1 dashboard skip without --group dashboard)
+uv run pytest                                             # 583 tests (+1 dashboard skip without --group dashboard; 588 with it)
 uv run pkmn ingest --start 2024-02-08 --end 2026-08-03    # all 217 groups; hours from cold, ~36M price rows
 uv run python scripts/rebuild_warehouse.py --root .       # ~17 min instead, if the raw archives are already cached
 uv run python scripts/verify_rebuild.py --root .          # gate any swap: prices, quarantine decisions and catalog rows must all reproduce exactly
 uv run pkmn refresh-products                              # repair the product catalog (all 217 groups, no prices)
-uv run pkmn backtest --start 2024-03-01 --end 2026-06-30  # benchmark backtest (cpp engine, impact on)
+uv run pkmn backtest --start 2024-03-01 --end 2026-06-30  # benchmark backtest: screened, ~99.9% deployed (cpp engine, impact on)
 uv run pkmn walkforward --strategy sealed-accumulation \
     --start 2024-03-01 --end 2026-06-30 --trials 15       # research run (fold-parallel by default)
 uv run pkmn signals --strategy sealed-accumulation        # today's recommendations
+uv run pkmn horizon <backtest-run-id>                     # per-trade edge vs holding sealed over each trade's own window
 uv run pkmn runs list                                     # experiment registry
 uv run pkmn portfolio show                                # real positions + P&L
 uv run pkmn daily --skip-ingest --paper                   # paper-trade the full loop, offline
@@ -204,7 +225,7 @@ as a failed job rather than a form error.
 
 ## Future work
 
-- **A liquidity / quote-sanity layer.** The wide universe contains ~6% of rows where `market` sits below the day's lowest listing; dip-buyer and cost-aware-reversion select straight into them. Nothing currently screens them out, and no strategy result on the wide universe should be read as a measure of edge until something does.
-- **Benchmark sizing.** Equal-weighting integer quantities across 1,315 sealed assets leaves a $10,000 account 95% in cash, so the buy-and-hold bar is not currently meaningful. Needs proportional sizing, a capped universe, or a larger notional.
+- **A liquidity / quote-sanity layer.** The wide universe contains ~6% of rows where `market` sits below the day's lowest listing; dip-buyer and cost-aware-reversion select straight into them. Buys are now *priced* at the listing, but nothing screens those products out of a strategy's candidate set. `research/screen.py` is the machinery this needs — running it as a universe filter is a separate full-zoo re-run and has not been done.
+- **Fills in walk-forward artifacts.** A walk-forward run writes `stitched_equity.parquet` but no `fills.parquet`, so `pkmn horizon` cannot score a tuned parameter set — every horizon number above comes from a default-parameter backtest instead.
 - Multi-marketplace data (eBay, PSA-graded)
 - Docker
