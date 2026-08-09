@@ -192,6 +192,13 @@ def assert_floor_actually_fired(res: Result) -> None:
     unfloored engine clears comfortably at 1.25 — it passed with the floor
     fully removed and guarded nothing. The bound 0.25 * market it cited is
     the post-floor spread (mid - low = 0.5 * market), not the pre-floor one.
+
+    The 1.25 ceiling holds only at `used == 0`: the walk term scales with
+    (2*used + qty), so a strategy issuing a SECOND buy order for the same
+    asset on the same day can exceed it without any floor, and this guard
+    would go vacuous again in exactly the silent way the earlier one did.
+    Every strategy here emits at most one order per asset per bar. If that
+    ever changes, re-derive the ceiling before trusting this function.
     """
     assert any(f.quantity > 0 and f.impact >= 2.0 * f.quantity * f.price for f in res.fills)
 
@@ -885,6 +892,113 @@ def test_bridge_ml_ranker_parity(tmp_path: Path) -> None:
         initial_cash=1000.0,
         warmup_days=20,
     ).run()
+    assert_results_equal(py, cpp)
+
+
+WIDE_N = 130  # > the n_assets default of 100, so the default actually binds
+
+
+def seed_wide(root: Path, n_products: int = WIDE_N, n_days: int = 6) -> None:
+    """`n_products` sealed assets on a short window, priced apart so the
+    screen's truncation and the affordability filter both have real work.
+
+    Every other fixture in this file has 6 assets, i.e. fewer than the
+    n_assets default, so a default that disagreed between the engines could
+    not fail anything here.
+    """
+    w = Warehouse(Paths(root=root))
+    ids = list(range(1, n_products + 1))
+    for i in range(n_days):
+        day = START + timedelta(days=i)
+        rows = []
+        for pid in ids:
+            # 2.50 .. ~330: spans every liquidity tier, and enough assets sit
+            # above the per-asset target that _affordable has to drop some.
+            market = round(2.5 * (1.0 + 0.02 * pid) ** 2 * _path(i + pid), 2)
+            rows.append(
+                {
+                    "date": day,
+                    "product_id": pid,
+                    "sub_type": "Normal",
+                    # Mixed quote shapes: some ordinary, some inverted (low
+                    # above the print), some degenerate (low == mid), so the
+                    # screen's spread key and the buy floor are both exercised.
+                    "low": round(market * (2.0 if pid % 5 == 0 else 0.9), 2),
+                    "mid": round(market * (2.0 if pid % 5 == 0 else 1.15), 2),
+                    "high": round(market * 3.0, 2),
+                    "market": market,
+                }
+            )
+        w.write_prices(day, pl.DataFrame(rows, schema=PRICE_SCHEMA))
+    w.write_products(
+        pl.DataFrame(
+            {
+                "product_id": ids,
+                "group_id": [1] * n_products,
+                "name": [f"Box {i}" for i in ids],
+                "rarity": [None] * n_products,
+                "kind": ["sealed"] * n_products,
+                "released_on": [date(2024, 11, 1)] * n_products,
+            }
+        )
+    )
+
+
+def test_buy_and_hold_default_n_assets_agrees_across_all_four_definitions() -> None:
+    """`n_assets = 100` is written out in four places with nothing pinning
+    agreement: BuyAndHold.__init__, BUY_AND_HOLD_PARAMS (the CLI/web default),
+    the C++ BuyAndHold constructor, and factory.cpp's iparam fallback. The
+    two Python ones are compared directly here; the two C++ ones are pinned
+    by test_buy_and_hold_parity_wide_universe below, whose fixture is the
+    only one in this suite with more than 100 assets — every other fixture
+    has 6, so a drift would fail nothing.
+    """
+    import inspect
+
+    from pkmn_quant.research.backtest_run import BUY_AND_HOLD_PARAMS
+
+    ctor_default = inspect.signature(BuyAndHold.__init__).parameters["n_assets"].default
+    (spec,) = [p for p in BUY_AND_HOLD_PARAMS if p.name == "n_assets"]
+    assert ctor_default == spec.default == 100
+
+
+@pytest.mark.parametrize("n_assets", [None, 120])
+def test_buy_and_hold_parity_wide_universe(tmp_path: Path, n_assets: int | None) -> None:
+    """130 sealed assets: more than the n_assets default, so both engines'
+    DEFAULT must agree (n_assets=None passes no param, taking each side's own
+    default) and the screen's 100-asset truncation is load-bearing.
+
+    Also the only parity fixture where the affordability filter drops
+    candidates at scale, and where inverted and degenerate quotes coexist.
+    """
+    seed_wide(tmp_path)
+    wh = Warehouse(Paths(root=tmp_path))
+    cm = CostModel(impact_enabled=True)
+    end = START + timedelta(days=5)
+    py = Backtest(
+        warehouse=wh,
+        strategy=BuyAndHold(kind="sealed") if n_assets is None else BuyAndHold("sealed", n_assets),
+        cost_model=cm,
+        start=START,
+        end=end,
+        initial_cash=10_000.0,
+    ).run()
+    cpp = NativeBacktest(
+        warehouse=wh,
+        strategy=NativeStrategySpec(
+            "buy-and-hold",
+            {} if n_assets is None else {"n_assets": float(n_assets)},
+            kind="sealed",
+        ),
+        cost_model=cm,
+        start=START,
+        end=end,
+        initial_cash=10_000.0,
+    ).run()
+    filled = {f.asset for f in py.fills}
+    assert len(filled) > 20  # not vacuous
+    assert len(filled) <= (100 if n_assets is None else n_assets)  # truncation binds
+    assert len(filled) < WIDE_N  # something really was excluded
     assert_results_equal(py, cpp)
 
 
