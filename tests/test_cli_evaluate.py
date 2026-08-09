@@ -30,14 +30,61 @@ def _write_curve(run_dir: Path, name: str, equity: list[float], as_wf: bool = Tr
         frame.write_parquet(run_dir / "equity.parquet")
 
 
-def seed_everything(root: Path, n_days: int = 200) -> None:
+BENCH_ID = "20260801T110000Z-bbb222"
+
+
+def _record(
+    root: Path,
+    run_id: str,
+    strategy: str,
+    *,
+    command: str = "backtest",
+    config: dict[str, object] | None = None,
+    recorded_at: str = "2026-08-01T11:00:00+00:00",
+) -> dict[str, object]:
+    return {
+        "run_id": run_id,
+        "recorded_at": recorded_at,
+        "command": command,
+        "strategy": strategy,
+        "git_sha": "abc1234",
+        "git_dirty": False,
+        "config_hash": "deadbeef",
+        "config": config or {},
+        "data_fingerprint": {},
+        "results": {},
+        "artifact_path": str(root / "data" / "results" / run_id),
+    }
+
+
+def write_registry(root: Path, records: list[dict[str, object]]) -> None:
+    reg = root / "data" / "runs" / "registry.jsonl"
+    reg.parent.mkdir(parents=True, exist_ok=True)
+    reg.write_text("".join(json.dumps(r, sort_keys=True) + "\n" for r in records))
+
+
+def seed_everything(
+    root: Path, n_days: int = 200, extra_records: list[dict[str, object]] | None = None
+) -> None:
+    """Two walk-forward curves plus a REGISTERED buy-and-hold benchmark.
+
+    The benchmark is a run-registry record pointing at data/results/<run_id>/,
+    which is the only shape `pkmn evaluate` accepts. It used to be a
+    hand-created `buy-and-hold-sealed-x/` directory picked up by a glob, and
+    that glob is the bug this suite now guards against rather than depends on
+    (see test_evaluate_ignores_a_hand_made_benchmark_directory).
+    """
     # a real (tiny) warehouse so record_run's data fingerprint works
     w = Warehouse(Paths(root=root))
     w.write_prices(START, pl.DataFrame([price_row(START, 1, 10.0)], schema=PRICE_SCHEMA))
     rng = np.random.default_rng(0)
     results = root / "data" / "results"
     bench = list(100.0 * np.cumprod(1.0 + rng.normal(0.002, 0.01, n_days)))
-    _write_curve(results / "buy-and-hold-sealed-x", "buy-and-hold", bench, as_wf=False)
+    _write_curve(results / BENCH_ID, "buy-and-hold-sealed", bench, as_wf=False)
+    write_registry(
+        root,
+        [_record(root, BENCH_ID, "buy-and-hold-sealed"), *(extra_records or [])],
+    )
     for name, drift in [("alpha", 0.0), ("beta", -0.001)]:
         eq = list(100.0 * np.cumprod(1.0 + rng.normal(drift, 0.01, n_days)))
         _write_curve(results / f"wf-{name}-x", name, eq)
@@ -101,9 +148,8 @@ def test_evaluate_finds_benchmark_via_run_registry(tmp_path: Path) -> None:
     from data/results/buy-and-hold-sealed-{start}-{end}/ to
     data/results/<run_id>/, so no command on this branch can produce the
     old glob pattern any more. Produce the benchmark with the real `pkmn
-    backtest` CLI (not a hand-written directory, unlike seed_everything
-    above) and confirm `pkmn evaluate` still locates it -- via the
-    run-registry fallback, since the glob will find nothing."""
+    backtest` CLI (not a hand-written registry record, unlike
+    seed_everything above) and confirm `pkmn evaluate` locates it."""
     n_days = 90
     _seed_real_prices(tmp_path, n_days)
 
@@ -138,13 +184,106 @@ def test_evaluate_finds_benchmark_via_run_registry(tmp_path: Path) -> None:
     assert set(payload["strategies"]) == {"alpha", "beta"}
 
 
+def test_evaluate_ignores_a_hand_made_benchmark_directory(tmp_path: Path) -> None:
+    """I1 regression, hole 1: the directory glob outranked the registry.
+
+    `pkmn evaluate` used to glob data/results/buy-and-hold-sealed-* FIRST and
+    take the longest curve, so anything with that name -- a hand-made
+    directory, a stale pre-swap artifact -- silently beat the registered
+    benchmark. It did: a Reality Check p of 1.0000 was published where the
+    correct value was 0.8038. A directory name carries no config, git sha or
+    data fingerprint, so it cannot answer "is this bar comparable?".
+
+    Here the decoy is LONGER than the registered benchmark and moves five
+    times as fast, so picking it is visible in the result, not just in the
+    recorded path.
+    """
+    seed_everything(tmp_path)
+    decoy = tmp_path / "data" / "results" / "buy-and-hold-sealed-decoy"
+    _write_curve(decoy, "buy-and-hold", [100.0 * (1.0 + 0.05 * i) for i in range(300)], as_wf=False)
+
+    assert run_eval(tmp_path).exit_code == 0
+    out = next((tmp_path / "data" / "results").glob("evaluate-*"))
+    payload = json.loads((out / "evaluate.json").read_text())
+    assert payload["benchmark"] == str(tmp_path / "data" / "results" / BENCH_ID)
+    assert "decoy" not in payload["benchmark"]
+
+
+def test_evaluate_skips_paired_sidecar_benchmarks(tmp_path: Path) -> None:
+    """I1 regression, hole 2: the registry path did not filter `benchmark_for`.
+
+    Every web-triggered run is paired with an identical-starting-state
+    buy-and-hold tagged config["benchmark_for"], which covers SOMEBODY ELSE'S
+    window (one on disk spans 61 days against 660-day strategy curves).
+    /api/runs and the dashboard both drop them; this did not, and it sorts
+    newest-first, so the newest sidecar won.
+    """
+    sidecar_id = "20260802T120000Z-ccc333"
+    seed_everything(
+        tmp_path,
+        extra_records=[
+            _record(
+                tmp_path,
+                sidecar_id,
+                "buy-and-hold-sealed",
+                config={"benchmark_for": "some-other-run"},
+                recorded_at="2026-08-02T12:00:00+00:00",  # newer than BENCH_ID
+            )
+        ],
+    )
+    _write_curve(
+        tmp_path / "data" / "results" / sidecar_id,
+        "buy-and-hold-sealed",
+        [100.0 * (1.0 + 0.05 * i) for i in range(300)],
+        as_wf=False,
+    )
+    assert run_eval(tmp_path).exit_code == 0
+    payload = json.loads(
+        (next((tmp_path / "data" / "results").glob("evaluate-*")) / "evaluate.json").read_text()
+    )
+    assert payload["benchmark"] == str(tmp_path / "data" / "results" / BENCH_ID)
+
+
+def test_evaluate_rejects_a_benchmark_that_does_not_span_the_strategies(tmp_path: Path) -> None:
+    """I1 regression, hole 3: no window-span guard.
+
+    A short buy-and-hold is a legitimate registry record (a 61-day ad-hoc run
+    exists on disk). The date intersection is taken over the benchmark too, so
+    a 61-day curve against 660-day strategies clears the >= 60 check and
+    silently produces a Reality Check over 61 days. `pkmn horizon` already
+    refuses this; so must evaluate.
+    """
+    short_id = "20260803T120000Z-ddd444"
+    seed_everything(
+        tmp_path,
+        extra_records=[
+            _record(
+                tmp_path,
+                short_id,
+                "buy-and-hold-sealed",
+                recorded_at="2026-08-03T12:00:00+00:00",  # newest -> selected
+            )
+        ],
+    )
+    _write_curve(
+        tmp_path / "data" / "results" / short_id,
+        "buy-and-hold-sealed",
+        [100.0 + i for i in range(61)],
+        as_wf=False,
+    )
+    result = run_eval(tmp_path)
+    assert result.exit_code != 0
+    assert "does not span" in result.output
+    assert "Traceback" not in result.output
+
+
 def test_evaluate_records_run(tmp_path: Path) -> None:
     from pkmn_quant.research.runs import load_runs
 
     seed_everything(tmp_path)
     assert run_eval(tmp_path).exit_code == 0
-    (record,) = load_runs(tmp_path)
-    assert record.command == "evaluate"
+    # the seeded benchmark record is also in the registry; evaluate appends
+    (record,) = [r for r in load_runs(tmp_path) if r.command == "evaluate"]
     assert "reality_check_p" in record.results
     assert record.config["n_boot"] == 500
 

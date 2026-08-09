@@ -793,8 +793,8 @@ def evaluate(
     root: Path = typer.Option(Path("."), help="Project root containing data/results/."),
     benchmark: Path | None = typer.Option(
         None,
-        help="Benchmark artifact dir containing equity.parquet; "
-        "default: auto-locate data/results/buy-and-hold-sealed-*.",
+        help="Benchmark artifact dir containing equity.parquet; default: the "
+        "newest buy-and-hold backtest in the run registry (never a directory glob).",
     ),
     n_boot: int = typer.Option(10_000, min=1, help="Bootstrap resamples."),
     block: float = typer.Option(10.0, help="Mean bootstrap block length, days."),
@@ -803,8 +803,9 @@ def evaluate(
     """Cross-strategy rigor: bootstrap CIs, deflated Sharpe, Reality Check.
 
     Reads every data/results/wf-*/ walk-forward artifact plus the
-    buy-and-hold benchmark curve, aligns them on common dates, and writes
-    an evaluate-<date>/ artifact with report.md + evaluate.json. The
+    buy-and-hold benchmark curve — resolved from the RUN REGISTRY, and
+    required to span the strategies' window — aligns them on common dates,
+    and writes an evaluate-<date>/ artifact with report.md + evaluate.json. The
     Reality Check answers "did ANY strategy beat the benchmark, given how
     many we tried"; deflated Sharpe corrects each Sharpe for that same
     selection. Recorded in the experiment registry like every other run.
@@ -847,37 +848,51 @@ def evaluate(
     if len(curves) < 2:
         fail(f"Reality Check needs >= 2 strategies, found {len(curves)}")
 
-    # -- benchmark --
+    # -- benchmark: registry only, exactly like `pkmn horizon` --
+    # The directory glob this used to try first is GONE, deliberately. It
+    # sorted `data/results/buy-and-hold-sealed-*` and took the longest curve,
+    # so any hand-made directory outranked the registry; the one it matched
+    # was a stale pre-swap artifact and this command published a Reality Check
+    # p of 1.0000 where the correct value was 0.8038. See
+    # _benchmark_candidates for why a registry record and a directory name are
+    # not interchangeable — that filter also drops the paired sidecar
+    # benchmarks tagged `benchmark_for`, which cover somebody else's window
+    # (one on disk here spans 61 days) and which the old fallback happily
+    # returned.
     if benchmark is None:
-        # First choice: the old `pkmn backtest`-produced directory name
-        # (data/results/buy-and-hold-sealed-{start}-{end}/), kept for
-        # backwards compatibility with artifacts already on disk.
-        candidates = sorted(results_dir.glob("buy-and-hold-sealed-*"))
-        candidates = [c for c in candidates if (c / "equity.parquet").exists()]
-        if candidates:
-            benchmark = max(candidates, key=lambda c: pl.read_parquet(c / "equity.parquet").height)
-        else:
-            # Plan 2b rekeyed `pkmn backtest` artifact dirs to
-            # data/results/<run_id>/, so no current command can produce the
-            # glob pattern above any more. Fall back to the run registry:
-            # newest recorded `backtest` run for buy-and-hold-sealed whose
-            # artifact still exists on disk.
-            records = [
-                r
-                for r in load_runs(root)
-                if r.command == "backtest"
-                and r.strategy == "buy-and-hold-sealed"
-                and (Path(r.artifact_path) / "equity.parquet").exists()
-            ]
-            if not records:
-                fail("no buy-and-hold-sealed-* benchmark artifact; pass --benchmark")
-            benchmark = Path(max(records, key=lambda r: r.recorded_at).artifact_path)
+        candidates = _benchmark_candidates(load_runs(root))
+        if not candidates:
+            fail(
+                "no buy-and-hold benchmark backtest in the run registry; run "
+                "`pkmn backtest` to make one, or pass --benchmark <dir>"
+            )
+        benchmark = Path(candidates[0].artifact_path)
     bench_frame = pl.read_parquet(benchmark / "equity.parquet")
 
+    # -- the benchmark must SPAN the strategies' window --
+    # Same guard as `pkmn horizon`. Without it a short benchmark silently
+    # shrinks the comparison instead of being rejected: the intersection below
+    # is taken over the benchmark too, so a 61-day buy-and-hold run (there is
+    # a real one on disk) clears the >= 60 check and the Reality Check is
+    # computed over 61 days of 660-day strategy curves, with no warning.
+    strat_common: set[dt.date] = set.intersection(
+        *(set(frame["date"].to_list()) for frame in curves.values())
+    )
+    if not strat_common:
+        fail("the walk-forward artifacts share no dates with each other")
+    bench_dates = bench_frame["date"].to_list()
+    s_first, s_last = min(strat_common), max(strat_common)
+    if not bench_dates or min(bench_dates) > s_first or max(bench_dates) < s_last:
+        span = f"{min(bench_dates)} .. {max(bench_dates)}" if bench_dates else "empty"
+        fail(
+            f"benchmark {benchmark.name} covers {span}, which does not span the strategies' "
+            f"window {s_first} .. {s_last}; every day outside it would be dropped from the "
+            "comparison rather than reported. Pass --benchmark <dir> for a buy-and-hold run "
+            "covering the whole window."
+        )
+
     # -- align on common dates --
-    common = set(bench_frame["date"].to_list())
-    for frame in curves.values():
-        common &= set(frame["date"].to_list())
+    common = strat_common & set(bench_dates)
     if len(common) < 60:
         fail(f"date overlap across artifacts is {len(common)} days; need >= 60")
     dates = sorted(common)
