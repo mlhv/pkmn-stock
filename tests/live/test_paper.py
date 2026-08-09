@@ -160,6 +160,60 @@ def test_buy_floor_binds_the_affordable_quantity() -> None:
     assert event["impact"] == pytest.approx(18.0)
 
 
+def test_flat_cost_paper_sizing_ignores_the_floor_entirely() -> None:
+    """The impact_enabled gate on the floor is load-bearing here, not decoration.
+
+    With the impact model off there is no premium to reserve cash for, so the
+    binding constraint is the pre-floor one (qty*market + shipping <= cash)
+    and the tier is the print's. Same fixture as
+    test_buy_floor_binds_the_affordable_quantity (market 1.0, low/mid 10.0,
+    cash 26.0), which records 2 units with impact on: flat-cost must record
+    the full 20 (cap for a $1 print) at zero impact instead. Deleting the gate
+    -- in CostModel.buy_base or here -- clips this to 2 on the LIVE paper
+    path, so it is pinned on the production path, not only in costs.
+    """
+    costs = CostModel()  # impact_enabled defaults False
+    rec = Recommendation(
+        action="BUY",
+        product_id=1,
+        sub_type="Normal",
+        name="Card",
+        quantity=20,
+        market_price=1.0,
+        notional=20.0,
+        mid=10.0,
+        low=10.0,
+    )
+    [event] = plan_paper_fills([rec], cash=26.0, day=date(2026, 7, 13), costs=costs)
+    assert event["qty"] == 20
+    assert event["impact"] == pytest.approx(0.0)
+
+
+def test_paper_buy_depth_cap_is_tiered_on_the_floored_base() -> None:
+    """Executor parity: a buy's cap follows the price paid, not the print.
+
+    market 4.0 (tier <5 -> cap 20) with low/mid 60.0 -> base 60.0 (tier <200
+    -> cap 3). Ample cash, so only the cap binds: 3 units, impact = premium
+    (60-4)*3 = 168.0. Off the print the planner would record 20 units the
+    backtest executor would never have filled.
+    """
+    costs = CostModel(impact_enabled=True)
+    rec = Recommendation(
+        action="BUY",
+        product_id=1,
+        sub_type="Normal",
+        name="Box",
+        quantity=20,
+        market_price=4.0,
+        notional=80.0,
+        mid=60.0,
+        low=60.0,
+    )
+    [event] = plan_paper_fills([rec], cash=10_000.0, day=date(2026, 7, 13), costs=costs)
+    assert event["qty"] == 3
+    assert event["impact"] == pytest.approx(168.0)
+
+
 def test_sell_fill_records_impact() -> None:
     costs = CostModel(impact_enabled=True)
     rec = Recommendation(

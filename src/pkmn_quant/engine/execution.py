@@ -56,10 +56,20 @@ class ExecutionSimulator:
             if market is None or market <= 0 or order.quantity == 0:
                 continue  # asset didn't trade today; order expires unfilled
             used = filled_today.get(order.asset, 0)
-            cap_left = self.cost_model.max_daily_qty(market) - used
+            quote = quotes_map.get(order.asset)
+            # The depth cap is a claim about the product being transacted, so
+            # it is tiered on the price actually paid: the floored base on a
+            # buy (CostModel.buy_base), the print on a sell, which has no
+            # floor. Off `market`, an inverted row buys at $60 with the depth
+            # of the $4 product the print names.
+            tier_price = (
+                self.cost_model.buy_base(market, quote.low if quote is not None else None)
+                if order.quantity > 0
+                else market
+            )
+            cap_left = self.cost_model.max_daily_qty(tier_price) - used
             if cap_left <= 0:
                 continue
-            quote = quotes_map.get(order.asset)
             fill = (
                 self._fill_buy(order, market, portfolio, day, cap_left, used, quote)
                 if order.quantity > 0
@@ -84,13 +94,10 @@ class ExecutionSimulator:
         mid = quote.mid if quote is not None else None
         low = quote.low if quote is not None else None
         # A buy cannot execute below the cheapest current listing; `market` is
-        # sales-derived and can sit under it (see CostModel.buy_impact). The
-        # premium is routed through `impact`, so with the impact model OFF the
-        # floor is not a cost and must not constrain sizing — gating on
-        # impact_enabled keeps flat-cost runs bit-identical to pre-floor.
-        base = market
-        if self.cost_model.impact_enabled and low is not None:
-            base = max(market, low)
+        # sales-derived and can sit under it (see CostModel.buy_base, which
+        # also explains the impact_enabled gate and is the single definition
+        # of this price — `cap_left` above was tiered on the same number).
+        base = self.cost_model.buy_base(market, low)
         qty = min(order.quantity, cap_left)
         # afford: qty * base + shipping_per_line + walk-impact(qty) <= cash.
         # With impact ON, qty*base <= qty*market + impact(qty), so `base` is a

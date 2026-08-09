@@ -11,7 +11,7 @@ namespace {
 constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
 }
 
-TEST_CASE("max_daily_qty: strict < at tier thresholds (costs.py:55-61)") {
+TEST_CASE("max_daily_qty: strict < at tier thresholds (costs.py max_daily_qty)") {
     CostModel cm;
     CHECK(cm.max_daily_qty(4.99) == 20);
     CHECK(cm.max_daily_qty(5.0) == 8);  // exactly at threshold -> NEXT tier
@@ -49,7 +49,41 @@ TEST_CASE("sell_impact walks market toward low") {
     CHECK(cm.sell_impact(12.0, 10.0, 4, 0) == 2.0);
 }
 
-TEST_CASE("buy_impact floors the fill at the cheapest listing (costs.py:63-89)") {
+TEST_CASE("buy_base is the single definition of the executable buy price") {
+    CostModel cm;
+    cm.impact_enabled = true;
+    CHECK(cm.buy_base(10.0, 25.0) == 25.0);  // inverted row: floored at the listing
+    CHECK(cm.buy_base(30.0, 25.0) == 30.0);  // ordinary row: the print stands
+    CHECK(cm.buy_base(10.0, kNaN) == 10.0);  // no low: never invent a floor
+    cm.impact_enabled = false;
+    CHECK(cm.buy_base(10.0, 25.0) == 10.0);  // impact off: the floor does not exist
+}
+
+TEST_CASE("buy_impact walks at the base's depth tier, not the print's") {
+    // Mirrors tests/engine/test_costs.py
+    // test_buy_impact_walk_uses_the_bases_depth_tier_not_the_prints.
+    // market 4 (tier <5 -> Q=20) but base 60 (tier <200 -> Q=3): premium
+    // (60-4)*2 = 112, walk (90-60)*2*2/(2*3) = 20 -> 132. Off the print the
+    // walk would be 3.0 and the total 115 — a $4 product's depth granted to a
+    // $60 purchase.
+    CostModel cm;
+    cm.impact_enabled = true;
+    CHECK(cm.buy_impact(4.0, 90.0, 60.0, 2, 0) == 132.0);
+}
+
+TEST_CASE("a missing or crossed mid still pays the floor premium") {
+    // Mirrors tests/engine/test_costs.py
+    // test_missing_or_crossed_mid_still_pays_the_floor_premium: the branch
+    // kills the WALK only. market 10, low 20, qty 3 -> premium 30 both ways.
+    CostModel cm;
+    cm.impact_enabled = true;
+    CHECK(cm.buy_impact(10.0, kNaN, 20.0, 3, 0) == 30.0);
+    CHECK(cm.buy_impact(10.0, 15.0, 20.0, 3, 0) == 30.0);
+}
+
+// Cite the symbol, not a line range: the previous "costs.py:63-89" here was
+// already stale by four lines when it was checked.
+TEST_CASE("buy_impact floors the fill at the cheapest listing (costs.py buy_impact)") {
     CostModel cm;
     cm.impact_enabled = true;
     // market 10 (sales-derived) below low 25 (cheapest listing); mid 25.

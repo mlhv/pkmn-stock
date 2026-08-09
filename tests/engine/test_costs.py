@@ -17,10 +17,10 @@ def test_default_round_trip_loses_about_15_percent() -> None:
 
 def test_liquidity_caps_tiered_by_price() -> None:
     cm = CostModel()
-    assert cm.max_daily_qty(market=2.0) == 20
-    assert cm.max_daily_qty(market=30.0) == 8
-    assert cm.max_daily_qty(market=150.0) == 3
-    assert cm.max_daily_qty(market=1500.0) == 1
+    assert cm.max_daily_qty(price=2.0) == 20
+    assert cm.max_daily_qty(price=30.0) == 8
+    assert cm.max_daily_qty(price=150.0) == 3
+    assert cm.max_daily_qty(price=1500.0) == 1
 
 
 def test_custom_parameters() -> None:
@@ -44,8 +44,8 @@ def test_total_costs_charge_shipping_once_per_line() -> None:
 
 def test_liquidity_cap_exact_threshold_falls_to_next_tier() -> None:
     cm = CostModel()
-    assert cm.max_daily_qty(market=5.0) == 8  # strict <: $5.00 is mid-tier
-    assert cm.max_daily_qty(market=50.0) == 3
+    assert cm.max_daily_qty(price=5.0) == 8  # strict <: $5.00 is mid-tier
+    assert cm.max_daily_qty(price=50.0) == 3
 
 
 IMPACT_MODEL = CostModel(impact_enabled=True)
@@ -122,6 +122,45 @@ def test_buy_impact_walks_from_the_floor_not_from_market() -> None:
     """
     cm = CostModel(impact_enabled=True)
     assert cm.buy_impact(10.0, 40.0, 20.0, qty=2) == 25.0
+
+
+def test_buy_impact_walk_uses_the_bases_depth_tier_not_the_prints() -> None:
+    """I3 regression: q_cap follows the price paid, not the sales print.
+
+    Hand-derivation: market 4.0, low 60.0, mid 90.0, qty 2, used 0.
+    base = 60.0. Premium = (60 - 4) * 2 = 112.0. Walk spread = 90 - 60 = 30.
+    The tier for a $60 fill is Q=3 (tier <200), NOT the Q=20 of the $4 print:
+    30 * 2 * (0 + 2) / (2 * 3) = 20.0. Total 132.0.
+    Off the print it would be 30 * 2 * 2 / (2 * 20) = 3.0, total 115.0 — the
+    depth of a $4 product granted to a $60 purchase.
+    """
+    cm = CostModel(impact_enabled=True)
+    assert cm.buy_impact(4.0, 90.0, 60.0, qty=2) == 132.0
+    assert cm.max_daily_qty(4.0) == 20 and cm.max_daily_qty(60.0) == 3
+
+
+def test_buy_base_is_the_single_definition_of_the_executable_price() -> None:
+    """Four call sites read this (executor sizing, executor cap, buy_impact,
+    live/paper.py), so its three rules are pinned here once."""
+    on, off = CostModel(impact_enabled=True), CostModel(impact_enabled=False)
+    assert on.buy_base(10.0, 25.0) == 25.0  # inverted row: floored at the listing
+    assert on.buy_base(30.0, 25.0) == 30.0  # ordinary row: the print stands
+    assert on.buy_base(10.0, None) == 10.0  # no low: never invent a floor
+    assert off.buy_base(10.0, 25.0) == 10.0  # impact off: the floor does not exist
+
+
+def test_missing_or_crossed_mid_still_pays_the_floor_premium() -> None:
+    """costs.py's premium/walk split: a missing or crossed mid kills the WALK
+    only. It says nothing about whether the cheapest listing was reachable,
+    so the premium is still owed — the branch is charged, not skipped.
+
+    market 10.0, low 20.0, qty 3 -> premium (20-10)*3 = 30.0 in both cases;
+    mid None has no walk, and mid 15.0 is below the base so the walk spread
+    is negative and zeroes out. Mirrored in cpp/tests/test_costs.cpp.
+    """
+    cm = CostModel(impact_enabled=True)
+    assert cm.buy_impact(10.0, None, 20.0, qty=3) == 30.0
+    assert cm.buy_impact(10.0, 15.0, 20.0, qty=3) == 30.0
 
 
 def test_buy_impact_unchanged_when_market_is_at_or_above_low() -> None:

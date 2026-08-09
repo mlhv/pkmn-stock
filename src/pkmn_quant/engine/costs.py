@@ -52,13 +52,39 @@ class CostModel:
         """Total cash received for one sell order line of qty units."""
         return qty * market * (1 - self.fee_rate) - self.shipping_per_line
 
-    def max_daily_qty(self, market: float) -> int:
+    def max_daily_qty(self, price: float) -> int:
+        """Units of one asset tradeable per day at `price`.
+
+        Pass the price actually transacted at, not the print: on the buy side
+        that is `buy_base`, since the tiers are a claim about how much depth a
+        product of that price has. See buy_base.
+        """
         # Strict <: a price exactly at a threshold falls to the NEXT tier
         # ($5.00 is mid-tier, not cheap).
         for threshold, qty in self.liquidity_tiers:
-            if market < threshold:
+            if price < threshold:
                 return qty
         return self.fallback_max_qty
+
+    def buy_base(self, market: float, low: float | None) -> float:
+        """The price a buy actually executes at.
+
+        `market` is sales-derived and can sit below `low`, the cheapest
+        current listing; a buy cannot lift an offer that does not exist, so
+        the fill starts here and the shortfall is charged as impact (see
+        buy_impact). Gated on `impact_enabled` because that is where the
+        premium is booked: with the model off the floor is not a cost and
+        must not size, cap, or constrain anything, keeping flat-cost runs
+        bit-identical to pre-floor.
+
+        This is the single definition of the executable buy price. The
+        executor sizes off it, `buy_impact` walks from it, it selects the
+        liquidity tier for the buy side, and `live/paper.py` mirrors it —
+        four call sites that must not drift apart.
+        """
+        if not self.impact_enabled or low is None:
+            return market
+        return max(market, low)
 
     def buy_impact(
         self, market: float, mid: float | None, low: float | None, qty: int, used: int = 0
@@ -74,7 +100,14 @@ class CostModel:
 
         Marginal price then ramps linearly from that base to mid (median
         listing) at the daily cap Q; units used+1..used+qty cost
-        spread * qty * (2*used + qty) / (2Q) extra in total. That walk term
+        spread * qty * (2*used + qty) / (2Q) extra in total. Q is the tier of
+        the price actually paid — the floored base, not the print. The tiers
+        are a claim about how much depth a product of a given price has, and
+        on an inverted row the print names a cheaper product than the one
+        being bought: on the research window 346,378 rows (15.8% of the 2.19M
+        inverted ones) sit in a different tier under `low` than under
+        `market`, and every one of them was being granted a cheaper product's
+        depth. That walk term
         alone is zero when mid is missing or the quote is crossed — but the
         floor premium is still charged in those cases, because a missing mid
         says nothing about whether the cheapest listing was reachable. The
@@ -88,23 +121,33 @@ class CostModel:
         """
         if not self.impact_enabled or qty <= 0:
             return 0.0
-        base = market if low is None else max(market, low)
+        base = self.buy_base(market, low)
         premium = (base - market) * qty
-        return premium + self._impact(market, mid, base, qty, used)
+        return premium + self._impact(base, mid, base, qty, used)
 
     def sell_impact(self, market: float, low: float | None, qty: int, used: int = 0) -> float:
-        """Total $ impact for selling: undercut from market toward low."""
+        """Total $ impact for selling: undercut from market toward low.
+
+        The tier comes off `market` here and that is deliberate: a sell has no
+        floor (tcgcsv publishes no bid series), so the price transacted at IS
+        the print.
+        """
         return self._impact(market, market, low, qty, used)
 
     def _impact(
-        self, market: float, upper: float | None, lower: float | None, qty: int, used: int
+        self, tier_price: float, upper: float | None, lower: float | None, qty: int, used: int
     ) -> float:
+        """Walk cost from `upper` to `lower`, at the daily cap for `tier_price`.
+
+        `tier_price` is the price transacted at — the floored base on a buy,
+        the print on a sell — never automatically the print.
+        """
         if not self.impact_enabled or qty <= 0 or upper is None or lower is None:
             return 0.0
         spread = upper - lower
         if spread <= 0:
             return 0.0
-        q_cap = self.max_daily_qty(market)
+        q_cap = self.max_daily_qty(tier_price)
         return spread * qty * (2 * used + qty) / (2 * q_cap)
 
     def as_dict(self) -> dict[str, Any]:

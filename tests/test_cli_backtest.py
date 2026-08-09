@@ -188,20 +188,28 @@ def test_backtest_golden_numbers_with_price_floor(tmp_path: Path) -> None:
     as impact, leaving Fill.price on the observable print.
 
     Hand-verified arithmetic (CostModel defaults + impact_enabled; fixture
-    low 20.0, mid 24.0 on every day; $12 print -> liquidity cap Q=8):
-      D1: BuyAndHold's one-asset universe, target 100/1 = 100 ->
+    low 20.0, mid 24.0 on every day):
+      D1: BuyAndHold's one-asset universe (the $10 print is under the whole
+          $100 balance, so `_affordable` keeps it), target 100/1 = 100 ->
           floor(100/10) = 10 units ordered, $0 left so the deficit sweep is a
           no-op. T+1, so no fill yet. Equity = 100 (all cash).
       D2: print 12.0, low 20.0 -> base = max(12, 20) = 20.
+          Liquidity tier comes off the BASE, not the print: $20 -> Q=8. (The
+          $12 print is also Q=8, so this fixture cannot tell the two apart --
+          tests/engine/test_execution.py
+          test_buy_depth_cap_is_tiered_on_the_floored_base_not_the_print
+          exercises a fixture that can.)
           Clips: order 10, cap 8, cash floor((100-1)/20) = 4 -> qty 4.
           Premium = (20 - 12) * 4 = 32. Walk spread = mid 24 - base 20 = 4
           -> 4 * 4 * (0 + 4) / (2 * 8) = 4.0. Impact = 36.0.
           Cost = 4*12 + 1 + 36 = 85 <= 100 -> fill 4 @ print 12, fees 1.
           Cash = 15. Equity = 15 + 4*12 = 63.
-          (Sanity: cash out per unit is 12 + 8 = 20 = the lowest listing,
-          which is the whole point. Without the floor this same day fills 7
-          @ 12 for impact 4*7*7/16 = 12.25 -- 7 units bought below any offer
-          that actually existed.)
+          (Sanity: cash out is $84 for 4 units = $21/unit, which is the $20
+          lowest listing plus $1 of walk toward the $24 mid -- the floor is
+          the ~$8 of it that the sales print was hiding. Shipping is a
+          further $1 on the line, not per unit. Without the floor this same
+          day fills 7 @ 12 for impact 4*7*7/16 = 12.25 -- 7 units bought
+          below any offer that actually existed.)
       D3: BuyAndHold has already entered -> no orders. Equity = 15 + 4*15 = 75.
     """
     seed_floor(tmp_path)

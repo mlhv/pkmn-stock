@@ -207,6 +207,54 @@ def test_buy_floor_binds_the_affordable_quantity() -> None:
     assert pf.cash == pytest.approx(26.0 - 21.0)
 
 
+def test_buy_depth_cap_is_tiered_on_the_floored_base_not_the_print() -> None:
+    """I3 regression: the liquidity tier must describe the product bought.
+
+    `max_daily_qty` is a claim about how much depth a product of a given
+    price has, so selecting it from the sales print grants an inverted row
+    the depth of a cheaper product than the one actually being transacted.
+    Measured on the research window, 346,378 rows (15.8% of the 2.19M
+    inverted ones) fall in a different tier under `low` than under `market`.
+
+    Hand-derivation: market 4.0 (tier <5 -> Q=20), low 60.0 and mid 60.0 so
+    the base is 60.0 (tier <200 -> Q=3) and the walk term is zero. Order 10
+    units against ample cash. Off the print the executor would grant 10 (cap
+    20, cash-unbound); off the base it grants 3.
+    Impact = premium only = (60 - 4) * 3 = 168.0. Cash out = 3*4 + 1 + 168 =
+    181.0, i.e. three units at the $60 lowest listing plus shipping.
+    """
+    pf = Portfolio(cash=10_000.0)
+    fills = IMPACT_SIM.execute(
+        [Order(asset=A, quantity=10)],
+        {A: 4.0},
+        pf,
+        DAY,
+        quotes={A: Quote(mid=60.0, low=60.0)},
+    )
+    assert fills[0].quantity == 3
+    assert fills[0].impact == pytest.approx(168.0)
+    assert pf.cash == pytest.approx(10_000.0 - 181.0)
+
+
+def test_sell_depth_cap_stays_on_the_print() -> None:
+    """The sell side has no floor (tcgcsv publishes no bid series), so its
+    tier must keep coming off the print — the asymmetry is deliberate.
+
+    market 4.0 -> Q=20. Hold 12 units, order all 12 out; a base-tiered cap
+    would clip to 3. Expect 12.
+    """
+    pf = Portfolio(cash=0.0)
+    pf.apply(Fill(day=DAY, asset=A, quantity=12, price=4.0, fees=0.0, impact=0.0))
+    fills = IMPACT_SIM.execute(
+        [Order(asset=A, quantity=-12)],
+        {A: 4.0},
+        pf,
+        DAY,
+        quotes={A: Quote(mid=60.0, low=3.0)},
+    )
+    assert fills[0].quantity == -12
+
+
 def test_flat_cost_sizing_ignores_the_floor_entirely() -> None:
     """With impact OFF the floor must not exist at all — not in the cost, and
     not in the affordability clip either.

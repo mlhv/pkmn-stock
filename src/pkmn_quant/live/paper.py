@@ -52,7 +52,10 @@ def plan_paper_fills(
     batch: list[dict[str, object]] = []
     for rec in recommendations:
         mark = rec.market_price
-        cap = costs.max_daily_qty(mark)
+        # Executor parity (engine/execution.py): the depth tier comes off the
+        # price actually paid, so a buy tiers on the floored base and a sell,
+        # which has no floor, on the print.
+        cap = costs.max_daily_qty(costs.buy_base(mark, rec.low) if rec.action == "BUY" else mark)
         if rec.action == "SELL":
             # Clip to liquidity cap; rec.quantity already equals held qty.
             qty = min(rec.quantity, cap)
@@ -65,12 +68,10 @@ def plan_paper_fills(
             # Mirror executor _fill_buy: clip to liquidity cap, then to what
             # cash_remaining can afford after shipping is reserved. Sizing runs
             # off the executable-price floor, not the print — a buy cannot fill
-            # below the cheapest current listing (see CostModel.buy_impact) —
-            # but only when impact is ON, since that is where the premium is
-            # charged; with it OFF the floor is not a cost and must not size.
-            base = mark
-            if costs.impact_enabled and rec.low is not None:
-                base = max(mark, rec.low)
+            # below the cheapest current listing — and the floor is gated on
+            # impact_enabled, since that is where the premium is charged. Both
+            # rules live in CostModel.buy_base; do not re-derive them here.
+            base = costs.buy_base(mark, rec.low)
             affordable = math.floor((cash_remaining - costs.shipping_per_line) / base)
             qty = min(rec.quantity, cap, max(affordable, 0))
             impact = costs.buy_impact(mark, rec.mid, rec.low, qty)

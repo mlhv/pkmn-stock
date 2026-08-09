@@ -38,7 +38,7 @@ double relative_spread(const HistoricalQuote& q) {
 }  // namespace
 
 std::vector<Order> BuyAndHold::on_bar(const Context& ctx) {
-    // buy_and_hold.py:66-100. Python iterates ctx.marks (insertion order),
+    // buy_and_hold.py `_universe` + `on_bar`. Python iterates ctx.marks (insertion order),
     // filters by kind and price > 0, then sorts on the screen key; the C++
     // marks map iterates in the same insertion order, and filter-then-sort
     // commutes with sort-then-filter because both preserve relative order.
