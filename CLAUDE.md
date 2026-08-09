@@ -445,7 +445,9 @@ tcgcsv.com). Design spec: `docs/superpowers/specs/2026-06-09-pkmn-quant-design.m
   passed** once it is installed — the skip is `tests/test_dashboard.py`'s 5
   tests, which also pass standalone via `uv run --group dashboard pytest
   tests/test_dashboard.py`; ruff clean, mypy clean over 57 source files;
-  26 web tests + a clean `npm run build`; 37 Catch2 tests via ctest). Two broken measurement instruments repaired and one
+  26 web tests + a clean `npm run build`; 37 Catch2 tests via ctest — all
+  four counts superseded by the final-review fix wave in the next bullet).
+  Two broken measurement instruments repaired and one
   missing measurement added, all on the same 217-group, 908-day warehouse and
   the same 2024-03-01..2026-06-30 window, impact-on. **(1) The benchmark is
   now actually invested.** `buy_and_hold` gained a liquidity screen
@@ -499,6 +501,37 @@ tcgcsv.com). Design spec: `docs/superpowers/specs/2026-06-09-pkmn-quant-design.m
   and **no strategy**. Full findings in `docs/research-findings-2026-07.md`
   (Instrument repair section), which supersedes the Full set coverage
   section's benchmark figure and every strategy number in it.
+- **Final-review fix wave on the same branch (2026-08-09): every benchmark
+  and horizon figure in the bullet above is superseded and pending a
+  re-run.** `uv run pytest` now reads **611 passed** with the dashboard and
+  api groups installed; 40 Catch2 tests; 35 parity tests still bit-for-bit;
+  26 web tests. Six behaviour changes, all measurement-instrument repairs,
+  none of them a new research result:
+  (1) the deficit sweep had **no per-asset bound** — `deficit = target -
+  qty*price` saturates for an asset too expensive to hold one unit of, so
+  the most expensive product always won it, putting **50.05% of the
+  account** into one box (91594) that had not printed for 19 months; an
+  affordability filter now keeps the largest k whose k cheapest members each
+  cost <= `cash / k` and re-targets over those (measured on the real first
+  bar: 99.9% deployed at a 1.95% largest weight, against 99.9% at 35%
+  before, and against 84.2% deployed if the narrower per-candidate guard is
+  used instead).
+  (2) the screen's spread tiebreaker ranked `low == mid` — one listing, no
+  depth — as the **tightest** quote, which is how 91594 got to the top;
+  non-positive relative spreads now sort last.
+  (3) the liquidity tier for a buy is selected from the **floored base**, not
+  the print (346,378 in-window rows, 15.8% of the inverted ones, fall in a
+  different tier under `low`); the sell side keeps the print, having no
+  floor.
+  (4) `pkmn evaluate`'s benchmark glob is deleted — see the bullet below.
+  (5) `pkmn horizon` scores a still-open trip **net of a modelled exit**;
+  gross scoring flattered open trips by ~13 points and hit
+  sealed-accumulation and cost-aware-reversion hardest.
+  (6) `pkmn signals` reports an executable price and outlay, not a notional
+  at the sales print (it would print $71.88 where the model says $1,800).
+  Items 1, 2, 3 and 5 all move published numbers; nothing here changes a
+  conclusion, because every strategy figure moves against a bar that moves
+  too.
 
 ## Commands
 
@@ -746,16 +779,32 @@ uv.lock together).
   is preserved as `data/results/evaluate-2026-08-04-stale-benchmark/`, and a
   registry record's own `config.benchmark`/`results.reality_check_p` are the
   authoritative per-run values, not whatever is in the directory today.
-  **Still true as of 2026-08-09: the glob was never removed**
-  (`cli.py:837-860`). The 2026-08-08 evaluate run picked the correct
-  benchmark only because those renames are still in place, so nothing
-  matched. Treat this as armed, not fixed. `pkmn horizon` deliberately does
-  not work this way: it takes benchmark **run ids** from the registry (never
-  a directory) and refuses one whose window does not span the run's.
-- **Buy-and-hold benchmark reference figure, 2024-03-01→2026-06-30,
-  impact-on, 217-group universe: +24.93%** (run `20260807T135424Z-8362bc`,
+  **The glob is now deleted (2026-08-09)**: `pkmn evaluate` resolves its
+  benchmark through `_benchmark_candidates(load_runs(root))`, the same
+  registry-only rule `pkmn horizon`, `/api/runs` and the dashboard apply —
+  which also drops the paired sidecar benchmarks tagged `benchmark_for` —
+  and it now refuses a benchmark whose window does not span the strategies'
+  (a real 61-day buy-and-hold on disk used to clear the >= 60-day overlap
+  check and would have produced a Reality Check over 61 days of 660-day
+  curves). Until that fix, the 2026-08-08 run picked the correct benchmark
+  only because those renames were in place, so nothing matched.
+- **Buy-and-hold benchmark reference figure — SUPERSEDED, awaiting the
+  post-fix re-run.** The run below allocated half the account to one
+  non-printing product through the unbounded deficit sweep, and predates the
+  screen and liquidity-tier fixes as well; do not quote it as the bar until
+  the re-run lands. Kept here with its provenance so the replacement can be
+  compared against it. 2024-03-01→2026-06-30,
+  impact-on, 217-group universe: +24.93% (run `20260807T135424Z-8362bc`,
   $10,000, `n_assets=100`). CAGR +10.02%, max drawdown −25.73%, Sharpe
-  0.6336, equity $10,000.00 → $12,492.97, 38 fills. **This is the bar; use
+  0.6336, equity $10,000.00 → $12,492.97, 38 fills. **That drawdown is entry
+  friction, not market risk**: recomputed from the run's `equity.parquet` it
+  lands on the FIRST fill day against a running peak equal to the all-cash
+  starting balance, and nothing near it recurs across the remaining 28
+  months. It prices what it costs to convert the account into sealed
+  inventory (fees plus the floor premium, since positions mark at `market`
+  while buys pay `max(market, low)`) — a real and useful number, but never
+  quote it as "how far a long sealed position fell" or set it beside a
+  strategy's drawdown. **This is the bar; use
   it, and state the deployment fraction with it: 74.2% notional / 99.9%
   all-in** ($7,423.07 notional + $38.00 fees + $2,530.36 impact = $9,991.43;
   impact alone is 34.1% of notional under the buy floor, so a quarter of the
@@ -763,13 +812,17 @@ uv.lock together).
   other, never one from each** — notional runs 60.1 → 4.7 → 74.2 across the
   three benchmark eras and all-in runs 63.0 → 5.5 → 99.9; "4.7% → 99.9%"
   mixes them and overstates the repair. Every earlier benchmark
-  figure is **dead as a comparison point**: +186.0% flat-cost / +183.67%
-  impact-on were the 23-group universe at 63.0% all-in deployment, and
+  figure is **dead as a comparison point**: +186.0% flat-cost and +183.67%
+  impact-on were the 23-group universe, the impact-on one at 63.0% all-in
+  deployment (the flat-cost run charges no impact at all, so its all-in
+  necessarily differs and 63.0% does not describe it), and
   +10.53% (`20260804T061600Z-37a23f`) was the 217-group universe at 5.5%
   all-in — a 95%-cash account whose Sharpe 6.57 and −0.90% drawdown were
   money-market artifacts. **+24.93% is not "the market fell then recovered"
-  relative to those numbers; the allocation rule changed, not the market**,
-  so never chart the three as a series. Two caveats survive the repair.
+  relative to those numbers: the three are different allocation rules over
+  two different universes (23 groups, then 217) under two different cost
+  models (the buy floor arrived with the third)** — not one market measured
+  three times, so never chart them as a series. Two caveats survive the repair.
   (a) 38 of the 100 screened assets actually hold units (the pre-floor
   day-one measurement predicted 73), so the bar is less diversified than
   designed. (b) **The figure carries an implicit `warmup_days=0`** — the

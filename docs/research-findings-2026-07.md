@@ -1824,6 +1824,23 @@ Three things: two repairs and one new measurement
    the account in product, and 5.5% → 99.9% all-in** (all-in adds fees and
    the impact charge; keep the two bases apart, see the deployment table
    below).
+
+   **Amended 2026-08-09, before these figures were re-derived.** As written
+   above, the sweep had no per-asset bound: `deficit = target - qty*price`
+   saturates at `target` for an asset too expensive to hold one unit of, and
+   the only affordability test was against the whole remaining balance, so
+   the most expensive product in the universe always won the sweep. Measured
+   on the run below, that put **50.05% of the account into a single box**
+   (product 91594: one unit, $3,500 print plus $1,500 impact) whose last
+   price print was 19 months before the window ended, so its mark was frozen
+   carry-forward for that whole stretch. The screen fed it: the spread
+   tiebreaker sorted `(mid - low)/mid` ascending, and 91594 had
+   `low == mid == 5000` — a single listing with no depth, scoring 0.0 and
+   ranking best of all. Both are fixed: a non-positive relative spread now
+   sorts last with the undefined case, and an affordability filter keeps the
+   largest k whose k cheapest members each cost at most `cash / k`, then
+   re-targets over those (`_affordable`). Every figure in this section is
+   from before that fix and is superseded by the re-run.
 2. **Buys price at `max(market, low)`** (`engine/costs.py` `buy_impact`,
    `engine/execution.py` `_fill_buy`, mirrored in C++). The premium over
    `market` is charged through the `impact` column rather than the `price`
@@ -1888,6 +1905,13 @@ machinery question 3 needs, but running it is a separate full-zoo re-run and
 was deliberately out of scope.
 
 ### The repaired benchmark
+
+> **Superseded (2026-08-09).** Every figure in this subsection comes from a
+> run made before the final-review fix wave, which changed the screen's
+> spread tiebreaker, added the affordability filter to the sweep, and moved
+> the buy-side liquidity tier onto the floored base — see the amendment under
+> item 1 above. Half this run's account sat in one non-printing product. The
+> re-run replaces these numbers.
 
 Run `20260807T135424Z-8362bc`, `pkmn backtest --start 2024-03-01 --end
 2026-06-30` (impact on, `n_assets=100`, $10,000):
@@ -1985,18 +2009,37 @@ derived; only the third is new here.
 invested account**, so it is the first that can be read as "what holding
 sealed did". The other two are returns on 63% and 5.5% of the money, with the
 rest in a zero-yield cash sleeve. Do not construct a narrative out of
-183.67 → 10.53 → 24.93: the movement is an allocation rule changing under a
-fixed market, and only the last figure is a bar. Every published number from
+183.67 → 10.53 → 24.93: it is **three different allocation rules over two
+different universes under two different cost models**, not a market time
+series. The table's own columns say so — step 1 widened the universe from 23
+tcgcsv groups to 217, and step 3 added the buy floor on top of a new
+allocation rule. (An earlier version of this paragraph called it "an
+allocation rule changing under a fixed market", which contradicts the table
+directly; the conclusion it supports is unchanged.) Only the last figure is
+a bar. Every published number from
 the previous plan was measured against the 4.7%-deployed benchmark and is
 superseded as a comparison point.
 
 Its risk metrics change character for the same reason. The 4.7% benchmark
 reported a Sharpe of 6.57 and a max drawdown of −0.90%, which were
 money-market artifacts of a 95%-cash account, not risk-adjusted quality. The
-repaired benchmark reports Sharpe 0.63 and max drawdown −25.73% — the
-drawdown of an actual long sealed position. That looks worse and is more
-honest. (The standing mark-smoothing caveat applies to both: thin markets and
-carry-forward marks inflate every Sharpe in this file.)
+repaired benchmark reports Sharpe 0.63 and a far larger max drawdown. That
+looks worse and is more honest.
+
+**But read that drawdown for what it measures, which is not market risk.**
+Recomputed from the run's own `equity.parquet`, the maximum drawdown occurs
+on the **first fill day**, against a running peak equal to the starting cash
+— i.e. the all-cash, pre-trade account. Equity steps down the moment the
+account converts cash into inventory and never approaches that level of
+drawdown again over the remaining 28 months. It is **entry friction booked
+instantly**: seller-side costs plus, since the buy floor landed, the premium
+between the sales print a position marks at and the cheapest listing it must
+actually pay. That makes it a genuinely useful number — it is the round-trip
+cost of *taking* the sealed position, priced in one figure — but it is not
+"how far a long sealed position fell". Do not quote it as market risk, and do
+not compare it against a strategy's drawdown as though the two measure the
+same thing. (The standing mark-smoothing caveat applies to every Sharpe in
+this file: thin markets and carry-forward marks inflate them all.)
 
 ### Before/after: stitched OOS total return, all six strategies plus the benchmark
 
@@ -2100,17 +2143,19 @@ against went from a 5.5%-deployed cash sleeve to a fully invested position
 returning +24.93%, so beating it got harder. The two p-values are measured
 against two different bars.
 
-**A live trap, recorded because it has already published a wrong number
-once.** `pkmn evaluate` still resolves its benchmark by globbing
-`data/results/buy-and-hold-sealed-*` before falling back to the run registry
-(`cli.py:837-860`) — the exact mechanism that published p = 1.0000 instead of
-0.8038 on the previous branch. It picked the right benchmark **this time only
-because** the stale directories were renamed `STALE-preswap-23group-*` there,
-so the glob matched nothing and the registry fallback fired. **The code was
-never fixed.** Anyone who re-creates a `buy-and-hold-sealed-*` directory name
-re-arms it. `pkmn horizon` deliberately does not work this way: it resolves
-benchmarks by run id from the registry only, and refuses a benchmark whose
-window does not span the run's.
+**A live trap that was still armed when this section was written, and has
+since been disarmed.** At the time of the run above, `pkmn evaluate` still
+resolved its benchmark by globbing `data/results/buy-and-hold-sealed-*`
+before falling back to the run registry — the exact mechanism that published
+p = 1.0000 instead of 0.8038 on the previous branch. It picked the right
+benchmark **only because** the stale directories were renamed
+`STALE-preswap-23group-*`, so the glob matched nothing and the registry
+fallback fired. The glob has now been deleted (2026-08-09): evaluate goes
+through the same `_benchmark_candidates` registry rule `pkmn horizon` uses,
+drops the paired sidecar benchmarks tagged `benchmark_for`, and refuses a
+benchmark whose window does not span the strategies'. **The p-value quoted
+in this section predates that fix**; it was resolved by hand-verified
+directory renames rather than by the code, and the re-run supersedes it.
 
 ### `pkmn horizon`: the measurement this branch exists to produce
 
@@ -2222,6 +2267,20 @@ The standing mark-smoothing caveat applies with full force: a still-open
 trip's return is a mark, not a realized exit, and marks on this data are
 carried forward through thin markets.
 
+**Correction (2026-08-09), affecting every still-open trip in the tables
+above.** When those numbers were produced, an open trip was scored at the
+raw final mark with **no exit cost deducted**, while every closed trip beside
+it was already net of the fees and impact the engine charged on both fills.
+With a 12.75% seller fee that flattered open trips by roughly 13 points, and
+it fell hardest on the two least-bad strategies (10 of sealed-accumulation's
+33 trips; 4 of cost-aware-reversion's 41 in-band). `research/horizon.py` now
+charges a modelled exit — fees, shipping and the sell-side walk, through the
+run's own CostModel — so open and closed trips sit on one scale. **The edge
+figures in this section therefore overstate exactly those strategies and are
+superseded by the re-run.** The modelled exit still ignores the per-day
+liquidity cap and is still a mark rather than a fill; both are stated in the
+generated report.
+
 ### The honest conclusion
 
 **The owner's question now has a measured answer, and the answer is no.**
@@ -2242,9 +2301,11 @@ strategies still lose.
 What this branch delivered:
 
 - **A bar worth measuring against.** 74.2% of the account in product instead
-  of 4.7% (99.9% all-in instead of 5.5%), +24.93% over the window, with a
-  −25.73% drawdown that belongs to a real long position rather than to a cash
-  sleeve.
+  of 4.7% (99.9% all-in instead of 5.5%), +24.93% over the window, and a max
+  drawdown that finally measures something — though not market risk: it is
+  booked on the first fill day against the all-cash starting peak, so it
+  prices the friction of *entering* the sealed universe (see "The repaired
+  benchmark" above).
 - **Fills priced at something you could actually transact at**, and the
   resolution of an open question about `market < low` that turned out to be a
   category error in the consumer rather than a property of the data.
@@ -2282,10 +2343,12 @@ recorded here rather than left to be discovered.
 
 ### Known live traps and follow-ups
 
-- **`pkmn evaluate`'s benchmark glob is still unfixed** (`cli.py:837-860`).
-  It resolved correctly here only because no directory matched the pattern.
-  Prefer `--benchmark data/results/<run_id>` when the answer matters, and
-  never create a `buy-and-hold-sealed-*` directory by hand.
+- ~~**`pkmn evaluate`'s benchmark glob is still unfixed.**~~ **Fixed
+  2026-08-09.** The glob is deleted; resolution is registry-only through
+  `_benchmark_candidates`, sidecar benchmarks tagged `benchmark_for` are
+  skipped, and a benchmark that does not span the strategies' window is
+  refused instead of silently shrinking the comparison. Creating a
+  `buy-and-hold-sealed-*` directory by hand no longer changes any result.
 - **Walk-forward artifacts carry no `fills.parquet`**, so `pkmn horizon`
   cannot read a walk-forward run. Every horizon number above therefore comes
   from a default-parameter backtest. Writing per-fold fills into the
