@@ -50,15 +50,27 @@ def render_signals_markdown(report: SignalReport) -> str:
     if not report.recommendations:
         lines.append("No recommendations today.")
     else:
+        # `exec` and `outlay` are the actionable pair: `market` is a print
+        # derived from recent SALES and a buy cannot fill below the cheapest
+        # current LISTING, so quoting only the print understates the cash
+        # required (see Recommendation.exec_price).
         lines += [
-            "| action | product | sub_type | qty | market | notional |",
-            "|--------|---------|----------|-----|--------|----------|",
+            "| action | product | sub_type | qty | market | exec | outlay |",
+            "|--------|---------|----------|-----|--------|------|--------|",
         ]
         lines += [
             f"| {r.action} | {r.name} | {r.sub_type} | {r.quantity}"
-            f" | ${r.market_price:.2f} | ${r.notional:.2f} |"
+            f" | ${r.market_price:.2f} | ${r.exec_price:.2f} | ${r.exec_notional:.2f} |"
             for r in report.recommendations
         ]
+        if any(r.exec_price > r.market_price for r in report.recommendations):
+            lines += [
+                "",
+                "`exec` is max(market, lowest listing): tcgcsv's market price comes from"
+                " recent SALES, and where it sits below the cheapest current listing a buy"
+                " cannot fill there. `outlay` is qty x exec, before shipping, fees and any"
+                " walk up the book.",
+            ]
     if report.portfolio_snapshot is not None:
         snap = report.portfolio_snapshot
         lines += ["", "## Portfolio", ""]
@@ -95,4 +107,10 @@ def render_signals_markdown(report: SignalReport) -> str:
 def signals_to_json(report: SignalReport) -> str:
     payload = asdict(report)
     payload["as_of"] = report.as_of.isoformat()
+    # asdict() serializes fields only, and the executable price is a property
+    # (derived from `low`, never stored twice). Emit it explicitly so a JSON
+    # consumer sees the same outlay the markdown does.
+    for out, rec in zip(payload["recommendations"], report.recommendations, strict=True):
+        out["exec_price"] = rec.exec_price
+        out["exec_notional"] = rec.exec_notional
     return json.dumps(payload, indent=2) + "\n"

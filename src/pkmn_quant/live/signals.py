@@ -67,6 +67,38 @@ class Recommendation:
     mid: float | None = None
     low: float | None = None
 
+    @property
+    def exec_price(self) -> float:
+        """What one unit actually costs to transact — the number to act on.
+
+        `market_price` is tcgcsv's `market`: derived from recent completed
+        SALES. `low` is the cheapest current LISTING. A buy cannot lift an
+        offer that does not exist, so its executable price is
+        max(market, low) — the same floor the engine, both C++ mirrors and
+        `live/paper.py` apply (CostModel.buy_base). Without it this report
+        printed $71.88 for an order the model prices at $1,800.
+
+        Two deliberate asymmetries. A SELL keeps the print: tcgcsv publishes
+        no bid series, so there is nothing to floor it against. And unlike
+        `buy_base` this is NOT gated on `impact_enabled`: the gate exists
+        because the premium is *charged* as impact and a flat-cost run must
+        not reserve cash for a cost it does not book, but the cheapest live
+        listing is a fact about the market either way, and a human reading
+        "what should I buy today" needs the real outlay, not a modelling
+        convention. Sizing still goes through paper.py, which does gate.
+
+        A missing `low` (the asset did not print today) means no floor, never
+        a guessed one.
+        """
+        if self.action == "BUY" and self.low is not None:
+            return max(self.market_price, self.low)
+        return self.market_price
+
+    @property
+    def exec_notional(self) -> float:
+        """`quantity` units at `exec_price` — the cash this line really moves."""
+        return round(self.quantity * self.exec_price, 2)
+
 
 @dataclass(frozen=True)
 class SignalReport:
@@ -179,6 +211,9 @@ def generate_signals(
                 name=names.get(order.asset.product_id, f"product {order.asset.product_id}"),
                 quantity=qty,
                 market_price=mark,
+                # The print-based notional, kept as-is. What the line actually
+                # costs is `exec_notional`, derived from `low` below — see
+                # Recommendation.exec_price.
                 notional=round(qty * mark, 2),
                 avg_cost=avg_cost,
                 # avg_cost==0.0 is falsy so the guard also blocks division-by-zero;
