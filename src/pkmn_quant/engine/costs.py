@@ -107,10 +107,12 @@ class CostModel:
         being bought: on the research window 346,378 rows (15.8% of the 2.19M
         inverted ones) sit in a different tier under `low` than under
         `market`, and every one of them was being granted a cheaper product's
-        depth. That walk term
-        alone is zero when mid is missing or the quote is crossed — but the
-        floor premium is still charged in those cases, because a missing mid
-        says nothing about whether the cheapest listing was reachable. The
+        depth.
+
+        The walk term alone is zero when mid is missing or the quote is
+        crossed — but the floor premium is still charged in those cases,
+        because a missing mid says nothing about whether the cheapest
+        listing was reachable. The
         whole result is zero when impact is disabled. Never negative, never
         invented from missing data: a missing `low` means no floor, not a
         guessed one.
