@@ -6,7 +6,10 @@ most sealed products, so the "fully invested" bar sat mostly in cash. Two
 rules fix that without changing the thesis. A liquidity screen
 (`research/screen.py`) picks the n_assets most tradeable products instead of
 spreading across all of them, and a deficit sweep spends the remainder that
-integer sizing leaves behind, one unit at a time.
+integer sizing leaves behind, one unit at a time. Between the two sits an
+affordability filter (`_affordable`) that re-targets over the assets the
+account can actually hold a unit of, without which the sweep concentrates
+the account into whatever it cannot afford.
 
 Ported to C++ in cpp/src/pkmn_engine/strategies/buy_and_hold.cpp, and pinned
 bit-for-bit by tests/test_native_parity.py — a change here is a change there,
@@ -25,6 +28,68 @@ from pkmn_quant.engine.strategy import Context, Strategy
 from pkmn_quant.research.screen import rank_assets
 
 _UNRANKED: tuple[int, float] = (0, float("inf"))
+
+
+def _affordable(candidates: list[tuple[Asset, float]], cash: float) -> list[tuple[Asset, float]]:
+    """Drop the screened assets the account cannot equal-weight into.
+
+    Keeps the largest k such that the k CHEAPEST candidates each cost at most
+    ``cash / k``, in screen order. The predicate is monotone — the k-th
+    cheapest price only rises with k while ``cash / k`` only falls — so
+    scanning ascending prices and stopping at the first failure finds the
+    maximum k exactly, and the result is total (ties in price break on screen
+    position, which is itself product_id-tie-broken).
+
+    Why this exists. `on_bar`'s deficit sweep measures ``target - qty*price``,
+    which SATURATES at ``target`` for any asset too expensive to hold one unit
+    of, so the single most expensive product in the universe always carried the
+    largest possible deficit and the sweep funded it out of every other asset's
+    share. Measured on the published benchmark run: one $3,500 box took 50.05%
+    of a $10,000 account (1 unit, $3,500 print + $1,500 impact) while the other
+    37 filled assets held ~1.4% each — a bar documented as "screened top-100,
+    equal-dollar" that was really one asset at half the book, marking on a
+    price that had not printed for 19 months.
+
+    Filtering rather than guarding is the load-bearing choice. The narrow fix
+    (skip a candidate when ``price > target``) removes the concentration but
+    strands every dropped asset's share in cash: measured on the same first
+    bar, 35 of the 100 screened sealed products price above the $100 target, and
+    the narrow guard lands at 84.2% of the account deployed with $1,579 idle,
+    against 99.9% before. Re-targeting over the assets that survive spends the
+    remainder AND bounds the weight — 99.9% deployed across 74 assets, largest
+    weight 1.95% — because the freed shares raise ``target`` (here $100 →
+    $135.14) for the assets that can actually absorb them. Equal-dollar over
+    what the account can hold is a benchmark; equal-dollar over a wish list is
+    a cash sleeve with a concentrated tail.
+
+    Two consequences worth stating rather than discovering:
+
+    * After this filter every kept asset holds at least one unit from the
+      initial floor sizing (``price <= target``), so no deficit can saturate
+      any more and the sweep needs no per-asset guard of its own — the
+      pathology is gone by construction, not suppressed by a test. Note the
+      review's suggested ``qty[i] == 0 and price > target`` is exactly
+      ``price > target``: qty starts at ``floor(target / price)``, so an asset
+      with any units already has ``price <= target``.
+    * A kept asset can still overshoot its target by ONE unit (a positive
+      deficit may be smaller than the price that closes it), i.e. it ends
+      under 2x its share — 1.95% of the account above, not 50%. Forbidding
+      that would stop the sweep from spending the remainder at all, which is
+      the entire reason the sweep exists, so it is allowed and bounded rather
+      than banned.
+
+    ``k == 0`` (nothing priced at or below the whole balance) returns nothing:
+    the account cannot buy a single unit of anything screened.
+    """
+    if not candidates:
+        return []
+    by_price = sorted(range(len(candidates)), key=lambda i: (candidates[i][1], i))
+    k = 0
+    for rank, i in enumerate(by_price, start=1):
+        if candidates[i][1] > cash / rank:
+            break
+        k = rank
+    return [candidates[i] for i in sorted(by_price[:k])]
 
 
 class BuyAndHold(Strategy):
@@ -69,7 +134,7 @@ class BuyAndHold(Strategy):
                 ap[0].sub_type,
             )
         )
-        return candidates[: self.n_assets]
+        return _affordable(candidates[: self.n_assets], ctx.cash)
 
     def on_bar(self, ctx: Context) -> list[Order]:
         if self._entered:
@@ -88,6 +153,12 @@ class BuyAndHold(Strategy):
         # furthest below its target dollar weight. Strict > means ties go to
         # the earliest in screen order, which is itself product_id-tie-broken,
         # so the result is total and reproducible in both engines.
+        #
+        # `deficit` can no longer saturate at `target`: _affordable() has
+        # already dropped every candidate priced above it, so each one holds
+        # >= 1 unit here and its deficit is strictly under one unit's price.
+        # Do not reintroduce unaffordable candidates and expect this loop to
+        # behave — see _affordable's docstring for what happens when it can.
         while True:
             best = -1
             best_deficit = 0.0

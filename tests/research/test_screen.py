@@ -102,6 +102,40 @@ def test_missing_low_sorts_last() -> None:
     assert out["spread"].to_list() == [0.1, float("inf")]
 
 
+def test_zero_spread_sorts_last_not_first() -> None:
+    """C1(b) regression: `low == mid` is no depth, not the tightest book.
+
+    A zero relative spread used to score 0.0 and rank ahead of every real
+    quote. At the first bar density saturates, so this key IS the screen, and
+    it was selecting for illiquidity: product 91594 (`low == mid == 5000`,
+    last print 19 months before the window ended) topped the screened sealed
+    universe on exactly this and took half the benchmark account.
+    """
+    df = _rows(
+        [
+            (1, "Normal", D, 10.0, 10.0, 10.0),  # single listing: spread 0.0
+            (2, "Normal", D, 9.0, 10.0, 9.5),  # a real book: spread 0.1
+        ]
+    )
+    out = rank_assets(df, today=D)
+    assert out["product_id"].to_list() == [2, 1]
+    assert out["spread"].to_list() == [0.1, float("inf")]
+
+
+def test_crossed_quote_sorts_last() -> None:
+    """`low > mid` is incoherent (cheapest listing above the median one), and
+    its negative spread used to rank BETTER than a zero one. Same bucket."""
+    df = _rows(
+        [
+            (1, "Normal", D, 12.0, 10.0, 11.0),  # crossed: spread -0.2
+            (2, "Normal", D, 9.0, 10.0, 9.5),
+        ]
+    )
+    out = rank_assets(df, today=D)
+    assert out["product_id"].to_list() == [2, 1]
+    assert out["spread"].to_list() == [0.1, float("inf")]
+
+
 def test_product_id_is_the_final_tie_break() -> None:
     """Identical density and spread must still order deterministically."""
     df = _rows([(7, "Normal", D, 9.0, 10.0, 9.5), (3, "Normal", D, 9.0, 10.0, 9.5)])

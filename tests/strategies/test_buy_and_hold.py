@@ -73,6 +73,99 @@ def _bh_ctx(n_products: int, cash: float, price: float) -> Context:
     return make_ctx(cash=cash, marks=marks, products=products, history=history)
 
 
+def _bh_ctx_prices(prices: list[float], cash: float) -> Context:
+    """One sealed asset per entry in `prices`, product_ids 1..n, one print each.
+
+    Same shape as `_bh_ctx` but with a per-asset price, so allocation across a
+    MIXED price ladder can be exercised. Every quote is the same multiple of
+    its own market price, so the screen's spread key ties to within float
+    noise and no asset is deliberately ranked ahead of another — assertions
+    below are therefore on multisets and totals, never on screen position.
+    """
+    n = len(prices)
+    ids = list(range(1, n + 1))
+    products = pl.DataFrame(
+        {
+            "product_id": ids,
+            "group_id": [10] * n,
+            "name": [f"Box {i}" for i in ids],
+            "rarity": [None] * n,
+            "kind": ["sealed"] * n,
+            "released_on": [D1] * n,
+        }
+    )
+    history = pl.DataFrame(
+        {
+            "date": [D1] * n,
+            "product_id": ids,
+            "sub_type": ["Normal"] * n,
+            "low": [p * 0.9 for p in prices],
+            "mid": [p * 1.15 for p in prices],
+            "high": [p * 3.0 for p in prices],
+            "market": list(prices),
+        }
+    )
+    marks = {Asset(product_id=i, sub_type="Normal"): p for i, p in zip(ids, prices, strict=True)}
+    return make_ctx(cash=cash, marks=marks, products=products, history=history)
+
+
+def test_sweep_never_funds_one_asset_out_of_the_others_shares() -> None:
+    """C1(a) regression: the deficit sweep used to concentrate the account.
+
+    `deficit = target - qty*price` saturates at `target` for an asset too
+    expensive to hold one unit of, and the only affordability test was against
+    the whole remaining balance, so the most expensive product in the universe
+    always won the sweep. On the published benchmark run that put 50.05% of a
+    $10,000 account into a single box.
+
+    Hand-derivation: cash 1000, ten assets, five at $10 and five at $150.
+      Pre-fix: target 100. Cheap assets take floor(100/10) = 10 units ($100
+        each, $500 total), the $150 ones take zero, leaving $500. Each $150
+        asset then shows the maximum deficit of $100, so the sweep buys them
+        one at a time until the cash runs out -- three units at $150 = $450,
+        each a 15% position against a 10% target.
+      Post-fix: `_affordable` keeps the largest k whose k cheapest members
+        cost <= 1000/k. k=6 works (the 6th cheapest is $150 <= $166.67); k=7
+        does not ($150 > $142.86). So five $10 assets plus ONE $150 asset,
+        re-targeted at $166.67. Sizing: 16 units of each $10 asset ($160) and
+        1 of the $150. That is $950; the sweep spends the last $50 as one more
+        unit of each $10 asset ($170 each). Total $1,000 deployed at a largest
+        weight of $170 -- above the $166.67 target by less than one unit,
+        which is the bounded overshoot `_affordable` documents, against 1.5x
+        target pre-fix here and 5x target on the real run.
+    """
+    prices = [10.0] * 5 + [150.0] * 5
+    orders = BuyAndHold(kind="sealed", n_assets=10).on_bar(_bh_ctx_prices(prices, cash=1000.0))
+    marks = {Asset(product_id=i, sub_type="Normal"): p for i, p in enumerate(prices, start=1)}
+    notionals = sorted(o.quantity * marks[o.asset] for o in orders)
+    assert notionals == [150.0, 170.0, 170.0, 170.0, 170.0, 170.0]
+    assert sum(notionals) == 1000.0  # the whole account, as before the fix
+    # Exactly one of the five $150 assets is funded, and nothing is bought
+    # that the account could not have equal-weighted into.
+    assert sum(1 for o in orders if marks[o.asset] == 150.0) == 1
+
+
+def test_asset_priced_above_the_target_is_dropped_not_funded() -> None:
+    """The narrow statement of the same rule, isolated from the sweep.
+
+    cash 400 over four assets targets $100 each; a $250 asset cannot be held
+    at that weight, so it leaves the universe entirely and the remaining three
+    re-target at 400/3 = $133.33 -> 13 units each ($130), sweep spends $9 of
+    the last $10 as one more unit. Pre-fix the $250 asset carried the maximum
+    deficit and took one unit -- 62.5% of the account.
+    """
+    orders = BuyAndHold(kind="sealed", n_assets=4).on_bar(
+        _bh_ctx_prices([10.0, 10.0, 10.0, 250.0], cash=400.0)
+    )
+    assert {o.asset.product_id for o in orders} == {1, 2, 3}
+    assert sorted(o.quantity for o in orders) == [13, 13, 14]
+
+
+def test_nothing_is_bought_when_no_asset_fits_the_account() -> None:
+    """k == 0: the account cannot buy one unit of anything screened."""
+    assert BuyAndHold(kind="sealed", n_assets=3).on_bar(_bh_ctx_prices([10.0] * 3, cash=5.0)) == []
+
+
 def test_first_bar_equal_weights_sealed_universe() -> None:
     """Hand-derivation: cash 300, sealed universe A ($100) and B ($50).
 
