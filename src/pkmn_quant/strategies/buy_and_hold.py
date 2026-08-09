@@ -46,7 +46,7 @@ def _affordable(candidates: list[tuple[Asset, float]], cash: float) -> list[tupl
     largest possible deficit and the sweep funded it out of every other asset's
     share. Measured on the published benchmark run: one $3,500 box took 50.05%
     of a $10,000 account (1 unit, $3,500 print + $1,500 impact) while the other
-    37 filled assets held ~1.4% each — a bar documented as "screened top-100,
+    37 filled assets averaged ~1.4% each — a bar documented as "screened top-100,
     equal-dollar" that was really one asset at half the book, marking on a
     price that had not printed for 19 months.
 
