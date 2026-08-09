@@ -451,7 +451,8 @@ tcgcsv.com). Design spec: `docs/superpowers/specs/2026-06-09-pkmn-quant-design.m
   now actually invested.** `buy_and_hold` gained a liquidity screen
   (`research/screen.py`: print density desc, relative spread `(mid-low)/mid`
   asc, then `product_id`/`sub_type`) plus an equal-dollar allocation and a
-  deficit sweep, C++-ported bit-for-bit: **4.7% → 99.9% of capital deployed**
+  deficit sweep, C++-ported bit-for-bit: **4.7% → 74.2% of the account in
+  product, 5.5% → 99.9% all-in** (never mix the two bases)
   ($7,423.07 notional + $38.00 fees + $2,530.36 impact = $9,991.43 of
   $10,000), total return **+10.53% → +24.93%** (run
   `20260807T135424Z-8362bc`, 38 fills, Sharpe 0.63, max drawdown −25.73%;
@@ -755,9 +756,13 @@ uv.lock together).
   impact-on, 217-group universe: +24.93%** (run `20260807T135424Z-8362bc`,
   $10,000, `n_assets=100`). CAGR +10.02%, max drawdown −25.73%, Sharpe
   0.6336, equity $10,000.00 → $12,492.97, 38 fills. **This is the bar; use
-  it, and state the deployment fraction with it: 99.9% all-in**
-  ($7,423.07 notional + $38.00 fees + $2,530.36 impact = $9,991.43; impact
-  alone is 34.1% of notional under the buy floor). Every earlier benchmark
+  it, and state the deployment fraction with it: 74.2% notional / 99.9%
+  all-in** ($7,423.07 notional + $38.00 fees + $2,530.36 impact = $9,991.43;
+  impact alone is 34.1% of notional under the buy floor, so a quarter of the
+  account is friction, not inventory). **Quote deployment on one basis or the
+  other, never one from each** — notional runs 60.1 → 4.7 → 74.2 across the
+  three benchmark eras and all-in runs 63.0 → 5.5 → 99.9; "4.7% → 99.9%"
+  mixes them and overstates the repair. Every earlier benchmark
   figure is **dead as a comparison point**: +186.0% flat-cost / +183.67%
   impact-on were the 23-group universe at 63.0% all-in deployment, and
   +10.53% (`20260804T061600Z-37a23f`) was the 217-group universe at 5.5%
@@ -774,7 +779,12 @@ uv.lock together).
   and warmup 120 gives 42 fills / +16.07%. `pkmn backtest` exposes no
   `--warmup-days` flag and defaults to 0, while `pkmn walkforward` defaults
   to 120, so the bar and the walk-forward rows compared against it are not
-  on the same warmup. See the findings doc's Instrument repair section.
+  on the same warmup. **Direction and scope, so nobody has to re-derive
+  them:** the published bar is the *harder* of the two (+24.93% vs +16.07%),
+  so the mismatch is conservative against the strategies and no conclusion
+  flips; and **the horizon results are unaffected** — all six horizon source
+  runs and the index are `pkmn backtest` at warmup 0, so they are internally
+  consistent. See the findings doc's Instrument repair section.
 - **The benchmark is deliberately NOT walk-forward-searchable.**
   `buy-and-hold` stays out of `REGISTRY`; its one knob lives in
   `BUY_AND_HOLD_PARAMS` (`research/backtest_run.py`, `n_assets`, default

@@ -16,15 +16,18 @@
 > the numbers below only as "on the 23-group universe".
 >
 > *Instruments (2026-08-09).* Both of the benchmark figures above are
-> returns on a barely-invested account (60.1% and 4.7% of cash deployed),
-> and every number in this file above the last section priced buys from
-> `market`, a sales-derived print that often sits below the cheapest
-> listing. Both were repaired. **The current benchmark reference figure is
-> +24.93% (run `20260807T135424Z-8362bc`, 99.9% deployed, impact-on,
-> 2024-03-01..2026-06-30)** and it is not comparable to +183.67% or
-> +10.53%, because the allocation rule changed rather than the market. The
-> last section also answers, per round trip over matched 1-3 month windows,
-> whether any strategy beats holding sealed: **no**.
+> returns on a barely-invested account (60.1% and 4.7% of cash into product;
+> 63.0% and 5.5% all-in, i.e. including fees and impact), and every number
+> in this file above the last section priced buys from `market`, a
+> sales-derived print that often sits below the cheapest listing. Both were
+> repaired. **The current benchmark reference figure is +24.93% (run
+> `20260807T135424Z-8362bc`, 74.2% notional / 99.9% all-in deployed,
+> impact-on, `warmup_days=0`, 2024-03-01..2026-06-30)** and it is not
+> comparable to +183.67% or +10.53%. Quote deployment on one basis or the
+> other, never one from each: notional runs 60.1 → 4.7 → 74.2 and all-in
+> runs 63.0 → 5.5 → 99.9. The last section also answers, per round trip
+> over matched 1-3 month windows, whether any strategy beats holding
+> sealed: **no**.
 
 **Catalog-completeness note (2026-07-29/30), read before anything below.**
 Every section in this file above the "Catalog completeness" section near the
@@ -1205,7 +1208,8 @@ difference is the universe. The benchmark row is a single full-window
 | ml-ranker-v2 | −23.15% (`37eeeb`) | **−99.81%** (`452b23`) | −76.7 pts |
 
 **Superseded 2026-08-09** by the Instrument repair section at the end of this
-file: the benchmark row was measured at 4.7% deployment (now 99.9%, +24.93%)
+file: the benchmark row was measured at 4.7% notional deployment (now 74.2%
+notional / 99.9% all-in, +24.93%)
 and every row was measured without the executable buy-price floor. Those
 figures are the "before" column of that section's before/after table.
 
@@ -1709,7 +1713,8 @@ order, and until both land, no cross-strategy comparison on the wide
 universe should be treated as a research result.
 
 **Update 2026-08-09:** the benchmark sizing fix landed (screen + deficit
-sweep, 4.7% → 99.9% deployed) along with an executable buy-price floor, and
+sweep, 4.7% → 74.2% notional and 5.5% → 99.9% all-in deployed) along with an
+executable buy-price floor, and
 the zoo was re-run against both; see the Instrument repair section at the end
 of this file. The liquidity/quote-sanity *experiment* — restricting the
 traded universe by a print-density or spread threshold — is still not run.
@@ -1783,9 +1788,10 @@ rediscovered as a surprise.
 
 **This section supersedes the Full set coverage section above on two axes:
 the benchmark figure, and the price a buy executes at.** Every number in that
-section was measured against a benchmark that deployed 4.7% of the account,
-and with buys priced from `market` — a sales-derived print that on 2.19M
-in-window rows sits *below* the cheapest listing. Both were repaired here.
+section was measured against a benchmark that put 4.7% of the account into
+product (5.5% all-in), and with buys priced from `market` — a sales-derived
+print that on 2.19M in-window rows sits *below* the cheapest listing. Both
+were repaired here.
 The universe is unchanged (all 217 groups, same 908-day warehouse), the
 window is unchanged (2024-03-01..2026-06-30), and market impact is on
 throughout, so this section and that one differ only by the two repairs.
@@ -1814,7 +1820,10 @@ Three things: two repairs and one new measurement
    `(mid - low) / mid`, then `product_id`/`sub_type`; keeps the top
    `n_assets` (default 100); allocates equal-dollar; then sweeps the
    remaining cash into whichever screened asset has the largest dollar
-   deficit until nothing is affordable. Deployment went **4.7% → 99.9%**.
+   deficit until nothing is affordable. Deployment went **4.7% → 74.2% of
+   the account in product, and 5.5% → 99.9% all-in** (all-in adds fees and
+   the impact charge; keep the two bases apart, see the deployment table
+   below).
 2. **Buys price at `max(market, low)`** (`engine/costs.py` `buy_impact`,
    `engine/execution.py` `_fill_buy`, mirrored in C++). The premium over
    `market` is charged through the `impact` column rather than the `price`
@@ -1939,9 +1948,21 @@ defaults to 0.** Note the asymmetry this creates in the comparison table
 below: the six strategy rows are walk-forward runs at `warmup_days=120`,
 while the bar is a backtest at 0. That asymmetry is not new — every prior
 benchmark figure in this file came from `pkmn backtest` the same way — but
-the screen makes buy-and-hold newly sensitive to it, so it is worth stating
-that "+24.93%" carries an implicit `warmup_days=0` and a re-run under a
-different warmup will not reproduce it.
+the screen makes buy-and-hold newly sensitive to it, so "+24.93%" carries an
+implicit `warmup_days=0` and a re-run under a different warmup will not
+reproduce it.
+
+**Direction and scope, stated so a later reader does not have to re-derive
+them.** *Direction:* the published bar is the **harder** of the two
+(+24.93% against +16.07%), so a warmup-matched comparison would lower the bar
+and make it easier to beat. The mismatch therefore runs against the
+strategies, not for them, and since every strategy is deeply negative on
+either bar, nothing about the conclusion turns on it. *Scope:* it touches
+only the walk-forward comparison table below. **The horizon results — this
+section's headline finding — are unaffected**, because all six horizon source
+runs and the index they are scored against are `pkmn backtest` runs at
+`warmup_days=0`, so that comparison is internally warmup-consistent by
+construction.
 
 ### +24.93% is not comparable to +183.67% or +10.53%
 
@@ -2003,7 +2024,7 @@ both axes at once.
 | ml-ranker-v2 | `20260809T013624Z-98cf5a` | −99.81% | **−99.43%** | −47.61% | −27.37% | −0.0600 |
 | cost-aware-reversion | `20260808T221152Z-4766a9` | −98.70% | **−99.98%** | −34.77% | −46.00% | 0.3047 |
 | dip-buyer | `20260808T220318Z-15d706` | −99.80% | **−100.00%** | −74.28% | −54.39% | 0.0086 |
-| **buy-and-hold sealed** (backtest) | `20260807T135424Z-8362bc` | +10.53% (4.7% deployed) | **+24.93% (99.9% deployed)** | — | — | — |
+| **buy-and-hold sealed** (backtest) | `20260807T135424Z-8362bc` | +10.53% (4.7% notional / 5.5% all-in) | **+24.93% (74.2% notional / 99.9% all-in)** | — | — | — |
 
 Timings: the four native walk-forwards took ~4.5 minutes each; ml-ranker 65
 minutes and ml-ranker-v2 139 minutes, both `--workers 1` under
@@ -2020,7 +2041,21 @@ The mechanism is direct. dip-buyer and cost-aware-reversion select on
 `market`, so they still see a $71.88 print as a bargain — and now pay the
 $1,800 that was the cheapest listing actually available that day. The
 "bargains" the dip-selectors were finding stopped being buyable at the price
-that made them look like bargains. Compounding it, positions still **mark**
+that made them look like bargains.
+
+**Be precise about the size of that change, because this file already
+measured the old cost.** On the exact fill traced in the Full set coverage
+section (product 107010, 2025-08-19), the old model's walk from `market`
+toward `mid` already produced an effective **$936.27/unit all-in** — about
+half the cheapest listing, which is why that section concluded the impact
+charge was defensible and in fact undercharging, and that the entry *price*
+was the problem. Under the floor, the same quote row costs `max(71.88, 1800)`
+= $1,800 base plus a walk term that collapses to zero (that day `low` = `mid`
+= `high` = $1,800, so `mid - base` = 0), i.e. **≈$1,800/unit all-in**. So the
+honest contrast on that row is roughly **$936 → $1,800, a doubling** — not
+$71.88 → $1,800. (That is per-unit arithmetic on the quote row, not a claim
+about an observed fill: the floor also changes affordability sizing, so the
+new engine need not buy the same 3 units.) Compounding it, positions still **mark**
 at `market` (deliberately unchanged), so buying at the ask and marking at the
 last sale books an immediate unrealised loss. That combination is correct:
 you really did pay the offer, and the position really is worth what
@@ -2192,7 +2227,8 @@ carried forward through thin markets.
 **The owner's question now has a measured answer, and the answer is no.**
 
 Over the 1-3 month band, measured per round trip against holding the sealed
-index over that trip's own dates, on a benchmark that is 99.9% invested, with
+index over that trip's own dates, on a benchmark holding 74.2% of the account
+in product and consuming 99.9% of it all-in, with
 buys priced at the cheapest listing that actually existed, **none of the six
 strategies beats holding sealed — and not narrowly.** The strategies with
 real samples in the band lose by 16.6 to 84.3 percentage points per trade and
@@ -2205,9 +2241,10 @@ strategies still lose.
 
 What this branch delivered:
 
-- **A bar worth measuring against.** 99.9% deployed instead of 4.7%, +24.93%
-  over the window, with a −25.73% drawdown that belongs to a real long
-  position rather than to a cash sleeve.
+- **A bar worth measuring against.** 74.2% of the account in product instead
+  of 4.7% (99.9% all-in instead of 5.5%), +24.93% over the window, with a
+  −25.73% drawdown that belongs to a real long position rather than to a cash
+  sleeve.
 - **Fills priced at something you could actually transact at**, and the
   resolution of an open question about `market < low` that turned out to be a
   category error in the consumer rather than a property of the data.
