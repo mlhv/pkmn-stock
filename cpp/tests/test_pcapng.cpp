@@ -17,7 +17,8 @@ using Catch::Matchers::ContainsSubstring;
 
 // Global allocation counter: the "decoding must not allocate per message"
 // rule is checked directly, not assumed. Only this test binary replaces new.
-static std::atomic<std::uint64_t> g_allocs{0};
+// Not static: test_deep_plus.cpp reads it too.
+std::atomic<std::uint64_t> g_allocs{0};
 void* operator new(std::size_t n) {
     ++g_allocs;
     if (void* p = std::malloc(n == 0 ? 1 : n)) return p;

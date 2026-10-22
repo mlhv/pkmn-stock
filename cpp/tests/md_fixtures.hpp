@@ -155,6 +155,33 @@ inline Bytes capture(const std::vector<std::string>& payloads, const std::vector
     return b;
 }
 
+// IEX-TP segment: the 40-byte header ("<BBHIIHHqqq": version, reserved,
+// protocol id, channel id, session id, payload length, message count, stream
+// offset, first sequence number, send time) followed by each message with
+// its little-endian u16 length prefix. `payload_len_override` >= 0 replaces
+// the computed payload length, to build malformed segments.
+inline Bytes tp_segment(std::uint16_t protocol_id, std::int64_t first_seq, const std::vector<Bytes>& msgs,
+                        int payload_len_override = -1, int msg_count_override = -1) {
+    Bytes body;
+    for (const Bytes& m : msgs) {
+        put_le16(body, static_cast<std::uint16_t>(m.size()));
+        append(body, m);
+    }
+    Bytes b;
+    b.push_back(1);  // version
+    b.push_back(0);  // reserved
+    put_le16(b, protocol_id);
+    put_le32(b, 1);           // channel id
+    put_le32(b, 0x42424242);  // session id
+    put_le16(b, static_cast<std::uint16_t>(payload_len_override >= 0 ? payload_len_override : body.size()));
+    put_le16(b, static_cast<std::uint16_t>(msg_count_override >= 0 ? msg_count_override : msgs.size()));
+    put_le64(b, 1000);  // stream offset
+    put_le64(b, static_cast<std::uint64_t>(first_seq));
+    put_le64(b, 1'734'964'524'000'000'000ULL);  // send time
+    append(b, body);
+    return b;
+}
+
 // Unique path in the system temp dir; the caller removes it (TempFile does).
 inline std::string temp_path(const std::string& suffix) {
     static std::atomic<int> counter{0};
