@@ -34,6 +34,26 @@ target_include_directories(pkmn_book PUBLIC src)
 target_compile_options(pkmn_book PUBLIC -ffp-contract=off)
 set_target_properties(pkmn_book PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
+# Market data (IEX HIST pcapng over zlib) and its tools. Kept out of the
+# Python wheel build entirely so that build never needs zlib.
+if(NOT SKBUILD)
+  find_package(ZLIB REQUIRED)
+  # On macOS FindZLIB returns the SDK's usr/include, which is already the
+  # compiler's sysroot include dir; passing it again as -isystem puts it
+  # ahead of libc++'s headers and breaks <cstddef>. Drop it there.
+  if(APPLE AND ZLIB_INCLUDE_DIRS MATCHES "\\.sdk/usr/include$")
+    set_property(TARGET ZLIB::ZLIB PROPERTY INTERFACE_INCLUDE_DIRECTORIES "")
+  endif()
+  add_library(pkmn_md STATIC src/pkmn_md/pcapng.cpp)
+  target_include_directories(pkmn_md PUBLIC src)
+  target_compile_options(pkmn_md PUBLIC -ffp-contract=off)
+  target_link_libraries(pkmn_md PUBLIC pkmn_book PRIVATE ZLIB::ZLIB)
+  set_target_properties(pkmn_md PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
+  add_executable(pcap_count tools/pcap_count.cpp)
+  target_link_libraries(pcap_count PRIVATE pkmn_md)
+endif()
+
 if(SKBUILD)
   find_package(Python 3.12 COMPONENTS Interpreter Development.Module REQUIRED)
   find_package(nanobind CONFIG REQUIRED)
@@ -68,4 +88,12 @@ if(PKMN_BUILD_TESTS)
   list(APPEND CMAKE_MODULE_PATH ${catch2_SOURCE_DIR}/extras)
   include(Catch)
   catch_discover_tests(engine_tests)
+
+  # Separate binary so engine_tests stays zlib-free (and so its replaced
+  # global operator new, used to count allocations, stays contained).
+  if(NOT SKBUILD)
+    add_executable(md_tests tests/test_pcapng.cpp)
+    target_link_libraries(md_tests PRIVATE pkmn_md ZLIB::ZLIB Catch2::Catch2WithMain)
+    catch_discover_tests(md_tests)
+  endif()
 endif()
