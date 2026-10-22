@@ -27,6 +27,13 @@ target_compile_options(pkmn_engine_core PUBLIC -ffp-contract=off)
 # without this.
 set_target_properties(pkmn_engine_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
+# The order book: pure C++, no deps, not part of the Python module. Same FP
+# flags as the core so anything that later links both stays consistent.
+add_library(pkmn_book STATIC src/pkmn_book/order_book.cpp)
+target_include_directories(pkmn_book PUBLIC src)
+target_compile_options(pkmn_book PUBLIC -ffp-contract=off)
+set_target_properties(pkmn_book PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
 if(SKBUILD)
   find_package(Python 3.12 COMPONENTS Interpreter Development.Module REQUIRED)
   find_package(nanobind CONFIG REQUIRED)
@@ -53,9 +60,10 @@ if(PKMN_BUILD_TESTS)
     tests/test_backtest_golden.cpp
     tests/test_strategies.cpp
     tests/test_concurrency.cpp
+    tests/test_order_book.cpp
   )
   find_package(Threads REQUIRED)
-  target_link_libraries(engine_tests PRIVATE pkmn_engine_core Catch2::Catch2WithMain Threads::Threads)
+  target_link_libraries(engine_tests PRIVATE pkmn_engine_core pkmn_book Catch2::Catch2WithMain Threads::Threads)
   include(CTest)
   list(APPEND CMAKE_MODULE_PATH ${catch2_SOURCE_DIR}/extras)
   include(Catch)
