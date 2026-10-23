@@ -246,6 +246,9 @@ version.
   `order_book.{hpp,cpp}`). JSON reads `1c14e20e25d7-dirty` with a working-tree hash.
 - Hardware: Apple M1 Pro, 7-vCPU OrbStack Ubuntu 24.04 arm64 VM; `g++ 13.3.0`,
   `-O3 -DNDEBUG -ffp-contract=off` both sides.
+- Timer (both sides, every run): cntvct_el0 (isb before read) at 24 MHz, 41.7 ns per tick; measured empty
+  ticks() pair overhead 8.8-13.9 ns mean (median 9.6) for A and 9.0-17.2 ns (median 9.4) for B, included in
+  every timed-region mean and percentile below. Hardware: Apple M1 Pro, 7-vCPU OrbStack Ubuntu 24.04 arm64 VM.
 - **Method:** `iex_bench <DPLS file> --mode ram`, one VM session, strictly alternating A B A B ..., 9 pairs
   in two batches (pairs 1-4 at 23:17-23:22 ET, pairs 5-9 at 23:32-23:39 ET). The Mac host was heavily loaded
   by unrelated processes during batch 1 (load average up to 112; batch 2 started after it fell under 20),
@@ -270,7 +273,7 @@ version.
 | timed-region mean ns, best of 9 | 169.6 | 110.5 | −34.8% |
 | timed-region mean ns, median of 9 | 184.3 | 121.5 | −34.1% |
 | p50, median (ticks) | 3 | 2 | cannot evidence a change (±33-50% band) |
-| p99, median | 750 ns (18 ticks, ±5.6%) | 542 ns (13 ticks, ±7.7%) | −28% |
+| p99, median | 750 ns (18 ticks, ±5.6%) | 542 ns (13 ticks, ±7.7%) | −28%, but A's p99 ranged 14-21 ticks (39% spread) and B's 11-15 (31%); the ranges overlap |
 | p99.9, median | 6,736 ns (162 ticks, ±0.6%) | 6,448 ns (155 ticks, ±0.6%) | −4%, inside run-to-run noise |
 | max | 10.7-146.6 ms | 11.2-68.7 ms | VM-dominated, not comparable |
 
@@ -278,14 +281,20 @@ version.
 44.4%, B timed mean 25.1%. Batch 2 alone (5 pairs, quieter host): A msgs/s 19.2%, B 34.3%; A timed mean
 20.5%, B 17.6%.
 
-**Decision: kept.** Best msgs/s improves +53.9%, more than the largest observed spread (46.8%); on the
-quieter batch 2 every metric clears the spread (best msgs/s +58.6% vs 34.3%; median timed mean −33.1% vs
-20.5%). The timed-region mean ranges do not overlap (B's worst run, 141.0 ns, beats A's best, 169.6 ns),
-and B is faster than A in all 9 pairs (msgs/s ratio 1.17-1.59, timed mean ratio 0.48-0.83). The tail does
-not move: p99.9 and max are unchanged within noise.
+**Decision: kept, on the pairing and the timed-mean ranges, not on the spread rule alone.** Against the
+pooled 9-run spreads only best msgs/s clears, and narrowly: +53.9% against a largest spread of 46.8%.
+Median msgs/s (+27.5%) does not clear the pooled msgs/s spreads (32.4% A, 46.8% B), and median timed mean
+(−34.1%) is under A's pooled timed-mean spread (44.4%), though above B's (25.1%). On the quieter batch 2,
+best msgs/s (+58.6% vs 34.3%) and median timed mean (−33.1% vs 20.5%) clear, but median msgs/s (+27.5%) does
+not clear B's batch-2 spread (34.3%). The keep rests mainly on two things: the timed-region mean ranges do
+not overlap (B's worst run, 141.0 ns, beats A's best, 169.6 ns), and B is faster than A in all 9 pairs
+(msgs/s ratio 1.17-1.59, timed mean ratio 0.48-0.83; two-sided sign test p = 2 × 0.5^9 ≈ 0.004). The tail
+does not move: p99.9 and max are unchanged within noise, and p99 overlaps between the two builds.
 
-**Correctness:** all Catch2 tests pass on macOS (`cpp/build`) and in the VM (`cpp/build-linux`), tests
-untouched; a 14-seed randomized differential trace (add/remove/modify/execute/match/depth/clear, deep books
+**Correctness:** all Catch2 tests pass on macOS (`cpp/build`) and in the VM (`cpp/build-linux`), existing tests
+untouched; `cpp/tests/test_order_book_paths.cpp` (added in the review fix) covers id-table growth, backward-shift
+delete across the wrap-around, the binary-search level path, slot reuse after clear, and a seeded
+differential run against a naive reference book; a 14-seed randomized differential trace (add/remove/modify/execute/match/depth/clear, deep books
 past the 8-level linear probe, ASan + UBSan) hashes identically for both books; `iex_oracle` on the full
 2024-12-23 day (VM Release, default args) gives output identical to the baseline build line for line except
 wall time and RSS: 96,980,017 checked points, 7,870 mismatches (deep_level_ask 7, deep_level_bid 29,
