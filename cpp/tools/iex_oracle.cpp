@@ -29,7 +29,9 @@
 // Excluded by name (a documented feed difference, not a tolerance): a TOPS
 // zero quote with the Symbol Availability flag set (0x80, TOPS v1.66 p.26),
 // i.e. the symbol is halted or unavailable while its orders still rest.
-// Counted under "excluded", never as a mismatch.
+// Counted under "excluded", never as a mismatch, and not in "checked". The
+// same shape against a book that is itself empty on both sides is not
+// excluded: it is compared like any quote (and matches), so it is checked.
 //
 // Merge. The three files are streamed concurrently, one FeedReader each
 // (sequence tracking + restart policy per feed), ordered by the feeds' own
@@ -43,12 +45,25 @@
 //
 // A DEEP+ stream restart (is_stream_restart) first resolves every queued
 // check with t before the restart segment's send time, then clears every
-// book. --symbols N restricts checking (and book building) to the first N
+// book. The restart -> clear -> decode -> apply rule itself is
+// apply_deep_plus_segment_with (replay.hpp), shared with iex_bench; this tool
+// only supplies its hooks. --symbols N restricts checking (and book building) to the first N
 // distinct symbols encountered on any of the three feeds; --symbol S
 // (repeatable) restricts it to exactly the named symbols.
 //
-// Prints checkpoint counts, mismatches by category and examples. Exit 0 iff
-// no mismatch of any category; 1 on any mismatch; 2 on usage or I/O error.
+// Prints checkpoint counts, mismatches by category and examples, then the
+// validity preconditions and the result. Exit status:
+//   0  PASS: every validity precondition held and there were 0 mismatches.
+//   1  MISMATCH: the preconditions held and at least one check mismatched.
+//   3  INCONCLUSIVE: a validity precondition failed (named on stdout), so the
+//      run does not establish what it set out to check, whatever the
+//      mismatch count. Preconditions: on each of the three feeds, 0 gaps,
+//      0 tp_parse_failures and 0 other_stream segments (a new session id
+//      would otherwise leave the rest of a feed silently unchecked); 0 DEEP+
+//      per-symbol timestamp regressions; 0 DEEP transitions left open;
+//      book anomalies unknown_id, duplicate_add and exec_clamped all 0;
+//      0 late_checkpoint; and both DEEP and TOPS produced at least 1 check.
+//   2  usage or I/O error.
 
 #include <sys/resource.h>
 
@@ -76,6 +91,7 @@
 #include "pkmn_md/events.hpp"
 #include "pkmn_md/feed_reader.hpp"
 #include "pkmn_md/iextp.hpp"
+#include "pkmn_md/replay.hpp"
 
 using namespace pkmn::md;
 using pkmn::book::OrderBook;
@@ -222,6 +238,9 @@ class Oracle {
     void resolve_all(std::int64_t before);
     void mismatch(const char* cat, std::uint64_t sym, std::int64_t t, std::string exp, std::string act);
     void report(double secs) const;
+    std::uint64_t mismatches() const;
+    std::vector<std::string> failed_preconditions() const;
+    friend struct OracleHooks;
 
     FeedReader dp_, deep_, tops_;
     std::size_t max_symbols_;
@@ -242,7 +261,9 @@ class Oracle {
     FeedReport rep_dp_{"DEEP+"}, rep_deep_{"DEEP"}, rep_tops_{"TOPS"};
 
     std::uint64_t dp_book_events_ = 0, dp_ts_regress_ = 0;
-    std::uint64_t deep_checkpoints_ = 0, deep_levels_checked_ = 0, tops_checked_ = 0;
+    // TOPS: evaluated = every quote checkpoint resolved; excluded = halt zero
+    // quotes excluded by name; checked = evaluated - excluded (compared).
+    std::uint64_t deep_checkpoints_ = 0, deep_levels_checked_ = 0, tops_evaluated_ = 0, tops_checked_ = 0;
     std::uint64_t deep_txn_ts_differs_ = 0, deep_open_txn_dropped_ = 0, deep_ooo_ = 0, tops_ooo_ = 0;
     std::uint64_t tops_same_ts_superseded_ = 0, deep_same_ts_superseded_ = 0;
     std::uint64_t tops_odd_lot_aggregated_ = 0, round_lots_seen_ = 0;
@@ -393,7 +414,7 @@ void Oracle::resolve(std::uint64_t sym, SymState& s, std::int64_t before) {
     while (!s.tops.empty() && s.tops.front().t < before) {
         const TopsCheck c = s.tops.front();
         s.tops.pop_front();
-        ++tops_checked_;
+        ++tops_evaluated_;
         std::int64_t bid = 0, bid_size = 0, ask = 0, ask_size = 0;
         if (b != nullptr) {
             const Top tb = aggregated_top(*b, Side::Buy, s.round_lot, scratch_);
@@ -411,11 +432,15 @@ void Oracle::resolve(std::uint64_t sym, SymState& s, std::int64_t before) {
         // orders (DEEP+ and DEEP send no deletes; e.g. the 10:22:29 ET operational
         // halt on 2024-12-23). Only that exact shape is excluded: flag A set AND
         // all four fields zero. Any other quote, flag A or not, is checked.
+        // If the book is itself empty on both sides the quote is compared like
+        // any other (it matches), so it is checked, not excluded.
         const bool zero_quote = c.bid == 0 && c.bid_size == 0 && c.ask == 0 && c.ask_size == 0;
-        if ((c.flags & 0x80) != 0 && zero_quote) {
-            if (bid != 0 || bid_size != 0 || ask != 0 || ask_size != 0) ++excluded_["tops_unavailable_zero_quote"];
+        const bool book_zero = bid == 0 && bid_size == 0 && ask == 0 && ask_size == 0;
+        if ((c.flags & 0x80) != 0 && zero_quote && !book_zero) {
+            ++excluded_["tops_unavailable_zero_quote"];
             continue;
         }
+        ++tops_checked_;
         if (bid != c.bid || bid_size != c.bid_size)
             mismatch("tops_bid", sym, c.t, std::to_string(c.bid_size) + " @ " + px(c.bid) + fl,
                      std::to_string(bid_size) + " @ " + px(bid));
@@ -429,51 +454,104 @@ void Oracle::resolve_all(std::int64_t before) {
     for (auto& [sym, s] : syms_) resolve(sym, s, before);
 }
 
+// The oracle's side of apply_deep_plus_segment_with (replay.hpp): the
+// restart/clear/decode/apply rule stays in the library; these hooks resolve
+// pending checks before the clear and before each event.
+struct OracleHooks : DeepPlusHooks {
+    Oracle& o;
+    explicit OracleHooks(Oracle& oracle) : o(oracle) {}
+
+    void before_clear(const Segment& seg) {
+        o.rep_dp_.restarts.emplace_back(seg.hdr.send_time, seg.packet_no);
+        o.read_ahead(seg.hdr.send_time);
+        o.resolve_all(seg.hdr.send_time);
+    }
+    template <class Step>
+    void per_message(Step&& step) {
+        ++o.rep_dp_.messages;
+        step();
+    }
+    bool before_apply(const BookEvent& ev) {
+        ++o.rep_dp_.decoded;
+        if (o.rep_dp_.first_ts == kNever) o.rep_dp_.first_ts = ev.ts_ns;
+        o.rep_dp_.last_ts = ev.ts_ns;
+        o.read_ahead(ev.ts_ns);
+        if (!o.selected(ev.symbol)) return false;
+        SymState& s = o.sym_state(ev.symbol);
+        o.resolve(ev.symbol, s, ev.ts_ns);
+        if (ev.ts_ns < s.last_dp_ts) ++o.dp_ts_regress_;
+        s.last_dp_ts = ev.ts_ns;
+        ++o.dp_book_events_;
+        return true;
+    }
+    void non_book(std::span<const std::uint8_t> m) {
+        // Security Directory: round lot size at offset 18 (DEEP+ v1.06 p.14).
+        if (m.size() >= 31 && m[0] == 'D') {
+            const auto sym = pkmn::md::detail::load<std::uint64_t>(m.data() + 10);
+            if (o.selected(sym)) {
+                o.sym_state(sym).round_lot = pkmn::md::detail::load<std::uint32_t>(m.data() + 18);
+                ++o.round_lots_seen_;
+            }
+        }
+    }
+};
+
 int Oracle::run() {
     const auto t0 = std::chrono::steady_clock::now();
     Segment seg{};
     BookEvent ev{};
-    while (dp_.next(seg)) {
-        if (seg.restart) {
-            rep_dp_.restarts.emplace_back(seg.hdr.send_time, seg.packet_no);
-            read_ahead(seg.hdr.send_time);
-            resolve_all(seg.hdr.send_time);
-            books_.clear_all();
-        }
-        for_each_applied(seg, [&](std::span<const std::uint8_t> m) {
-            ++rep_dp_.messages;
-            if (!decode_deep_plus(m, ev, dp_stats_)) {
-                // Security Directory: round lot size at offset 18 (DEEP+ v1.06 p.14).
-                if (m.size() >= 31 && m[0] == 'D') {
-                    const auto sym = pkmn::md::detail::load<std::uint64_t>(m.data() + 10);
-                    if (selected(sym)) {
-                        sym_state(sym).round_lot = pkmn::md::detail::load<std::uint32_t>(m.data() + 18);
-                        ++round_lots_seen_;
-                    }
-                }
-                return;
-            }
-            ++rep_dp_.decoded;
-            if (rep_dp_.first_ts == kNever) rep_dp_.first_ts = ev.ts_ns;
-            rep_dp_.last_ts = ev.ts_ns;
-            read_ahead(ev.ts_ns);
-            if (!selected(ev.symbol)) return;
-            SymState& s = sym_state(ev.symbol);
-            resolve(ev.symbol, s, ev.ts_ns);
-            if (ev.ts_ns < s.last_dp_ts) ++dp_ts_regress_;
-            s.last_dp_ts = ev.ts_ns;
-            books_.apply(ev);
-            ++dp_book_events_;
-        });
-    }
+    OracleHooks hooks(*this);
+    while (dp_.next(seg)) apply_deep_plus_segment_with(seg, books_, ev, dp_stats_, hooks);
     read_ahead(kForever);
     resolve_all(kForever);
     for (auto& [sym, s] : syms_) deep_open_txn_dropped_ += s.open_txn.size();
     const double secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
     report(secs);
+    const std::vector<std::string> failed = failed_preconditions();
+    const std::uint64_t total = mismatches();
+    if (!failed.empty()) {
+        std::printf("validity          INCONCLUSIVE: %zu precondition(s) failed:\n", failed.size());
+        for (const auto& f : failed) std::printf("  %s\n", f.c_str());
+        std::printf("result            INCONCLUSIVE (exit 3; %llu mismatches not a verdict)\n", static_cast<u64>(total));
+        return 3;
+    }
+    std::printf("validity          all preconditions held\n");
+    if (total != 0) {
+        std::printf("result            MISMATCH (exit 1)\n");
+        return 1;
+    }
+    std::printf("result            PASS (exit 0)\n");
+    return 0;
+}
+
+std::uint64_t Oracle::mismatches() const {
     std::uint64_t total = 0;
     for (const auto& [cat, n] : by_category_) total += n;
-    return total == 0 ? 0 : 1;
+    return total;
+}
+
+// Each entry names one failed validity precondition and its count.
+std::vector<std::string> Oracle::failed_preconditions() const {
+    std::vector<std::string> out;
+    auto need_zero = [&](const std::string& name, std::uint64_t n) {
+        if (n != 0) out.push_back(name + " " + std::to_string(n) + " (must be 0)");
+    };
+    const std::pair<const char*, const FeedReader*> feeds[] = {{"DEEP+", &dp_}, {"DEEP", &deep_}, {"TOPS", &tops_}};
+    for (const auto& [name, fr] : feeds) {
+        need_zero(std::string(name) + " gaps", fr->tracker().gaps());
+        need_zero(std::string(name) + " tp_parse_failures", fr->tp_parse_failures());
+        need_zero(std::string(name) + " other_stream", fr->other_stream());
+    }
+    need_zero("DEEP+ per-symbol ts regressions", dp_ts_regress_);
+    need_zero("DEEP open txn dropped", deep_open_txn_dropped_);
+    const auto an = books_.total_anomalies();
+    need_zero("book unknown_id", an.unknown_id);
+    need_zero("book duplicate_add", an.duplicate_add);
+    need_zero("book exec_clamped", an.exec_clamped);
+    if (auto it = by_category_.find("late_checkpoint"); it != by_category_.end()) need_zero("late_checkpoint", it->second);
+    if (deep_levels_checked_ == 0) out.push_back("DEEP checks 0 (must be >= 1)");
+    if (tops_checked_ == 0) out.push_back("TOPS checks 0 (must be >= 1)");
+    return out;
 }
 
 void print_feed(const FeedReader& fr, const FeedReport& r) {
@@ -503,9 +581,14 @@ void Oracle::report(double secs) const {
     std::printf("book anomalies    unknown_id %llu duplicate_add %llu exec_clamped %llu; clear_all %llu; resting at end %zu\n",
                 static_cast<u64>(an.unknown_id), static_cast<u64>(an.duplicate_add), static_cast<u64>(an.exec_clamped),
                 static_cast<u64>(books_.clear_alls()), books_.order_count());
-    std::printf("checkpoints       DEEP %llu (levels checked %llu), TOPS %llu; total checked %llu\n",
+    std::uint64_t tops_excluded = 0;
+    for (const auto& [cat, n] : excluded_) tops_excluded += n;
+    std::printf("checkpoints       DEEP %llu (levels checked %llu); TOPS evaluated %llu, excluded %llu, checked %llu\n",
                 static_cast<u64>(deep_checkpoints_), static_cast<u64>(deep_levels_checked_),
-                static_cast<u64>(tops_checked_), static_cast<u64>(deep_levels_checked_ + tops_checked_));
+                static_cast<u64>(tops_evaluated_), static_cast<u64>(tops_excluded), static_cast<u64>(tops_checked_));
+    std::printf("checked points    %llu evaluated, %llu excluded by name, %llu checked (DEEP levels + TOPS checked)\n",
+                static_cast<u64>(deep_levels_checked_ + tops_evaluated_), static_cast<u64>(tops_excluded),
+                static_cast<u64>(deep_levels_checked_ + tops_checked_));
     std::printf("deep checkpoints  final state per (symbol, timestamp); %llu earlier same-timestamp level updates superseded\n",
                 static_cast<u64>(deep_same_ts_superseded_));
     std::printf("tops checkpoints  last quote per (symbol, timestamp); %llu earlier same-timestamp quotes superseded\n",
@@ -516,9 +599,7 @@ void Oracle::report(double secs) const {
     std::printf("merge diagnostics DEEP txn ts differs %llu, DEEP open txn dropped %llu, out-of-order DEEP %llu TOPS %llu\n",
                 static_cast<u64>(deep_txn_ts_differs_), static_cast<u64>(deep_open_txn_dropped_),
                 static_cast<u64>(deep_ooo_), static_cast<u64>(tops_ooo_));
-    std::uint64_t total = 0;
-    for (const auto& [cat, n] : by_category_) total += n;
-    std::printf("mismatches        %llu\n", static_cast<u64>(total));
+    std::printf("mismatches        %llu\n", static_cast<u64>(mismatches()));
     for (const auto& [cat, n] : by_category_) std::printf("  %-18s %llu\n", cat.c_str(), static_cast<u64>(n));
     for (const auto& [cat, m] : by_symbol_) {
         std::vector<std::pair<std::uint64_t, std::uint64_t>> v(m.begin(), m.end());
@@ -599,7 +680,13 @@ int main(int argc, char** argv) {
         }
     }
     if (bad || dp.empty() || deep.empty() || tops.empty()) {
-        std::fprintf(stderr, "usage: %s --deep-plus <f> --deep <f> --tops <f> [--symbols N] [--symbol S]... [--round-lot S=N]... [--lookahead-ms M]\n",
+        std::fprintf(stderr,
+                     "usage: %s --deep-plus <f> --deep <f> --tops <f> [--symbols N] [--symbol S]... [--round-lot S=N]... "
+                     "[--lookahead-ms M]\n"
+                     "exit: 0 pass (preconditions held, 0 mismatches); 1 mismatches; 3 inconclusive (a validity\n"
+                     "      precondition failed: gaps, tp_parse_failures or other_stream on any feed, DEEP+ ts\n"
+                     "      regressions, open DEEP transitions, book anomalies, late checkpoints, or 0 DEEP or TOPS\n"
+                     "      checks); 2 usage or I/O error\n",
                      argv[0]);
         return 2;
     }

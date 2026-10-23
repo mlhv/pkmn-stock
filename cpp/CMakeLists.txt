@@ -125,8 +125,11 @@ if(PKMN_BUILD_TESTS)
   # global operator new, used to count allocations, stays contained).
   if(NOT SKBUILD)
     add_executable(md_tests tests/test_pcapng.cpp tests/test_iextp.cpp tests/test_deep_plus.cpp
-      tests/test_book_set.cpp tests/test_deep.cpp tests/test_timing.cpp)
+      tests/test_book_set.cpp tests/test_deep.cpp tests/test_timing.cpp tests/test_iex_oracle.cpp)
     target_link_libraries(md_tests PRIVATE pkmn_md ZLIB::ZLIB Catch2::Catch2WithMain)
+    # test_iex_oracle.cpp runs the built tool end to end (exit codes, counts).
+    add_dependencies(md_tests iex_oracle)
+    target_compile_definitions(md_tests PRIVATE "IEX_ORACLE_BIN=\"$<TARGET_FILE:iex_oracle>\"")
     catch_discover_tests(md_tests)
   endif()
 endif()
