@@ -24,7 +24,14 @@ struct EncodeInput {
 // `out`: all D, then per day S, Q..., E. Returns the messages written. Throws
 // std::invalid_argument on mismatched array sizes, unsorted/duplicate rows,
 // an out-of-range instrument id, unordered instruments, or a sub_type over
-// 24 bytes. Validation completes before the first byte is written.
+// 24 bytes. Validation completes before the first byte is written. Throws
+// std::runtime_error if `out` is already failed, or fails during the write
+// (checked after the final flush), so a returned count always means every
+// byte reached the stream.
 std::uint64_t encode(const EncodeInput& in, std::ostream& out);
+
+// The checks encode() runs before writing, on their own (same exceptions), so
+// a caller can validate before opening, and truncating, an output file.
+void validate(const EncodeInput& in);
 
 }  // namespace pkmn::wire

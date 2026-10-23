@@ -59,6 +59,8 @@ class Writer {
     std::uint64_t total_ = 0;
 };
 
+}  // namespace
+
 void validate(const EncodeInput& in) {
     const std::size_t n = in.inst_product_id.size();
     if (in.inst_sub_type.size() != n) throw std::invalid_argument("instrument arrays differ in size");
@@ -87,10 +89,9 @@ void validate(const EncodeInput& in) {
     }
 }
 
-}  // namespace
-
 std::uint64_t encode(const EncodeInput& in, std::ostream& out) {
     validate(in);
+    if (!out) throw std::runtime_error("wire output stream is not writable");
     Writer w(out);
     for (std::size_t i = 0; i < in.inst_product_id.size(); ++i) {
         w.begin(kTypeInstrument, kLenInstrument);
@@ -118,6 +119,11 @@ std::uint64_t encode(const EncodeInput& in, std::ostream& out) {
         w.u32(quotes);
     }
     w.flush();
+    out.flush();
+    // A failed write (disk full, closed pipe) sets failbit/badbit on the
+    // stream and is otherwise silent; a count must never stand for a file
+    // that is not all there.
+    if (!out) throw std::runtime_error("wire output stream failed while writing");
     return w.total();
 }
 

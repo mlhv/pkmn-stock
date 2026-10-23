@@ -45,3 +45,30 @@ def book_sell_impact(
     tier_qtys: NDArray[np.int64],
     fallback_max_qty: int,
 ) -> float: ...
+def encode_wire(
+    inst_product_id: NDArray[np.int64],
+    inst_sub_type: list[str],
+    row_day: NDArray[np.int32],
+    row_instrument: NDArray[np.uint32],
+    row_market: NDArray[np.uint32],
+    row_low: NDArray[np.uint32],
+    row_mid: NDArray[np.uint32],
+    row_high: NDArray[np.uint32],
+    path: str,
+) -> int: ...
+def wire_ladder_digests(
+    path: str,
+    tier_thresholds: NDArray[np.float64],
+    tier_qtys: NDArray[np.int64],
+    fallback_max_qty: int,
+) -> tuple[NDArray[np.int32], NDArray[np.int64], list[str], NDArray[np.uint64], dict[str, int]]: ...
+def ladder_digests(
+    row_day: NDArray[np.int32],
+    row_asset: NDArray[np.int32],
+    row_market: NDArray[np.float64],
+    row_mid: NDArray[np.float64],
+    row_low: NDArray[np.float64],
+    tier_thresholds: NDArray[np.float64],
+    tier_qtys: NDArray[np.int64],
+    fallback_max_qty: int,
+) -> NDArray[np.uint64]: ...

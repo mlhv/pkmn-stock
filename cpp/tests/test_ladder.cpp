@@ -117,3 +117,33 @@ TEST_CASE("ladder: exact pricing reproduces the formula") {
             }
     }
 }
+
+TEST_CASE("ladder: sink builder event contract") {
+    // The replay digests depend on this: one-unit Adds, asks first with ids
+    // 1..depth best-first, then bids with ids (1<<32)+1.. best-first, every
+    // event carrying the caller's symbol and no priority flag.
+    CostModel cm = make_cm();
+    std::vector<book::BookEvent> evs;
+    build_day_ladder(DayQuote{12, 13, 11}, cm, LadderPricing::Cent, 0xABCDu,
+                     [&](const book::BookEvent& e) { evs.push_back(e); });
+    REQUIRE(evs.size() == 16);
+    const auto asks = ticks(ask_shape(DayQuote{12, 13, 11}, cm), Side::Sell, 8);
+    const auto bids = ticks(bid_shape(DayQuote{12, 13, 11}, cm), Side::Buy, 8);
+    for (std::size_t i = 0; i < evs.size(); ++i) {
+        const auto& e = evs[i];
+        CHECK(e.kind == book::BookEvent::Kind::Add);
+        CHECK(e.qty == 1);
+        CHECK(e.symbol == 0xABCDu);
+        CHECK_FALSE(e.keep_priority);
+        CHECK(e.ts_ns == 0);
+        if (i < 8) {
+            CHECK(e.side == Side::Sell);
+            CHECK(e.order_id == i + 1);
+            CHECK(e.price == asks[i]);
+        } else {
+            CHECK(e.side == Side::Buy);
+            CHECK(e.order_id == (std::uint64_t{1} << 32) + (i - 8) + 1);
+            CHECK(e.price == bids[i - 8]);
+        }
+    }
+}

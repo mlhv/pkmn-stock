@@ -75,6 +75,10 @@ if(NOT SKBUILD)
   target_link_libraries(iex_decode PRIVATE pkmn_md)
   add_executable(iex_oracle tools/iex_oracle.cpp)
   target_link_libraries(iex_oracle PRIVATE pkmn_md)
+  # pkmn_md/timing.hpp is header-only (reached through pkmn_wire's src
+  # include dir), so the replay tool needs no zlib or pkmn_md link.
+  add_executable(pokemon_replay tools/pokemon_replay.cpp)
+  target_link_libraries(pokemon_replay PRIVATE pkmn_wire)
 
   # iex_bench reports its own build in its JSON. The flags are fixed per
   # configure (they can only change by re-configuring). The source stamp
@@ -128,6 +132,7 @@ if(PKMN_BUILD_TESTS)
     tests/test_ladder.cpp
     tests/test_execution_book.cpp
     tests/test_wire.cpp
+    tests/test_replay.cpp
   )
   find_package(Threads REQUIRED)
   target_link_libraries(engine_tests PRIVATE pkmn_engine_core pkmn_book pkmn_wire Catch2::Catch2WithMain Threads::Threads)

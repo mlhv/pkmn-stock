@@ -1,4 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
+#include <algorithm>
+#include <streambuf>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
@@ -316,4 +318,39 @@ TEST_CASE("wire: decode_file streams a file, truncated tail counted", "[wire]") 
     CHECK(events < n);
     std::remove(path.c_str());
     CHECK_THROWS_AS(decode_file("no/such/file.bin", [](const WireEvent&) {}), std::runtime_error);
+}
+
+namespace {
+// A streambuf that accepts `limit` bytes and then refuses (disk full).
+class FullBuf : public std::streambuf {
+  public:
+    explicit FullBuf(std::size_t limit) : limit_(limit) {}
+
+  protected:
+    int_type overflow(int_type c) override {
+        if (n_ >= limit_ || traits_type::eq_int_type(c, traits_type::eof())) return traits_type::eof();
+        ++n_;
+        return c;
+    }
+    std::streamsize xsputn(const char*, std::streamsize n) override {
+        const auto room = static_cast<std::streamsize>(limit_ - n_);
+        const auto took = std::min(room, n);
+        n_ += static_cast<std::size_t>(took);
+        return took;
+    }
+
+  private:
+    std::size_t limit_, n_ = 0;
+};
+}  // namespace
+
+TEST_CASE("wire: encoder throws on a failed output stream", "[wire]") {
+    Fixture f;
+    FullBuf full(20);  // less than one packet
+    std::ostream os(&full);
+    CHECK_THROWS_AS(encode(f.in(), os), std::runtime_error);
+
+    std::ostringstream bad;
+    bad.setstate(std::ios::badbit);
+    CHECK_THROWS_AS(encode(f.in(), bad), std::runtime_error);
 }

@@ -1,8 +1,15 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/ndarray.h>
 #include <nanobind/stl/string.h>
+#include <nanobind/stl/vector.h>
 
+#include <cerrno>
+#include <cmath>
+#include <cstring>
+#include <span>
 #include <cstdint>
+#include <cstdio>
+#include <fstream>
 #include <limits>
 #include <memory>
 #include <stdexcept>
@@ -15,6 +22,9 @@
 #include "pkmn_engine/strategies/callback.hpp"
 #include "pkmn_engine/strategies/factory.hpp"
 #include "pkmn_engine/version.hpp"
+#include "pkmn_wire/decoder.hpp"
+#include "pkmn_wire/encoder.hpp"
+#include "pkmn_wire/replay.hpp"
 
 namespace nb = nanobind;
 using namespace pkmn;
@@ -159,6 +169,138 @@ double book_sell_impact_py(double market, double low, std::int64_t qty,
     return hypothetical_sell_impact(q, cm, LadderPricing::Cent, qty);
 }
 
+// Book-mode CostModel for the replay digests: the given tiers, impact on (the
+// ladder builder requires it).
+CostModel ladder_cost_model(const Arr<double>& thresholds, const Arr<std::int64_t>& qtys,
+                            std::int64_t fallback_max_qty) {
+    check_tiers(thresholds, qtys);
+    CostModel cm;
+    cm.liquidity_tiers.clear();
+    for (std::size_t i = 0; i < thresholds.size(); ++i)
+        cm.liquidity_tiers.emplace_back(thresholds(i), qtys(i));
+    cm.fallback_max_qty = fallback_max_qty;
+    cm.impact_enabled = true;
+    cm.execution = ExecutionMode::Book;
+    return cm;
+}
+
+template <typename T>
+using OutArr = nb::ndarray<nb::numpy, T, nb::ndim<1>>;
+
+// Hands a vector to numpy without copying; the capsule owns it.
+template <typename T>
+OutArr<T> to_numpy(std::vector<T>&& v) {
+    auto* p = new std::vector<T>(std::move(v));
+    nb::capsule owner(p, [](void* x) noexcept { delete static_cast<std::vector<T>*>(x); });
+    return OutArr<T>(p->data(), {p->size()}, owner);
+}
+
+[[noreturn]] void raise_os_error(const std::string& msg) {
+    PyErr_SetString(PyExc_OSError, msg.c_str());
+    throw nb::python_error();
+}
+
+// Writes the wire file. Raises OSError if the file cannot be opened or a
+// write fails (e.g. disk full); a failed write removes the partial file, so a
+// returned count always describes a complete file. Validation errors
+// (std::invalid_argument -> ValueError) are raised before the file is opened.
+std::uint64_t encode_wire_py(Arr<std::int64_t> inst_product_id,
+                             const std::vector<std::string>& inst_sub_type,
+                             Arr<std::int32_t> row_day, Arr<std::uint32_t> row_instrument,
+                             Arr<std::uint32_t> row_market, Arr<std::uint32_t> row_low,
+                             Arr<std::uint32_t> row_mid, Arr<std::uint32_t> row_high,
+                             const std::string& path) {
+    auto span = [](const auto& a) { return std::span(a.data(), a.size()); };
+    wire::EncodeInput in{span(inst_product_id), std::span<const std::string>(inst_sub_type),
+                         span(row_day), span(row_instrument), span(row_market), span(row_low),
+                         span(row_mid), span(row_high)};
+    wire::validate(in);  // a bad input never truncates an existing file
+    std::ofstream f(path, std::ios::binary | std::ios::trunc);
+    if (!f) raise_os_error("cannot open " + path + " for writing: " + std::strerror(errno));
+    std::uint64_t n = 0;
+    try {
+        n = wire::encode(in, f);
+        f.close();
+        if (!f) throw std::runtime_error("close failed");
+    } catch (const std::runtime_error& e) {
+        f.close();
+        std::remove(path.c_str());
+        raise_os_error("writing " + path + " failed (" + e.what() + "); partial file removed");
+    }
+    return n;
+}
+
+nb::tuple wire_ladder_digests_py(const std::string& path, Arr<double> tier_thresholds,
+                                 Arr<std::int64_t> tier_qtys, std::int64_t fallback_max_qty) {
+    const CostModel cm = ladder_cost_model(tier_thresholds, tier_qtys, fallback_max_qty);
+    std::vector<std::int32_t> day;
+    std::vector<std::uint32_t> inst;
+    std::vector<std::uint64_t> digest;
+    wire::DecodeStats st;
+    std::vector<wire::InstrumentInfo> instruments;
+    {
+        nb::gil_scoped_release release;
+        auto on = [&](std::int32_t d, std::uint32_t i, const book::OrderBook& b) {
+            day.push_back(d);
+            inst.push_back(i);
+            digest.push_back(wire::ladder_digest(b));
+        };
+        wire::LadderReplay<decltype(on)> rep(cm, LadderPricing::Cent, true, on);
+        st = wire::decode_file(path, rep);
+        instruments = rep.instruments();
+    }
+    std::vector<std::int64_t> pid(inst.size());
+    std::vector<std::string> sub(inst.size());
+    for (std::size_t k = 0; k < inst.size(); ++k) {
+        if (inst[k] >= instruments.size())
+            throw std::invalid_argument("quote for undeclared instrument " + std::to_string(inst[k]));
+        pid[k] = instruments[inst[k]].product_id;
+        sub[k] = instruments[inst[k]].sub_type;
+    }
+    nb::dict stats;
+    stats["packets"] = st.packets;
+    stats["messages"] = st.messages;
+    stats["unknown"] = st.unknown;
+    stats["short_messages"] = st.short_messages;
+    stats["short_packets"] = st.short_packets;
+    stats["gaps"] = st.gaps;
+    stats["gap_messages"] = st.gap_messages;
+    stats["duplicates"] = st.duplicates;
+    stats["bad_magic"] = st.bad_magic;
+    return nb::make_tuple(to_numpy(std::move(day)), to_numpy(std::move(pid)), nb::cast(sub),
+                          to_numpy(std::move(digest)), stats);
+}
+
+// One digest per row through the backtester's own DayQuote path (the doubles
+// straight from PreparedMarket). A NaN market builds no ladder (the wire side
+// skips those quotes too) and gets digest 0.
+OutArr<std::uint64_t> ladder_digests_py(Arr<std::int32_t> row_day, Arr<std::int32_t> row_asset,
+                                        Arr<double> row_market, Arr<double> row_mid,
+                                        Arr<double> row_low, Arr<double> tier_thresholds,
+                                        Arr<std::int64_t> tier_qtys,
+                                        std::int64_t fallback_max_qty) {
+    const std::size_t n = row_day.size();
+    if (row_asset.size() != n || row_market.size() != n || row_mid.size() != n ||
+        row_low.size() != n)
+        throw std::invalid_argument("row arrays differ in length");
+    const CostModel cm = ladder_cost_model(tier_thresholds, tier_qtys, fallback_max_qty);
+    std::vector<std::uint64_t> out(n);
+    {
+        nb::gil_scoped_release release;
+        book::OrderBook b;
+        for (std::size_t i = 0; i < n; ++i) {
+            if (std::isnan(row_market(i))) {
+                out[i] = 0;
+                continue;
+            }
+            build_day_ladder(DayQuote{row_market(i), row_mid(i), row_low(i)}, cm,
+                             LadderPricing::Cent, b);
+            out[i] = wire::ladder_digest(b);
+        }
+    }
+    return to_numpy(std::move(out));
+}
+
 }  // namespace
 
 NB_MODULE(_engine, m) {
@@ -177,4 +319,12 @@ NB_MODULE(_engine, m) {
     m.def("book_sell_impact", &book_sell_impact_py, nb::arg("market"), nb::arg("low"),
           nb::arg("qty"), nb::arg("tier_thresholds"), nb::arg("tier_qtys"),
           nb::arg("fallback_max_qty"));
+    m.def("encode_wire", &encode_wire_py, nb::arg("inst_product_id"), nb::arg("inst_sub_type"),
+          nb::arg("row_day"), nb::arg("row_instrument"), nb::arg("row_market"),
+          nb::arg("row_low"), nb::arg("row_mid"), nb::arg("row_high"), nb::arg("path"));
+    m.def("wire_ladder_digests", &wire_ladder_digests_py, nb::arg("path"),
+          nb::arg("tier_thresholds"), nb::arg("tier_qtys"), nb::arg("fallback_max_qty"));
+    m.def("ladder_digests", &ladder_digests_py, nb::arg("row_day"), nb::arg("row_asset"),
+          nb::arg("row_market"), nb::arg("row_mid"), nb::arg("row_low"),
+          nb::arg("tier_thresholds"), nb::arg("tier_qtys"), nb::arg("fallback_max_qty"));
 }

@@ -42,6 +42,16 @@ app.add_typer(portfolio_app, name="portfolio")
 runs_app = typer.Typer(no_args_is_help=True, help="Inspect the experiment run registry.")
 app.add_typer(runs_app, name="runs")
 
+wire_app = typer.Typer(
+    no_args_is_help=True,
+    help=(
+        "Pokemon quote wire files (PKW1): daily tcgcsv quotes in whole cents. A "
+        "replay builds modelled resting orders (synthetic, built from the day's "
+        "tcgcsv quote) from them."
+    ),
+)
+app.add_typer(wire_app, name="wire")
+
 
 @runs_app.command("list")
 def runs_list(
@@ -267,6 +277,37 @@ def ingest(
             "fetch; their previously catalogued rows were kept",
             err=True,
         )
+
+
+@wire_app.command("encode")
+def wire_encode(
+    start: str = typer.Option(..., help="First day (YYYY-MM-DD)."),
+    end: str = typer.Option(..., help="Last day (YYYY-MM-DD), inclusive."),
+    out: Path = typer.Option(..., help="Output file, e.g. data/wire/<start>_<end>.pkw."),
+    root: Path = typer.Option(Path("."), help="Project root holding the data/ directory."),
+) -> None:
+    """Encode the warehouse's quotes over [start, end] to a wire file."""
+    import time
+
+    from pkmn_quant.data.warehouse import Warehouse
+    from pkmn_quant.wire import encode_window
+
+    try:
+        start_date = dt.date.fromisoformat(start)
+        end_date = dt.date.fromisoformat(end)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    out.parent.mkdir(parents=True, exist_ok=True)
+    t0 = time.perf_counter()
+    try:
+        n = encode_window(Warehouse(Paths(root=root)), start_date, end_date, out)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    seconds = time.perf_counter() - t0
+    typer.echo(f"wrote {out}")
+    typer.echo(f"messages: {n}")
+    typer.echo(f"bytes: {out.stat().st_size}")
+    typer.echo(f"seconds: {seconds:.3f}")
 
 
 @app.command("refresh-products")
