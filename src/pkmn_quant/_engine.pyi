@@ -33,6 +33,7 @@ def run_backtest(
     holding_qty: NDArray[np.int64],
     holding_cost: NDArray[np.float64],
     holding_opened: NDArray[np.int32],
+    execution: str,
     callback: Callable[[int, list[tuple[int, int, float, int]], float], list[tuple[int, int]]]
     | None,
 ) -> tuple[list[int], list[float], list[tuple[int, int, int, float, float, float]]]: ...

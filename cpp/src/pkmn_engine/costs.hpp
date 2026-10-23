@@ -11,6 +11,14 @@
 
 namespace pkmn {
 
+// How fills are priced when impact is on. Formula is the walk-the-spread
+// closed form below (the library default). Book fills against a daily ladder
+// of modelled resting orders (synthetic, built from the day's tcgcsv quote),
+// priced in whole cents; BookExactTest is the same ladder at 1e9 ticks per
+// dollar, test-only, to prove equivalence with the formula. Impact off
+// ignores this field: flat cost overrides both modes.
+enum class ExecutionMode : std::uint8_t { Formula, Book, BookExactTest };
+
 struct CostModel {
     double fee_rate = 0.1275;
     double shipping_per_line = 1.0;
@@ -19,6 +27,7 @@ struct CostModel {
         {5.0, 20}, {50.0, 8}, {200.0, 3}};
     std::int64_t fallback_max_qty = 1;
     bool impact_enabled = false;
+    ExecutionMode execution = ExecutionMode::Formula;
 
     // costs.py `max_daily_qty` — strict <: a price exactly at a threshold
     // falls to the NEXT tier. Takes the price TRANSACTED at (buy_base on a

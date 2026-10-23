@@ -12,6 +12,7 @@ add_library(pkmn_engine_core STATIC
   src/pkmn_engine/portfolio.cpp
   src/pkmn_engine/market.cpp
   src/pkmn_engine/execution.cpp
+  src/pkmn_engine/execution_book.cpp
   src/pkmn_engine/ladder.cpp
   src/pkmn_engine/backtest.cpp
   src/pkmn_engine/strategies/buy_and_hold.cpp
@@ -116,6 +117,7 @@ if(PKMN_BUILD_TESTS)
     tests/test_order_book.cpp
     tests/test_order_book_paths.cpp
     tests/test_ladder.cpp
+    tests/test_execution_book.cpp
   )
   find_package(Threads REQUIRED)
   target_link_libraries(engine_tests PRIVATE pkmn_engine_core pkmn_book Catch2::Catch2WithMain Threads::Threads)

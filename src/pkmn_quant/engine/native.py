@@ -32,6 +32,13 @@ NATIVE_STRATEGY_NAMES: frozenset[str] = frozenset(
     {"buy-and-hold", "sealed-accumulation", "dip-buyer", "xs-momentum", "cost-aware-reversion"}
 )
 
+# "formula": walk-the-spread closed form (library default). "book": fills
+# against modelled resting orders (synthetic, built from the day's tcgcsv
+# quote), priced in whole cents. "book-exact-test": the same ladder at 1e9
+# ticks per dollar, test-only (proves equivalence; never a user surface).
+# Impact off overrides both book modes (flat cost).
+EXECUTION_MODES: frozenset[str] = frozenset({"formula", "book", "book-exact-test"})
+
 
 def _from_day(i: int) -> date:
     return _EPOCH + timedelta(days=int(i))
@@ -78,8 +85,13 @@ class NativeBacktest:
     warmup_days: int = 0
     initial_holdings: list[SeededHolding] = field(default_factory=list)
     prepared: PreparedMarket | None = None
+    execution: str = "formula"
 
     def run(self) -> Result:
+        if self.execution not in EXECUTION_MODES:
+            raise ValueError(
+                f"unknown execution {self.execution!r}; choose formula, book or book-exact-test"
+            )
         p = self.prepared
         if p is None:
             p = PreparedMarket.prepare(
@@ -176,6 +188,7 @@ class NativeBacktest:
             holding_qty=holding_qty,
             holding_cost=holding_cost,
             holding_opened=holding_opened,
+            execution=self.execution,
             callback=callback,
         )
 
@@ -194,10 +207,14 @@ class NativeBacktest:
             )
             for d, aid, qty, price, fees, impact in fills_out
         ]
+        cost_model = self.cost_model.as_dict()
+        if self.execution != "formula":
+            # Only when not formula, so formula results stay byte-identical.
+            cost_model["execution"] = self.execution
         return Result(
             strategy_name=strategy_name,
             equity_curve=equity_curve,
             fills=fills,
             summary=summarize(equity_curve),
-            cost_model=self.cost_model.as_dict(),
+            cost_model=cost_model,
         )

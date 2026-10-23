@@ -4,6 +4,8 @@
 
 #include <cstdint>
 #include <memory>
+#include <stdexcept>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -35,7 +37,16 @@ nb::object run_backtest_py(
     double initial_cash,
     Arr<std::int32_t> holding_asset, Arr<std::int64_t> holding_qty,
     Arr<double> holding_cost, Arr<std::int32_t> holding_opened,
+    const std::string& execution,
     nb::object callback) {
+    // Validated before any copying. std::invalid_argument -> ValueError.
+    ExecutionMode mode;
+    if (execution == "formula") mode = ExecutionMode::Formula;
+    else if (execution == "book") mode = ExecutionMode::Book;
+    else if (execution == "book-exact-test") mode = ExecutionMode::BookExactTest;
+    else
+        throw std::invalid_argument("unknown execution '" + execution +
+                                    "'; choose formula, book or book-exact-test");
     std::size_t n_assets = prod_id.size();
 
     std::vector<Day> days(trading_days.data(), trading_days.data() + trading_days.size());
@@ -63,6 +74,7 @@ nb::object run_backtest_py(
     }
     cm.fallback_max_qty = fallback_max_qty;
     cm.impact_enabled = impact_enabled;
+    cm.execution = mode;
 
     std::vector<SeedPosition> holdings(holding_asset.size());
     for (std::size_t i = 0; i < holdings.size(); ++i) {
@@ -131,6 +143,6 @@ NB_MODULE(_engine, m) {
           nb::arg("shipping_per_line"), nb::arg("tier_thresholds"), nb::arg("tier_qtys"),
           nb::arg("fallback_max_qty"), nb::arg("impact_enabled"),
           nb::arg("initial_cash"), nb::arg("holding_asset"), nb::arg("holding_qty"),
-          nb::arg("holding_cost"), nb::arg("holding_opened"),
+          nb::arg("holding_cost"), nb::arg("holding_opened"), nb::arg("execution"),
           nb::arg("callback").none());
 }
