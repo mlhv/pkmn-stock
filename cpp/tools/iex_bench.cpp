@@ -14,9 +14,16 @@
 //     2. latency: ticks() around each message's decode + apply, recorded in
 //        a Histogram (p50/p99/p999/max, in ns). Each sample includes one
 //        ticks() pair's overhead ("timer_overhead_ns") and is quantized to
-//        whole counter ticks ("timer_resolution_ns"); "timed_pass_ns_per_msg"
-//        is that pass's steady_clock wall time per message, for an
-//        unquantized mean alongside the quantized percentiles.
+//        whole counter ticks ("timer_resolution_ns"). Two means sit beside
+//        the quantized percentiles:
+//          "timed_region_mean_ns": sum of the per-message tick deltas /
+//            messages / ticks_per_ns. The mean of exactly what the histogram
+//            records (decode + apply plus one ticks() pair), not quantized:
+//            whole-tick rounding of each sample averages out.
+//          "latency_pass_wall_ns_per_msg": the latency pass's steady_clock
+//            wall time per message. NOT the timed region: it also contains
+//            SegmentFilter, two Histogram::record() calls and an llround
+//            per message. It only shows what timing every message costs.
 // stream: FeedReader over the gzipped file end to end, including inflate and
 //   pcapng parsing; messages per second only (percentile keys are null).
 //
@@ -49,9 +56,9 @@
 #ifndef PKMN_BENCH_FLAGS
 #define PKMN_BENCH_FLAGS "unknown"
 #endif
-#ifndef PKMN_BENCH_GIT_SHA
-#define PKMN_BENCH_GIT_SHA "unknown"
-#endif
+// Generated on every build (cpp/cmake/bench_build_info.cmake):
+// PKMN_BENCH_GIT_SHA and PKMN_BENCH_TREE_HASH.
+#include "pkmn_bench_build_info.hpp"
 
 using namespace pkmn::md;
 using clk = std::chrono::steady_clock;
@@ -198,6 +205,12 @@ void print_common(const std::string& path, const char* mode, const TimerInfo& t)
     std::printf("  \"compiler\": %s,\n", json_str(kCompiler).c_str());
     std::printf("  \"flags\": %s,\n", json_str(PKMN_BENCH_FLAGS).c_str());
     std::printf("  \"git_sha\": %s,\n", json_str(PKMN_BENCH_GIT_SHA).c_str());
+    // SHA-256 of the cpp/ + scripts/ working-tree changes vs HEAD (diff plus
+    // untracked files); null when the tree is clean.
+    if (std::strlen(PKMN_BENCH_TREE_HASH) == 0)
+        std::printf("  \"tree_hash\": null,\n");
+    else
+        std::printf("  \"tree_hash\": %s,\n", json_str(PKMN_BENCH_TREE_HASH).c_str());
     std::printf("  \"file\": %s,\n", json_str(path).c_str());
     std::printf("  \"mode\": \"%s\",\n", mode);
     std::printf("  \"timer\": \"%s\",\n",
@@ -280,10 +293,12 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "latency pass...\n");
         Histogram ns_hist, tick_hist;
         const double tpn = t.ticks_per_ns;
+        std::uint64_t tick_sum = 0;
         const PassResult lat = replay(held, [&](auto&& step) {
             const std::uint64_t a = ticks();
             step();
             const std::uint64_t d = ticks() - a;
+            tick_sum += d;
             tick_hist.record(d);
             ns_hist.record(static_cast<std::uint64_t>(std::llround(static_cast<double>(d) / tpn)));
         });
@@ -307,8 +322,11 @@ int main(int argc, char** argv) {
         std::printf("  \"seconds\": %.3f,\n", thr.seconds);
         std::printf("  \"msgs_per_sec\": %.0f,\n", static_cast<double>(thr.messages) / thr.seconds);
         std::printf("  \"batch_ns_per_msg\": %.2f,\n", thr.seconds * 1e9 / static_cast<double>(thr.messages));
-        std::printf("  \"timed_pass_seconds\": %.3f,\n", lat.seconds);
-        std::printf("  \"timed_pass_ns_per_msg\": %.2f,\n", lat.seconds * 1e9 / static_cast<double>(lat.messages));
+        std::printf("  \"timed_region_mean_ns\": %.2f,\n",
+                    static_cast<double>(tick_sum) / static_cast<double>(lat.messages) / tpn);
+        std::printf("  \"latency_pass_wall_seconds\": %.3f,\n", lat.seconds);
+        std::printf("  \"latency_pass_wall_ns_per_msg\": %.2f,\n",
+                    lat.seconds * 1e9 / static_cast<double>(lat.messages));
         std::printf("  \"p50_ticks\": %llu,\n", static_cast<u64>(tick_hist.percentile(50)));
         std::printf("  \"p99_ticks\": %llu,\n", static_cast<u64>(tick_hist.percentile(99)));
         std::printf("  \"p999_ticks\": %llu,\n", static_cast<u64>(tick_hist.percentile(99.9)));

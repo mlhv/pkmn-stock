@@ -91,6 +91,7 @@ if [[ "$PROFILE" == 1 ]]; then
     "$FLAMEGRAPH_DIR/flamegraph.pl" --title "iex_bench ram throughput pass (decode + apply), perf -F 999 -g" \
         "$OUT/hot.folded" >"$ROOT/docs/benchmarks/iex-book-flamegraph.svg"
     cp "$OUT/hot.folded" "$ROOT/docs/benchmarks/iex-book-profile.folded"
+    { "$PERF" --version; "$PERF" evlist -i "$OUT/perf.data" 2>/dev/null; } | tr '\n' ' ' >"$OUT/perf_event.txt"
     # Self time by leaf frame, under the throughput pass.
     awk '{n=$NF; $NF=""; k=split($0,f,";"); leaf=f[k]; sub(/ +$/,"",leaf); s[leaf]+=n; t+=n}
          END {for (l in s) printf "%6.2f%%  %s\n", 100*s[l]/t, l}' "$OUT/hot.folded" |
@@ -128,14 +129,29 @@ best, median = by_rate[-1], by_rate[1]
 rates = [r["msgs_per_sec"] for r in rams]
 spread = (max(rates) - min(rates)) / median["msgs_per_sec"] * 100
 head = rams[0]
-quantized = median["p50_ticks"] <= 2
+res = head["timer_resolution_ns"]
+# Within this many ticks a percentile's +-1-tick quantization is >= 10% of it.
+QUANT_TICKS = 10
+PCTS = (("p50", "p50_ticks"), ("p99", "p99_ticks"), ("p99.9", "p999_ticks"))
+
+
+def band(ticks):
+    return "n/a" if ticks == 0 else f"±{100 / ticks:.1f}%"
+
+
+def pct_cell(r, name, key):
+    ns_key = {"p50": "p50_ns", "p99": "p99_ns", "p99.9": "p999_ns"}[name]
+    return f"{r[ns_key]:,} ns ({r[key]} ticks, {band(r[key])})"
+
+
+coarse = [(name, median[key]) for name, key in PCTS if median[key] <= QUANT_TICKS]
 
 L = []
 L.append(f"## {datetime.date.today().isoformat()} — {pathlib.Path(head['file']).name}")
 L.append("")
 L.append(f"- Hardware: {hardware}")
 L.append(f"- Host: `{head['host']}`")
-L.append(f"- git: `{head['git_sha']}`")
+L.append(f"- git: `{head['git_sha']}`" + (f", working-tree hash `{head['tree_hash']}`" if head.get("tree_hash") else ""))
 L.append(f"- Compiler: `{head['compiler']}`")
 L.append(f"- Flags: `{head['flags']}`")
 L.append(f"- Timer: {head['timer']}, cntfrq {head['cntfrq_hz']:,} Hz, calibrated "
@@ -146,38 +162,47 @@ L.append(f"- ram held {head['held_bytes']:,} payload bytes in {head['held_packet
          f"(cap {head['ram_bytes']:,}, truncated: {str(head['ram_truncated']).lower()}); "
          f"{head['messages']:,} messages, {head['restarts']} restart(s)")
 L.append("")
-L.append("| | msgs/s | ns/msg (batch) | p50 | p99 | p99.9 | max |")
+if coarse:
+    L.append(f"> **Quantization warning (generated):** {', '.join(f'{n} = {t} ticks ({band(t)})' for n, t in coarse)} "
+             f"of a {res:.1f} ns counter. Each sample is a whole number of ticks, so a percentile at or under "
+             f"{QUANT_TICKS} ticks carries a ±1-tick uncertainty of 10% or more; a change smaller than one "
+             f"tick ({res:.1f} ns) at that percentile cannot be seen. Use the timed-region mean (not "
+             "quantized) and msgs/s for small changes.")
+    L.append("")
+L.append("| | msgs/s | mean ns/msg | p50 | p99 | p99.9 | max |")
 L.append("|---|---:|---:|---:|---:|---:|---:|")
-L.append(f"| ram, best of 3 (throughput pass) | {best['msgs_per_sec']:,.0f} | {best['batch_ns_per_msg']:.1f} | | | | |")
-L.append(f"| ram, median run (latency pass, per message) | | {median['timed_pass_ns_per_msg']:.1f} "
-         f"| {median['p50_ns']} ns ({median['p50_ticks']} ticks) | {median['p99_ns']} ns ({median['p99_ticks']} ticks) "
-         f"| {median['p999_ns']} ns ({median['p999_ticks']} ticks) | {median['max_ns']:,} ns |")
+L.append(f"| ram throughput pass, best of 3 | {best['msgs_per_sec']:,.0f} | {best['batch_ns_per_msg']:.1f} (a) | | | | |")
+L.append(f"| ram latency pass, median run | | {median['timed_region_mean_ns']:.1f} (b) | "
+         + " | ".join(pct_cell(median, n, k) for n, k in PCTS) + f" | {median['max_ns']:,} ns |")
 L.append(f"| stream, end to end incl. gunzip | {stream['msgs_per_sec']:,.0f} | "
-         f"{stream['seconds'] * 1e9 / stream['messages']:.1f} | | | | |")
+         f"{stream['seconds'] * 1e9 / stream['messages']:.1f} (c) | | | | |")
+L.append("")
+L.append("- (a) throughput pass wall time / messages, no per-message timer: SegmentFilter (IEX-TP framing, "
+         "sequence tracking) + decode + `BookSet::apply`.")
+L.append(f"- (b) timed-region mean: sum of per-message tick deltas / messages / ticks_per_ns, the mean of "
+         f"exactly what the percentiles measure (decode + apply plus one ticks() pair, whose empty mean is "
+         f"{median['timer_overhead_ns']:.1f} ns). Not quantized: per-sample rounding averages out. It excludes "
+         "SegmentFilter, so it is not comparable to (a).")
+L.append(f"- (c) stream wall time / messages, including inflate and pcapng parsing.")
+L.append(f"- Percentiles: whole ticks converted to ns; the band is ±1 tick relative to the value. "
+         f"Max is exact; a single sample of milliseconds is most likely the VM being descheduled or a page fault (not verified: no hardware counters), not decode + apply.")
+L.append(f"- Latency pass wall time / messages (median run): {median['latency_pass_wall_ns_per_msg']:.1f} ns. "
+         "This is the cost of the instrumented loop (SegmentFilter, decode + apply, the timer pair, two "
+         "histogram records and an llround per message), not a latency figure.")
 L.append("")
 L.append(f"Run-to-run ram throughput: {', '.join(f'{r:,.0f}' for r in rates)} msgs/s "
          f"(spread {spread:.1f}% of the median).")
 L.append("")
-L.append("| ram run | msgs/s | p50 ticks | p99 ticks | p99.9 ticks | max ns |")
-L.append("|---|---:|---:|---:|---:|---:|")
+L.append("| ram run | msgs/s | timed-region mean ns | p50 ticks | p99 ticks | p99.9 ticks | max ns |")
+L.append("|---|---:|---:|---:|---:|---:|---:|")
 for i, r in enumerate(rams, 1):
-    L.append(f"| {i} | {r['msgs_per_sec']:,.0f} | {r['p50_ticks']} | {r['p99_ticks']} | {r['p999_ticks']} | {r['max_ns']:,} |")
-L.append("")
-if quantized:
-    L.append(f"**Quantization warning:** the median run's p50 is {median['p50_ticks']} tick(s) of a "
-             f"{head['timer_resolution_ns']:.1f} ns counter. At or below 2 ticks a percentile is a count "
-             "of whole ticks (a message that took 50 ns and one that took 120 ns can both read 2 ticks), "
-             "not a measured duration; read p50 as \"between 1 and 3 ticks\". The batch ns/msg column "
-             "is the unquantized mean for context.")
-    L.append("")
-L.append(f"Percentiles are whole ticks of the {head['timer_resolution_ns']:.1f} ns counter converted to ns, "
-         "and every sample includes one ticks() pair's overhead (the empty-pair mean above). The latency "
-         "pass's batch ns/msg exceeds the throughput pass's by that overhead plus the cost of the isb "
-         "barriers. Never quote the batch mean alone.")
+    L.append(f"| {i} | {r['msgs_per_sec']:,.0f} | {r['timed_region_mean_ns']:.1f} | {r['p50_ticks']} | "
+             f"{r['p99_ticks']} | {r['p999_ticks']} | {r['max_ns']:,} |")
 L.append("")
 if profile == "1":
     L.append("Profile: `docs/benchmarks/iex-book-flamegraph.svg` (throughput pass only, "
-             "cpp/build-linux-prof = these flags plus `-g -fno-omit-frame-pointer`). "
+             "cpp/build-linux-prof = these flags plus `-g -fno-omit-frame-pointer`, one separate ram run "
+             f"under `perf record -F 999 -g`; perf: `{(out / 'perf_event.txt').read_text().strip()}`). "
              "Top self-time leaves:")
     L.append("")
     L.append("```")
@@ -211,7 +236,10 @@ if record == "1":
     if not body.startswith("# IEX book benchmarks"):
         raise SystemExit(f"{path} does not start with the expected header; not editing it")
     first = body.find("\n## ")
-    new = body + "\n" + section if first < 0 else body[: first + 1] + section + "\n" + body[first + 1 :]
+    if first < 0:
+        new = body.rstrip("\n") + "\n\n" + section
+    else:
+        new = body[: first + 1] + section + "\n" + body[first + 1 :]
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(new)
     print(f"recorded in {path}", file=sys.stderr)
