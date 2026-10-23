@@ -72,23 +72,34 @@ TEST_CASE("ticks monotone and calibrated") {
         prev = t;
     }
 
-    // Two reads 10 ms apart. Spin on steady_clock rather than sleep: a VM may
-    // oversleep a 10 ms sleep by more than the 2 ms tolerance, which would
-    // test the scheduler, not the timer.
+    // ticks() against steady_clock over the same ~10 ms interval. The steady
+    // reads bracket the tick reads (s0 < t0 ... t1 < s1), so the scheduler can
+    // only stretch the steady interval, never the tick one; and an attempt
+    // that was descheduled at a bracket edge is simply retried. The best of 5
+    // attempts must agree within 2% (0.2 ms), and the tick interval must be at
+    // least 9.8 ms. No assertion depends on how long the spin overshoots.
+    // (This replaces a check that ticks read 10 ms +/- 2 ms, which measured
+    // the scheduler: a deschedule after the spin could fail it on a busy
+    // shared CI runner.)
     using clk = std::chrono::steady_clock;
     const double tpn = ticks_per_ns();
     REQUIRE(tpn > 0);
-    const std::uint64_t t0 = ticks();
-    const auto s0 = clk::now();
-    while (clk::now() - s0 < std::chrono::milliseconds(10)) {
+    double best_diff_ms = 1e9, best_ticks_ms = 0, best_steady_ms = 0;
+    for (int attempt = 0; attempt < 5 && best_diff_ms > 0.2; ++attempt) {
+        const auto s0 = clk::now();
+        const std::uint64_t t0 = ticks();
+        while (clk::now() - s0 < std::chrono::milliseconds(10)) {
+        }
+        const std::uint64_t t1 = ticks();
+        const auto s1 = clk::now();
+        const double ticks_ms = static_cast<double>(t1 - t0) / tpn / 1e6;
+        const double steady_ms = std::chrono::duration<double, std::milli>(s1 - s0).count();
+        const double diff = std::fabs(ticks_ms - steady_ms);
+        if (diff < best_diff_ms) best_diff_ms = diff, best_ticks_ms = ticks_ms, best_steady_ms = steady_ms;
     }
-    const std::uint64_t t1 = ticks();
-    const auto s1 = clk::now();
-    const double ticks_ms = static_cast<double>(t1 - t0) / tpn / 1e6;
-    const double steady_ms = std::chrono::duration<double, std::milli>(s1 - s0).count();
-    INFO("ticks-derived " << ticks_ms << " ms, steady-derived " << steady_ms << " ms");
-    CHECK(std::fabs(ticks_ms - 10.0) <= 2.0);
-    CHECK(std::fabs(ticks_ms - steady_ms) <= 2.0);
+    INFO("best attempt: ticks-derived " << best_ticks_ms << " ms, steady-derived " << best_steady_ms << " ms");
+    CHECK(best_diff_ms <= 0.2);
+    CHECK(best_ticks_ms >= 9.8);  // steady covers >= 10 ms, so this follows unless steady_clock itself is off
 }
 
 TEST_CASE("calibration agrees with the counter's advertised frequency") {
