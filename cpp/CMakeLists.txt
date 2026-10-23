@@ -44,7 +44,14 @@ if(NOT SKBUILD)
   if(APPLE AND ZLIB_INCLUDE_DIRS MATCHES "\\.sdk/usr/include$")
     set_property(TARGET ZLIB::ZLIB PROPERTY INTERFACE_INCLUDE_DIRECTORIES "")
   endif()
-  add_library(pkmn_md STATIC src/pkmn_md/pcapng.cpp src/pkmn_md/iextp.cpp src/pkmn_md/deep_plus.cpp)
+  add_library(pkmn_md STATIC
+    src/pkmn_md/pcapng.cpp
+    src/pkmn_md/iextp.cpp
+    src/pkmn_md/deep_plus.cpp
+    src/pkmn_md/deep.cpp
+    src/pkmn_md/book_set.cpp
+    src/pkmn_md/feed_reader.cpp
+  )
   target_include_directories(pkmn_md PUBLIC src)
   target_compile_options(pkmn_md PUBLIC -ffp-contract=off)
   target_link_libraries(pkmn_md PUBLIC pkmn_book PRIVATE ZLIB::ZLIB)
@@ -54,6 +61,8 @@ if(NOT SKBUILD)
   target_link_libraries(pcap_count PRIVATE pkmn_md)
   add_executable(iex_decode tools/iex_decode.cpp)
   target_link_libraries(iex_decode PRIVATE pkmn_md)
+  add_executable(iex_oracle tools/iex_oracle.cpp)
+  target_link_libraries(iex_oracle PRIVATE pkmn_md)
 endif()
 
 if(SKBUILD)
@@ -94,7 +103,8 @@ if(PKMN_BUILD_TESTS)
   # Separate binary so engine_tests stays zlib-free (and so its replaced
   # global operator new, used to count allocations, stays contained).
   if(NOT SKBUILD)
-    add_executable(md_tests tests/test_pcapng.cpp tests/test_iextp.cpp tests/test_deep_plus.cpp)
+    add_executable(md_tests tests/test_pcapng.cpp tests/test_iextp.cpp tests/test_deep_plus.cpp
+      tests/test_book_set.cpp tests/test_deep.cpp)
     target_link_libraries(md_tests PRIVATE pkmn_md ZLIB::ZLIB Catch2::Catch2WithMain)
     catch_discover_tests(md_tests)
   endif()

@@ -24,14 +24,14 @@
 #include <cstdlib>
 #include <cstring>
 #include <exception>
-#include <map>
+#include <optional>
 #include <span>
 #include <string>
 
 #include "pkmn_md/deep_plus.hpp"
 #include "pkmn_md/events.hpp"
+#include "pkmn_md/feed_reader.hpp"
 #include "pkmn_md/iextp.hpp"
-#include "pkmn_md/pcapng.hpp"
 #include "pkmn_md/sequence.hpp"
 
 using namespace pkmn::md;
@@ -96,90 +96,54 @@ int main(int argc, char** argv) {
     }
 
     const auto t0 = std::chrono::steady_clock::now();
-    std::uint64_t packets = 0, deep_plus_segments = 0, heartbeats = 0, overruns = 0, other_stream = 0;
     std::uint64_t book_events[5] = {};
-    std::map<std::uint16_t, std::uint64_t> by_protocol;  // a handful of keys; not per message
     DecodeStats raw{}, applied{};
-    SequenceTracker tracker;
-    bool have_stream = false;
-    std::uint32_t channel = 0, session = 0;
-    std::int64_t first_seq = 0, last_seq_end = 0, max_send_time = 0;
     struct Reset {
         std::uint64_t packet;
         std::int64_t send_time, first_seq, expected_before;
     };
     constexpr std::size_t kMaxResetsShown = 16;
     Reset resets[kMaxResetsShown] = {};
+    std::size_t n_resets = 0;
     // Where duplicates begin and end, so a replayed tail can be located.
     std::uint64_t dup_first_packet = 0, dup_last_packet = 0, dup_segments = 0;
     std::int64_t dup_first_ts = 0, dup_first_seq = 0, dup_expected = 0, dup_last_ts = 0;
     BookEvent ev{};
     TpHeader hdr{};
+    std::optional<FeedReader> feed;  // outside the try so an error can report how far it got
     try {
-        PcapngReader r(path);
-        Packet p{};
-        while ((limit == 0 || packets < limit) && r.next(p)) {
-            ++packets;
-            if (!parse_tp_header(p.udp_payload, hdr)) {
-                ++overruns;
-                continue;
-            }
-            ++by_protocol[hdr.protocol_id];
-            if (hdr.protocol_id != kDeepPlus) continue;
-            if (!have_stream) {
-                have_stream = true;
-                channel = hdr.channel_id;
-                session = hdr.session_id;
-                first_seq = hdr.first_seq;
-            }
-            if (hdr.channel_id != channel || hdr.session_id != session) {
-                ++other_stream;
-                continue;
-            }
-            // Pass 1: framing + raw stats. A segment that overruns is counted
-            // and never reaches the tracker (its msg_count is not trusted).
-            const bool ok = for_each_message(p.udp_payload, hdr, [&](std::span<const std::uint8_t> m) {
-                decode_deep_plus(m, ev, raw);
-            });
-            if (!ok) {
-                ++overruns;
-                continue;
-            }
-            ++deep_plus_segments;
-            if (hdr.msg_count == 0) ++heartbeats;
-            if (is_stream_restart(hdr, tracker.expected(), max_send_time)) {
-                if (tracker.resets() < kMaxResetsShown)
-                    resets[tracker.resets()] = Reset{packets, hdr.send_time, hdr.first_seq, tracker.expected()};
-                tracker.reset(1);
-            }
-            if (hdr.send_time > max_send_time) max_send_time = hdr.send_time;
-            const std::int64_t expected_before = tracker.expected();
-            if (tracker.observe(hdr.first_seq, hdr.msg_count) == SeqVerdict::Duplicate && hdr.msg_count > 0) {
+        FeedReader& fr = feed.emplace(path, kDeepPlus);
+        fr.set_packet_limit(limit);
+        Segment seg{};
+        while (fr.next(seg)) {
+            // Pass 1: raw stats over every message of the segment.
+            for_each_message(seg.payload, hdr, [&](std::span<const std::uint8_t> m) { decode_deep_plus(m, ev, raw); });
+            if (seg.restart && n_resets < kMaxResetsShown)
+                resets[n_resets++] = Reset{seg.packet_no, seg.hdr.send_time, seg.hdr.first_seq, seg.expected_before};
+            if (seg.verdict == SeqVerdict::Duplicate && seg.hdr.msg_count > 0) {
                 if (dup_segments++ == 0) {
-                    dup_first_packet = packets;
-                    dup_first_ts = p.ts_ns;
-                    dup_first_seq = hdr.first_seq;
-                    dup_expected = expected_before;
+                    dup_first_packet = seg.packet_no;
+                    dup_first_ts = seg.capture_ts_ns;
+                    dup_first_seq = seg.hdr.first_seq;
+                    dup_expected = seg.expected_before;
                 }
-                dup_last_packet = packets;
-                dup_last_ts = p.ts_ns;
+                dup_last_packet = seg.packet_no;
+                dup_last_ts = seg.capture_ts_ns;
             }
-            last_seq_end = hdr.first_seq + hdr.msg_count;
             // Pass 2: only the messages the tracker accepts.
-            const std::uint16_t skip = tracker.skip();
-            if (skip >= hdr.msg_count) continue;
-            std::uint16_t idx = 0;
-            for_each_message(p.udp_payload, hdr, [&](std::span<const std::uint8_t> m) {
-                if (idx++ < skip) return;
+            for_each_applied(seg, [&](std::span<const std::uint8_t> m) {
                 if (decode_deep_plus(m, ev, applied)) ++book_events[static_cast<int>(ev.kind)];
             });
         }
+        const std::uint64_t packets = fr.packets();
+        const SequenceTracker& tracker = fr.tracker();
+        const auto& by_protocol = fr.by_protocol();
         const double secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
 
         std::printf("file              %s\n", path.c_str());
         std::printf("packets           %llu%s\n", static_cast<u64>(packets),
                     limit != 0 && packets == limit ? " (limit reached)" : "");
-        std::printf("skipped_frames    %llu\n", static_cast<u64>(r.skipped_frames()));
+        std::printf("skipped_frames    %llu\n", static_cast<u64>(fr.skipped_frames()));
         for (const auto& [proto, n] : by_protocol)
             std::printf("protocol 0x%04x   %llu packets%s\n", proto, static_cast<u64>(n),
                         proto == kDeepPlus ? " (DEEP+)" : " (NOT DEEP+, not decoded)");
@@ -187,15 +151,15 @@ int main(int argc, char** argv) {
         for (const auto& [proto, n] : by_protocol)
             if (proto != kDeepPlus) non_deep_plus += n;
         std::printf("non_deep_plus     %llu\n", static_cast<u64>(non_deep_plus));
-        std::printf("tp_parse_failures %llu (short header or framing overrun)\n", static_cast<u64>(overruns));
+        std::printf("tp_parse_failures %llu (short header or framing overrun)\n", static_cast<u64>(fr.tp_parse_failures()));
         std::printf("other_stream      %llu (channel/session differs from the first segment)\n",
-                    static_cast<u64>(other_stream));
-        std::printf("stream            channel %u session %u\n", channel, session);
-        std::printf("segments          %llu (heartbeats %llu)\n", static_cast<u64>(deep_plus_segments),
-                    static_cast<u64>(heartbeats));
-        std::printf("first_seq         %lld\n", static_cast<long long>(first_seq));
+                    static_cast<u64>(fr.other_stream()));
+        std::printf("stream            channel %u session %u\n", fr.channel(), fr.session());
+        std::printf("segments          %llu (heartbeats %llu)\n", static_cast<u64>(fr.segments()),
+                    static_cast<u64>(fr.heartbeats()));
+        std::printf("first_seq         %lld\n", static_cast<long long>(fr.first_seq()));
         std::printf("last_seq_end      %lld (first_seq + msg_count of the last segment)\n",
-                    static_cast<long long>(last_seq_end));
+                    static_cast<long long>(fr.last_seq_end()));
         std::printf("tracker expected  %lld\n", static_cast<long long>(tracker.expected()));
         std::printf("tracker gaps      %llu (%llu messages missing)\n", static_cast<u64>(tracker.gaps()),
                     static_cast<u64>(tracker.gap_messages()));
@@ -220,7 +184,7 @@ int main(int argc, char** argv) {
         for (int k = 0; k < 5; ++k) std::printf("  %-8s %llu\n", kinds[k], static_cast<u64>(book_events[k]));
         std::printf("wall_seconds      %.1f\n", secs);
     } catch (const std::exception& e) {
-        std::fprintf(stderr, "error after %llu packets: %s\n", static_cast<u64>(packets), e.what());
+        std::fprintf(stderr, "error after %llu packets: %s\n", static_cast<u64>(feed ? feed->packets() : 0), e.what());
         return 1;
     }
     return 0;

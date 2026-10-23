@@ -7,6 +7,9 @@
 #include <vector>
 
 #include "md_fixtures.hpp"
+#include "pkmn_md/book_set.hpp"
+#include "pkmn_md/deep_plus.hpp"
+#include "pkmn_md/feed_reader.hpp"
 #include "pkmn_md/iextp.hpp"
 #include "pkmn_md/sequence.hpp"
 
@@ -210,4 +213,101 @@ TEST_CASE("stream restart: a replayed seq-1 packet with an older send time stays
     CHECK(t.observe(h.first_seq, h.msg_count) == SeqVerdict::Duplicate);
     CHECK(t.skip() == 2);
     CHECK(t.resets() == 0);
+}
+
+namespace {
+
+// DEEP+ Add Order (spec v1.06 p.21 layout): buy side, symbol "ZIEXT", the
+// given order id, size 100, price $99.05.
+Bytes deep_plus_add(std::uint64_t id) {
+    Bytes m = {0x61, 0x38};
+    put_le64(m, 1'471'980'724'912'754'610ULL);
+    append(m, bytes_of("ZIEXT   "));
+    put_le64(m, id);
+    put_le32(m, 100);
+    put_le64(m, 990500);
+    return m;
+}
+
+std::string as_string(const Bytes& b) { return std::string(b.begin(), b.end()); }
+
+// Replays `path` through FeedReader + decode_deep_plus + BookSet.
+struct Replayed {
+    std::size_t orders = 0, segments = 0;
+    std::uint64_t restarts = 0, dups = 0, unknown_id = 0, duplicate_add = 0;
+};
+Replayed replay(const std::string& path) {
+    FeedReader fr(path, kDeepPlus);
+    BookSet books;
+    Segment seg{};
+    BookEvent ev{};
+    DecodeStats st{};
+    Replayed r;
+    while (fr.next(seg)) {
+        ++r.segments;
+        if (seg.restart) {
+            ++r.restarts;
+            books.clear_all();
+        }
+        for_each_applied(seg, [&](std::span<const std::uint8_t> m) {
+            if (decode_deep_plus(m, ev, st)) books.apply(ev);
+        });
+    }
+    r.orders = books.order_count();
+    r.dups = fr.tracker().duplicates();
+    r.unknown_id = books.total_anomalies().unknown_id;
+    r.duplicate_add = books.total_anomalies().duplicate_add;
+    return r;
+}
+
+}  // namespace
+
+TEST_CASE("feed reader: duplicate packet at merge seam applied once") {
+    // Segments (first_seq, count): (1,2), (3,2), (3,2) again, (5,1).
+    const std::vector<Bytes> segs = {
+        tp_segment(kDeepPlus, 1, {deep_plus_add(1), deep_plus_add(2)}),
+        tp_segment(kDeepPlus, 3, {deep_plus_add(3), deep_plus_add(4)}),
+        tp_segment(kDeepPlus, 3, {deep_plus_add(3), deep_plus_add(4)}),
+        tp_segment(kDeepPlus, 5, {deep_plus_add(5)}),
+    };
+    std::vector<std::string> payloads;
+    for (const Bytes& s : segs) payloads.push_back(as_string(s));
+    TempFile f(".pcapng");
+    write_raw(f.path, capture(payloads, {1, 2, 3, 4}));
+    const Replayed r = replay(f.path);
+    CHECK(r.segments == 4);
+    CHECK(r.dups == 2);
+    CHECK(r.duplicate_add == 0);  // each Add applied exactly once
+    CHECK(r.orders == 5);
+}
+
+TEST_CASE("feed reader: stream restart is flagged and the new epoch applied") {
+    const std::vector<Bytes> segs = {
+        with_send_time(tp_segment(kDeepPlus, 1, {deep_plus_add(1), deep_plus_add(2)}), 100),
+        with_send_time(tp_segment(kDeepPlus, 1, {deep_plus_add(1)}), 50),   // replay: older send time
+        with_send_time(tp_segment(kDeepPlus, 1, {deep_plus_add(1)}), 200),  // restart, reuses id 1
+        with_send_time(tp_segment(kDeepPlus, 2, {deep_plus_add(9)}), 201),
+    };
+    std::vector<std::string> payloads;
+    for (const Bytes& s : segs) payloads.push_back(as_string(s));
+    // Plus a non-DEEP+ packet and a packet too short for a header, both skipped.
+    payloads.push_back(as_string(tp_segment(kTops, 3, {deep_plus_add(7)})));
+    payloads.push_back("short");
+    TempFile f(".pcapng");
+    write_raw(f.path, capture(payloads, {1, 2, 3, 4, 5, 6}));
+    const Replayed r = replay(f.path);
+    CHECK(r.restarts == 1);
+    CHECK(r.dups == 1);
+    CHECK(r.duplicate_add == 0);
+    CHECK(r.orders == 2);  // ids 1 and 9 of the new epoch only
+
+    FeedReader fr(f.path, kDeepPlus);
+    Segment seg{};
+    while (fr.next(seg)) {
+    }
+    CHECK(fr.packets() == 6);
+    CHECK(fr.segments() == 4);
+    CHECK(fr.tp_parse_failures() == 1);
+    CHECK(fr.by_protocol().at(kTops) == 1);
+    CHECK(fr.tracker().resets() == 1);
 }
