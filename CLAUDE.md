@@ -532,6 +532,59 @@ tcgcsv.com). Design spec: `docs/superpowers/specs/2026-06-09-pkmn-quant-design.m
   Items 1, 2, 3 and 5 all move published numbers; nothing here changes a
   conclusion, because every strategy figure moves against a bar that moves
   too.
+- **Plan A (IEX order book) complete on feat/iex-book (615 passed pytest via
+  `uv sync --group api --group dashboard && uv run pytest`; 117 Catch2 tests
+  via ctest on macOS and 117 in the OrbStack VM; ruff, format and mypy clean
+  over 58 source files).** Plan A of 4 in the market-data / CLOB track (spec:
+  `docs/superpowers/specs/2026-10-22-market-data-and-clob-design.md`, plan `docs/superpowers/plans/2026-10-22-iex-book.md`).
+  **This branch was cut from `feat/instrument-repair-horizon`, not main, by
+  owner decision, because that branch is not yet merged; merging this one
+  carries those commits with it.** Shipped, all C++20 under `cpp/` with no
+  Python dependency: a price-time `OrderBook` (`cpp/src/pkmn_book`), a
+  streaming pcapng-over-zlib reader, IEX-TP framing with sequence tracking,
+  DEEP+ and DEEP decoders, a per-symbol `BookSet` (`cpp/src/pkmn_md`), tools
+  `iex_decode`, `pcap_count`, `iex_oracle`, `iex_bench` (`cpp/tools`), the
+  HIST downloader `scripts/iex_hist.py`, and `scripts/bench_iex.sh`. Plans B-D
+  are NOT STARTED. **Oracle result, stated plainly: the spec's success
+  criterion ("matches at every checked point on at least one full real day")
+  is NOT met on 2024-12-23.** `iex_oracle` rebuilds the book from DEEP+ and
+  checks it against DEEP price levels and TOPS best quotes: of 96,980,017
+  checkpoints evaluated (that figure includes 5,472 halt zero-quotes excluded
+  by name, `tops_unavailable_zero_quote`, so it is not a "matched" count),
+  7,870 mismatch (0.008%) in 8 symbols; the default full-day run exits 1.
+  7,819 of the 7,870 trace to an undocumented DEEP+ order-id rewind starting
+  at 09:48:38 ET (926,703 Adds below their symbol's running maximum id across
+  901 symbols; only 5 symbols mismatch: DRIP, OTEX, CNH, KBE, WMT). The other
+  51 are round-lot (NVR, MKL, SEB), which vanish only with the opt-in
+  `--round-lot NVR=10 --round-lot MKL=10 --round-lot SEB=1`; those values
+  were inferred from TOPS itself, which is why the option is not the
+  default. The book applies DEEP+ correctly (an independent Python replay
+  agreed message for message); what is open is a second oracle day, asking
+  IEX, or a named rule approved by the owner, and none has been taken. **Mid-day
+  restart finding:** all three feeds restart together at send_time
+  1734971570036197067 (11:32:50 ET), data resumes 11:39 ET, so the day is
+  not one continuous stream; the oracle resolves pending checks and clears
+  every book at the restart. Full detail: `docs/iex-oracle.md`. **Benchmark**
+  (`docs/benchmarks/iex-book.md`; DEEP+ decode + `BookSet::apply` on the
+  2024-12-23 DPLS file, 50,959,176 messages, Apple M1 Pro, 7-vCPU OrbStack
+  Ubuntu 24.04 arm64 VM, g++ 13.3.0, `-O3 -DNDEBUG -ffp-contract=off`, timer
+  cntvct_el0 at 24 MHz = 41.7 ns per tick with ~10 ns empty-pair overhead).
+  The Task 6 optimization (pooled order arena, open-addressing id map,
+  contiguous levels, commit bc6e805) was kept on an interleaved A/B of 9
+  pairs: best-of-9 ram throughput 4,926,764 -> 7,584,533 msgs/s, median
+  timed-region mean 184.3 -> 121.5 ns, B faster in all 9 pairs. **VM noise is
+  10% or more**: within-session spread was 32.4% (A) and 46.8% (B) on msgs/s,
+  and median msgs/s moved only +27.5%, inside those spreads; the keep rests
+  on the pairing and the non-overlapping timed-mean ranges, not on a clean
+  margin. The clean generated run at bc6e805 reads 7,342,902 msgs/s best of
+  3 (spread 13.5%), latency p50 83 ns (2 ticks, **quantized: +/-50%**), p99
+  626 ns, p99.9 6,448 ns, max 40,436,760 ns (the VM being descheduled is the
+  likely cause, not verified), and 2,497,490 msgs/s end to end including
+  gunzip. Tail (p99.9, max) did not move in the A/B. Next profile target:
+  `OrderBook::level_pos` at 22.7% self time. IEX data results carry the
+  required citation: Data provided for free by IEX. By accessing or using IEX
+  Historical Data, you agree to the IEX Historical Data Terms of Use
+  (`docs/iex-hist-terms.md`).
 
 ## Commands
 
@@ -577,6 +630,15 @@ make web                                                  # run the API + web de
 All four gates must pass before every commit. CI runs them with
 `uv sync --frozen` (stale uv.lock fails the build — commit pyproject.toml and
 uv.lock together).
+
+```bash
+# Plan A (IEX order book); the VM is the Linux build/benchmark host
+orb -m ubuntu bash -lc 'cd /Users/ml3787/pkmn-stock && cmake -S cpp -B cpp/build-linux -DPKMN_BUILD_TESTS=ON && cmake --build cpp/build-linux -j && ctest --test-dir cpp/build-linux'
+uv run python scripts/iex_hist.py --date 20241223 --feeds DPLS DEEP TOPS --dest data/iex   # download (gzip kept on disk)
+cpp/build-linux-release/iex_oracle --deep-plus data/iex/20241223_IEXTP1_DPLS1.0.pcap.gz \
+    --deep data/iex/20241223_IEXTP1_DEEP1.0.pcap.gz --tops data/iex/20241223_IEXTP1_TOPS1.6.pcap.gz  # exits 1 on mismatch (currently 1, see docs/iex-oracle.md)
+scripts/bench_iex.sh [--profile] [--no-record]            # re-execs in the VM, prepends a section to docs/benchmarks/iex-book.md
+```
 
 ## Layout
 
@@ -725,6 +787,24 @@ uv.lock together).
   (`/evaluate/:runId`). `npm run check` (tsc --noEmit + vitest, 25 tests)
   and `npm run build` (production build) gate it; CI runs both in a
   dedicated `web` job alongside the Python `checks` job.
+- `cpp/src/pkmn_book/` — `OrderBook`: price-time order book (per-book
+  pooled order arena, open-addressing order-id table, per-side contiguous
+  price levels with the best price at the back). No Python or zlib dependency.
+- `cpp/src/pkmn_md/` — IEX market data: streaming pcapng reader over zlib,
+  IEX-TP framing + sequence tracker (a seq-1 packet with a newer send time is
+  a stream restart), DEEP+ and DEEP decoders, `BookSet` (one `OrderBook` per
+  symbol), `timing.hpp` (cntvct_el0 timer). Built into `md_tests`, separate
+  from `engine_tests`, and kept out of the Python wheel build.
+- `cpp/tools/` — `iex_decode`, `pcap_count`, `iex_oracle` (book vs DEEP/TOPS,
+  see `docs/iex-oracle.md`), `iex_bench` (driven by `scripts/bench_iex.sh`).
+- `docs/benchmarks/` — `iex-book.md` (dated results, newest first, plus the
+  hand-written Task 6 A/B), flamegraphs and folded stacks for the baseline
+  (`-c9e60e0`) and the optimized book. Also `docs/iex-oracle.md` and
+  `docs/iex-hist-terms.md` (IEX data terms; the citation line is required
+  wherever IEX data results are published).
+- `data/iex/` — gitignored (covered by `/data/`); the three 2024-12-23
+  `.pcap.gz` files (DPLS, DEEP, TOPS) are about 4.5 GiB on disk (`du -sh`).
+  Never decompress to disk; every tool streams the gzip.
 
 ## Conventions and gotchas
 
@@ -917,3 +997,16 @@ uv.lock together).
   bit-for-bit parity with the Python engine depends on IEEE-754-exact,
   non-reassociated floating point; either flag will pass the C++ unit tests
   and silently break parity on real data.
+
+- **IEX/Plan A build gotchas.** A non-SKBUILD cmake configure of `cpp/` now
+  requires zlib (`find_package(ZLIB REQUIRED)`); the Python wheel build does
+  not (the market-data targets are excluded from it). On macOS FindZLIB
+  returns the SDK `usr/include`, which `cpp/CMakeLists.txt` clears from
+  `ZLIB::ZLIB`'s interface includes to avoid shadowing the toolchain headers.
+  A plain `uv sync` drops the `api` and `dashboard` groups, after which
+  `uv run mypy` fails on the api code; use
+  `uv sync --group api --group dashboard` before the gates. The bench SHA
+  stamp is dirty-aware and counts untracked files (a build directory inside
+  the tree makes a result read `-dirty`; that is why the Task 6 A/B rows
+  say `1c14e20e25d7-dirty`). Benchmark comparisons in this VM need
+  interleaved A/B runs; a single before/after pair is inside the noise.

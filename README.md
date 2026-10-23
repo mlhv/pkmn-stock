@@ -216,6 +216,16 @@ search index is cached per process, so a fresh ingest needs a restart to
 become searchable; and holdings that fail universe/mark validation surface
 as a failed job rather than a form error.
 
+## Market data: an IEX order book in C++
+
+A separate track, started after the card research above, is building toward a limit-order-book simulator on real exchange data. The first piece is a C++20 price-time order book (`cpp/src/pkmn_book`) and an IEX market-data stack (`cpp/src/pkmn_md`) that decodes the order-by-order DEEP+ feed straight from gzipped pcapng captures and rebuilds every symbol's book. Only this first of four planned pieces exists; the matching simulator and everything built on it are not started.
+
+**What it checks, and what it does not prove yet.** `iex_oracle` compares the rebuilt book against IEX's own DEEP price levels and TOPS best quotes at every checkpoint. On 2024-12-23 it evaluated 96,980,017 checkpoints (5,472 halt zero-quotes among them are excluded by name) and 7,870 disagree, 0.008% of the total, across 8 symbols. The project's own success bar was a match at every checked point on a full real day, so **the oracle did not pass on that day** and the tool exits 1. Of the 7,870, 7,819 follow a point at 09:48:38 ET where DEEP+ order ids start running backwards, which no IEX specification documents; the other 51 are three symbols whose round lot is not 100. Details, the evidence, and the open options are in [docs/iex-oracle.md](docs/iex-oracle.md).
+
+**Speed.** Decoding and applying the 50,959,176 DEEP+ messages of that day, with the capture held in RAM, runs at 7,342,902 messages per second in the clean benchmark run (best of 3, 13.5% spread between runs). Per-message latency in that run was p50 83 ns, p99 626 ns, p99.9 6,448 ns and max 40,436,760 ns; the p50 is only two ticks of a 41.7 ns timer (plus or minus 50%), and the maximum is most likely the VM being descheduled. Replacing the book's node-based containers with a pooled arena, an open-addressing id table and contiguous price levels was measured against the old book in 9 interleaved pairs: best-case throughput went from 4,926,764 to 7,584,533 messages per second and the median timed cost per message from 184.3 to 121.5 ns, with the new book faster in all 9 pairs. The tail latency did not improve. Hardware is an Apple M1 Pro running a 7-vCPU OrbStack Ubuntu 24.04 arm64 VM, and run-to-run noise there is 10% or more (up to 47% across the nine runs), so treat the gains as direction plus rough size. Method and raw runs: [docs/benchmarks/iex-book.md](docs/benchmarks/iex-book.md).
+
+Data provided for free by IEX. By accessing or using IEX Historical Data, you agree to the IEX Historical Data Terms of Use. The data is not redistributed here (`data/iex/` is gitignored); see [docs/iex-hist-terms.md](docs/iex-hist-terms.md).
+
 ## Engineering practices
 
 - `uv` for everything; `ruff` lint + format; `mypy --strict` on `src/`; pytest + Catch2; CI runs all gates with `uv sync --frozen`.
