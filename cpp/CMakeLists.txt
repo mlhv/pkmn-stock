@@ -37,6 +37,15 @@ target_include_directories(pkmn_book PUBLIC src)
 target_compile_options(pkmn_book PUBLIC -ffp-contract=off)
 set_target_properties(pkmn_book PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
+# Pokemon quote wire protocol: encoder and decoder. No zlib, so it builds in
+# the wheel build too. Links the core because the replay path (Task 6) uses
+# the ladder builder; reuses the header-only SequenceTracker from pkmn_md.
+add_library(pkmn_wire STATIC src/pkmn_wire/encoder.cpp src/pkmn_wire/decoder.cpp)
+target_include_directories(pkmn_wire PUBLIC src)
+target_compile_options(pkmn_wire PUBLIC -ffp-contract=off)
+set_target_properties(pkmn_wire PROPERTIES POSITION_INDEPENDENT_CODE ON)
+target_link_libraries(pkmn_wire PUBLIC pkmn_engine_core)
+
 # Market data (IEX HIST pcapng over zlib) and its tools. Kept out of the
 # Python wheel build entirely so that build never needs zlib.
 if(NOT SKBUILD)
@@ -92,7 +101,7 @@ if(SKBUILD)
   find_package(Python 3.12 COMPONENTS Interpreter Development.Module REQUIRED)
   find_package(nanobind CONFIG REQUIRED)
   nanobind_add_module(_engine bindings/module.cpp)
-  target_link_libraries(_engine PRIVATE pkmn_engine_core)
+  target_link_libraries(_engine PRIVATE pkmn_engine_core pkmn_wire)
   install(TARGETS _engine LIBRARY DESTINATION pkmn_quant)
 endif()
 
@@ -118,9 +127,10 @@ if(PKMN_BUILD_TESTS)
     tests/test_order_book_paths.cpp
     tests/test_ladder.cpp
     tests/test_execution_book.cpp
+    tests/test_wire.cpp
   )
   find_package(Threads REQUIRED)
-  target_link_libraries(engine_tests PRIVATE pkmn_engine_core pkmn_book Catch2::Catch2WithMain Threads::Threads)
+  target_link_libraries(engine_tests PRIVATE pkmn_engine_core pkmn_book pkmn_wire Catch2::Catch2WithMain Threads::Threads)
   include(CTest)
   list(APPEND CMAKE_MODULE_PATH ${catch2_SOURCE_DIR}/extras)
   include(Catch)
