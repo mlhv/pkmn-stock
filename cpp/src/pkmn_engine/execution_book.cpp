@@ -117,4 +117,21 @@ std::vector<Fill> execute_book(const std::vector<Order>& orders, const MarketVie
     return fills;
 }
 
+double hypothetical_sell_impact(const DayQuote& q, const CostModel& cm, LadderPricing p,
+                                std::int64_t qty) {
+    if (qty <= 0 || std::isnan(q.market) || q.market <= 0.0) return 0.0;
+    const double tpd = static_cast<double>(ticks_per_dollar(p));
+    book::OrderBook b;
+    build_day_ladder(q, cm, p, b);
+    std::vector<book::Level> levels;
+    std::int64_t in_book = std::min<std::int64_t>(qty, side_units(b, book::Side::Buy, levels));
+    std::vector<book::Execution> execs;
+    if (in_book > 0) b.match(book::Side::Sell, in_book, 0, execs);
+    std::int64_t ticks = notional_ticks(execs);
+    // Past the book's depth: the same ramp, extended (hypothetical exit only).
+    const LadderShape s = bid_shape(q, cm);
+    for (std::int64_t k = in_book; k < qty; ++k) ticks += unit_ticks(s, book::Side::Buy, k, p);
+    return std::max(static_cast<double>(qty) * q.market - static_cast<double>(ticks) / tpd, 0.0);
+}
+
 }  // namespace pkmn

@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 import polars as pl
+import pytest
 from typer.testing import CliRunner
 
 from pkmn_quant.cli import app
@@ -159,15 +160,22 @@ def seed(
     root: Path,
     extra_records: list[dict[str, Any]] | None = None,
     bench_git_sha: str = "abc1234",
+    execution: str | None = None,
 ) -> None:
-    """A strategy run (fills + equity) and a buy-and-hold benchmark run."""
+    """A strategy run (fills + equity) and a buy-and-hold benchmark run.
+
+    ``execution`` stamps config["execution"] on both records; None leaves the
+    key out (every pre-Plan-B record, read as formula).
+    """
     seed_warehouse(root)
     results = root / "data" / "results"
     write_fills(results / RUN_ID, FILLS)
     write_equity(results / RUN_ID, [1000.0 + 10.0 * i for i in range(len(WEEKS))])
     # Benchmark index: 100 * (1 + 0.01 * i) -- exactly computable returns.
     write_equity(results / BENCH_ID, [100.0 * (1.0 + 0.01 * i) for i in range(len(WEEKS))])
-    window = {"start": START.isoformat(), "end": LAST_DAY.isoformat()}
+    window: dict[str, Any] = {"start": START.isoformat(), "end": LAST_DAY.isoformat()}
+    if execution is not None:
+        window["execution"] = execution
     write_registry(
         root,
         [
@@ -485,3 +493,81 @@ def test_horizon_records_run(tmp_path: Path) -> None:
     assert "median_edge" in rec.results
     assert "median_edge_1_3m" in rec.results
     assert rec.artifact_path.endswith(f"horizon-{RUN_ID}")
+
+
+# -- no mixing: book vs formula execution (Plan B Task 4) --
+
+
+def test_horizon_refuses_benchmark_in_other_mode(tmp_path: Path) -> None:
+    """A book run against an explicitly named formula benchmark is refused."""
+    formula_bench = OLDER_BENCH_ID
+    seed(
+        tmp_path,
+        execution="book",
+        extra_records=[record(tmp_path, formula_bench, "buy-and-hold-sealed")],
+    )
+    write_equity(tmp_path / "data" / "results" / formula_bench, OLDER_BENCH_EQUITY)
+    result = run_horizon(tmp_path, "--benchmark", formula_bench)
+    assert result.exit_code == 1
+    assert "formula" in result.output and "book" in result.output
+    assert "Traceback" not in result.output
+
+
+def test_horizon_auto_benchmark_is_in_mode(tmp_path: Path) -> None:
+    """Auto resolution skips a NEWER benchmark in the other mode."""
+    newer_formula = "20260801T150000Z-fff666"  # newer than BENCH_ID, formula
+    seed(
+        tmp_path,
+        execution="book",
+        extra_records=[record(tmp_path, newer_formula, "buy-and-hold-sealed")],
+    )
+    write_equity(tmp_path / "data" / "results" / newer_formula, OLDER_BENCH_EQUITY)
+    result = run_horizon(tmp_path)
+    assert result.exit_code == 0, result.output
+    payload = read_payload(tmp_path)
+    assert payload["benchmark_run_id"] == BENCH_ID
+    assert payload["execution"] == "book"
+
+
+def test_horizon_legacy_records_are_formula(tmp_path: Path) -> None:
+    seed(tmp_path)
+    assert run_horizon(tmp_path).exit_code == 0
+    assert read_payload(tmp_path)["execution"] == "formula"
+    from pkmn_quant.research.runs import load_runs
+
+    (rec,) = [r for r in load_runs(tmp_path) if r.command == "horizon"]
+    assert rec.config["execution"] == "formula"
+
+
+def test_horizon_book_run_uses_book_exit(tmp_path: Path) -> None:
+    """On a book run the still-open lot exits through the modelled bid book
+    (synthetic, built from the day's tcgcsv quote), not the formula walk.
+    1 unit at mark 35, low 1, depth 8: the book bids 32.875 -> 32.88 (cent,
+    half away from zero), impact 2.12; the formula charges 2.125."""
+    from pkmn_quant.engine.costs import CostModel
+    from pkmn_quant.engine.native import book_sell_impact
+    from pkmn_quant.research.horizon import horizon_report
+
+    seed(tmp_path, execution="book")
+    result = run_horizon(tmp_path, "--benchmark", BENCH_ID)
+    assert result.exit_code == 0, result.output
+    open_trip = next(t for t in read_payload(tmp_path)["trips"] if t["still_open"])
+
+    results = tmp_path / "data" / "results"
+    fills = pl.read_parquet(results / RUN_ID / "fills.parquet")
+    index = pl.read_parquet(results / BENCH_ID / "equity.parquet")
+    key = (1, "Normal")
+    costs = CostModel(impact_enabled=True)
+    args = (fills, index, {key: FINAL_MARK}, LAST_DAY, costs, {key: 1.0})
+
+    def open_return(**kw: Any) -> float:
+        rep = horizon_report(*args, **kw)
+        return next(t.strategy_return for t in rep.trips if t.still_open)
+
+    formula = open_return()
+    book = open_return(exit_impact=lambda m, low, q: book_sell_impact(costs, m, low, q))
+    assert book != formula
+    assert open_trip["strategy_return"] == book
+    assert open_trip["strategy_return"] == pytest.approx(
+        (FINAL_MARK - (FINAL_MARK * 0.1275 + 1.0 + 2.12)) / OPEN_BASIS - 1.0, abs=1e-12
+    )

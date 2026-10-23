@@ -90,6 +90,9 @@ class Recommendation:
         A missing `low` (the asset did not print today) means no floor, never
         a guessed one.
         """
+        # Live and paper pricing use the formula cost model, not book
+        # execution; research runs default to book, so a recommendation's
+        # quoted outlay can differ from what a book backtest would have charged.
         if self.action == "BUY" and self.low is not None:
             return max(self.market_price, self.low)
         return self.market_price

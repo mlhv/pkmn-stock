@@ -37,3 +37,11 @@ def run_backtest(
     callback: Callable[[int, list[tuple[int, int, float, int]], float], list[tuple[int, int]]]
     | None,
 ) -> tuple[list[int], list[float], list[tuple[int, int, int, float, float, float]]]: ...
+def book_sell_impact(
+    market: float,
+    low: float,
+    qty: int,
+    tier_thresholds: NDArray[np.float64],
+    tier_qtys: NDArray[np.int64],
+    fallback_max_qty: int,
+) -> float: ...

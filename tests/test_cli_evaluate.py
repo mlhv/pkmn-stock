@@ -17,15 +17,22 @@ from tests.helpers import price_row
 START = date(2025, 1, 1)
 
 
-def _write_curve(run_dir: Path, name: str, equity: list[float], as_wf: bool = True) -> None:
+def _write_curve(
+    run_dir: Path,
+    name: str,
+    equity: list[float],
+    as_wf: bool = True,
+    execution: str | None = None,
+) -> None:
     run_dir.mkdir(parents=True, exist_ok=True)
     days = [START + timedelta(days=i) for i in range(len(equity))]
     frame = pl.DataFrame({"date": days, "equity": equity})
     if as_wf:
         frame.write_parquet(run_dir / "stitched_equity.parquet")
-        (run_dir / "walkforward.json").write_text(
-            json.dumps({"strategy": name, "folds": [], "summary": {}})
-        )
+        meta: dict[str, object] = {"strategy": name, "folds": [], "summary": {}}
+        if execution is not None:  # None = a legacy artifact without the key
+            meta["execution"] = execution
+        (run_dir / "walkforward.json").write_text(json.dumps(meta))
     else:
         frame.write_parquet(run_dir / "equity.parquet")
 
@@ -154,9 +161,12 @@ def test_evaluate_finds_benchmark_via_run_registry(tmp_path: Path) -> None:
     _seed_real_prices(tmp_path, n_days)
 
     rng = np.random.default_rng(0)
+    # `pkmn backtest` defaults to book execution (Plan B), so the benchmark it
+    # records is book; the walk-forward artifacts must be book too or evaluate
+    # rightly refuses to pair them (see the no-mixing tests below).
     for name, drift in [("alpha", 0.0), ("beta", -0.001)]:
         eq = list(100.0 * np.cumprod(1.0 + rng.normal(drift, 0.01, n_days)))
-        _write_curve(tmp_path / "data" / "results" / f"wf-{name}-x", name, eq)
+        _write_curve(tmp_path / "data" / "results" / f"wf-{name}-x", name, eq, execution="book")
 
     backtest_result = CliRunner().invoke(
         app,
@@ -319,3 +329,103 @@ def test_evaluate_rejects_zero_n_boot(tmp_path: Path) -> None:
     result = CliRunner().invoke(app, ["evaluate", "--root", str(tmp_path), "--n-boot", "0"])
     assert result.exit_code != 0
     assert "Traceback" not in result.output
+
+
+# -- no mixing: book vs formula execution (Plan B Task 4) --
+
+
+def _rewrite_wf_execution(root: Path, modes: dict[str, str]) -> None:
+    """Stamp `execution` onto the seeded wf-<name>-x artifacts."""
+    for name, mode in modes.items():
+        meta_path = root / "data" / "results" / f"wf-{name}-x" / "walkforward.json"
+        meta = json.loads(meta_path.read_text())
+        meta["execution"] = mode
+        meta_path.write_text(json.dumps(meta))
+
+
+def test_evaluate_refuses_mixed_execution(tmp_path: Path) -> None:
+    seed_everything(tmp_path)
+    _rewrite_wf_execution(tmp_path, {"alpha": "book", "beta": "formula"})
+    result = run_eval(tmp_path)
+    assert result.exit_code == 1
+    assert (
+        "error: walk-forward artifacts mix execution modes "
+        "(book: wf-alpha-x; formula: wf-beta-x); evaluate one mode at a time"
+    ) in result.output
+    assert "Traceback" not in result.output
+    assert not list((tmp_path / "data" / "results").glob("evaluate-*"))
+
+
+def test_evaluate_picks_benchmark_in_mode(tmp_path: Path) -> None:
+    """The newer buy-and-hold is formula, the older one book: with book
+    artifacts the bar must be the book one, never the newer formula run."""
+    book_id = "20260731T110000Z-bbb999"  # older than BENCH_ID
+    seed_everything(
+        tmp_path,
+        extra_records=[
+            _record(
+                tmp_path,
+                book_id,
+                "buy-and-hold-sealed",
+                config={"execution": "book"},
+                recorded_at="2026-07-31T11:00:00+00:00",
+            )
+        ],
+    )
+    _write_curve(
+        tmp_path / "data" / "results" / book_id,
+        "buy-and-hold-sealed",
+        [100.0 + 0.1 * i for i in range(200)],
+        as_wf=False,
+    )
+    _rewrite_wf_execution(tmp_path, {"alpha": "book", "beta": "book"})
+    result = run_eval(tmp_path)
+    assert result.exit_code == 0, result.output
+    payload = json.loads(
+        (next((tmp_path / "data" / "results").glob("evaluate-*")) / "evaluate.json").read_text()
+    )
+    assert payload["benchmark"] == str(tmp_path / "data" / "results" / book_id)
+    assert payload["execution"] == "book"
+
+    from pkmn_quant.research.runs import load_runs
+
+    (rec,) = [r for r in load_runs(tmp_path) if r.command == "evaluate"]
+    assert rec.config["execution"] == "book"
+
+
+def test_evaluate_legacy_artifacts_are_formula(tmp_path: Path) -> None:
+    """No `execution` key anywhere (every pre-Plan-B artifact and record):
+    everything reads as formula and evaluates as before."""
+    seed_everything(tmp_path)
+    result = run_eval(tmp_path)
+    assert result.exit_code == 0, result.output
+    payload = json.loads(
+        (next((tmp_path / "data" / "results").glob("evaluate-*")) / "evaluate.json").read_text()
+    )
+    assert payload["execution"] == "formula"
+    assert payload["benchmark"] == str(tmp_path / "data" / "results" / BENCH_ID)
+
+
+def test_evaluate_refuses_explicit_benchmark_in_other_mode(tmp_path: Path) -> None:
+    """--benchmark <dir> is looked up in the registry by artifact_path; BENCH_ID
+    has no execution key (formula), the artifacts are book."""
+    seed_everything(tmp_path)
+    _rewrite_wf_execution(tmp_path, {"alpha": "book", "beta": "book"})
+    bench_dir = tmp_path / "data" / "results" / BENCH_ID
+    result = run_eval(tmp_path, "--benchmark", str(bench_dir))
+    assert result.exit_code == 1
+    assert "formula" in result.output and "book" in result.output
+    assert "Traceback" not in result.output
+
+
+def test_evaluate_explicit_unregistered_benchmark_is_formula(tmp_path: Path) -> None:
+    """A --benchmark directory no registry record points at reads as formula:
+    fine against formula artifacts, refused against book ones."""
+    seed_everything(tmp_path)
+    loose = tmp_path / "data" / "results" / "loose-bench"
+    _write_curve(loose, "buy-and-hold", [100.0 + 0.1 * i for i in range(200)], as_wf=False)
+    ok = run_eval(tmp_path, "--benchmark", str(loose))
+    assert ok.exit_code == 0, ok.output
+    _rewrite_wf_execution(tmp_path, {"alpha": "book", "beta": "book"})
+    bad = run_eval(tmp_path, "--benchmark", str(loose))
+    assert bad.exit_code == 1

@@ -3,6 +3,7 @@
 #include <nanobind/stl/string.h>
 
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -10,6 +11,7 @@
 #include <vector>
 
 #include "pkmn_engine/backtest.hpp"
+#include "pkmn_engine/execution_book.hpp"
 #include "pkmn_engine/strategies/callback.hpp"
 #include "pkmn_engine/strategies/factory.hpp"
 #include "pkmn_engine/version.hpp"
@@ -130,6 +132,23 @@ nb::object run_backtest_py(
     return nb::make_tuple(out_days, out_equity, out_fills);
 }
 
+// Hypothetical book-priced exit (pkmn horizon's still-open lots). `low` NaN =
+// missing. Always Cent: the exact ladder is test-only and never a user surface.
+double book_sell_impact_py(double market, double low, std::int64_t qty,
+                           Arr<double> tier_thresholds, Arr<std::int64_t> tier_qtys,
+                           std::int64_t fallback_max_qty) {
+    CostModel cm;
+    cm.liquidity_tiers.clear();
+    for (std::size_t i = 0; i < tier_thresholds.size(); ++i) {
+        cm.liquidity_tiers.emplace_back(tier_thresholds(i), tier_qtys(i));
+    }
+    cm.fallback_max_qty = fallback_max_qty;
+    cm.impact_enabled = true;  // the ladder builder requires it
+    cm.execution = ExecutionMode::Book;
+    DayQuote q{market, std::numeric_limits<double>::quiet_NaN(), low};
+    return hypothetical_sell_impact(q, cm, LadderPricing::Cent, qty);
+}
+
 }  // namespace
 
 NB_MODULE(_engine, m) {
@@ -145,4 +164,7 @@ NB_MODULE(_engine, m) {
           nb::arg("initial_cash"), nb::arg("holding_asset"), nb::arg("holding_qty"),
           nb::arg("holding_cost"), nb::arg("holding_opened"), nb::arg("execution"),
           nb::arg("callback").none());
+    m.def("book_sell_impact", &book_sell_impact_py, nb::arg("market"), nb::arg("low"),
+          nb::arg("qty"), nb::arg("tier_thresholds"), nb::arg("tier_qtys"),
+          nb::arg("fallback_max_qty"));
 }

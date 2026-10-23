@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import statistics
 from collections import deque
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import date
 from typing import Any
@@ -185,6 +185,7 @@ def horizon_report(
     last_day: date,
     costs: CostModel,
     final_lows: dict[tuple[int, str], float] | None = None,
+    exit_impact: Callable[[float, float | None, int], float] | None = None,
 ) -> HorizonReport:
     """Pair round trips from ``fills`` and score each against the sealed
     index over that trip's own entry/exit window.
@@ -211,6 +212,11 @@ def horizon_report(
     ``final_lows`` supplies ``last_day``'s cheapest-listing quote per asset so
     the modelled exit can carry sell-side impact too; omit it and only fees
     and shipping are charged.
+
+    ``exit_impact(mark, low, qty)`` overrides how that exit's sell-side impact
+    is priced; ``None`` keeps ``costs.sell_impact``. A book run passes the
+    book-priced exit (``engine.native.book_sell_impact``) so its open lots are
+    scored under the same execution mode as its closed ones.
 
     Two honest limits of the modelled exit, neither of which the old gross
     treatment avoided — it just also omitted the fees:
@@ -251,10 +257,13 @@ def horizon_report(
             # closed-trip line above, so open and closed trips are on one
             # scale.
             exit_fees = quantity * mark * costs.fee_rate + costs.shipping_per_line
-            exit_impact = costs.sell_impact(
-                mark, None if final_lows is None else final_lows.get(key), quantity
+            low = None if final_lows is None else final_lows.get(key)
+            exit_cost = (
+                costs.sell_impact(mark, low, quantity)
+                if exit_impact is None
+                else exit_impact(mark, low, quantity)
             )
-            proceeds_per_unit = mark - (exit_fees + exit_impact) / quantity
+            proceeds_per_unit = mark - (exit_fees + exit_cost) / quantity
             exit_date = last_day
             holding_days = (last_day - entry).days
 

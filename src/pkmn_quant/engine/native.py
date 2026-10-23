@@ -218,3 +218,29 @@ class NativeBacktest:
             summary=summarize(equity_curve),
             cost_model=cost_model,
         )
+
+
+def book_sell_impact(cost_model: CostModel, market: float, low: float | None, qty: int) -> float:
+    """Sell-side impact of a HYPOTHETICAL ``qty``-unit sale through the book.
+
+    Prices a still-open lot's modelled exit for book runs (``pkmn horizon``):
+    the first ``depth`` units match a fresh bid ladder of modelled resting
+    orders (synthetic, built from the day's tcgcsv quote), in whole cents;
+    units past that depth are priced on the same ramp extended past its last
+    level -- extrapolation for a hypothetical exit only, never a fill. The
+    book analogue of ``cost_model.sell_impact(market, low, qty)``; only the
+    liquidity tiers are read from ``cost_model`` (impact is implied: a book
+    exit only exists with impact on). ``low=None`` (no listing quote) gives a
+    flat book at ``market``, so 0.0.
+    """
+    tiers = cost_model.liquidity_tiers
+    return float(
+        _engine.book_sell_impact(
+            market=market,
+            low=float("nan") if low is None else float(low),
+            qty=qty,
+            tier_thresholds=np.array([t for t, _ in tiers], dtype=np.float64),
+            tier_qtys=np.array([q for _, q in tiers], dtype=np.int64),
+            fallback_max_qty=cost_model.fallback_max_qty,
+        )
+    )

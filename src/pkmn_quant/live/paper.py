@@ -50,6 +50,9 @@ def plan_paper_fills(
     """
     cash_remaining = cash
     batch: list[dict[str, object]] = []
+    # Live and paper pricing use the formula cost model, not book execution;
+    # research runs default to book, so a recommendation's quoted outlay can
+    # differ from what a book backtest would have charged.
     for rec in recommendations:
         mark = rec.market_price
         # Executor parity (engine/execution.py): the depth tier comes off the

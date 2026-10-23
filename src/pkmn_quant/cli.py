@@ -595,7 +595,12 @@ def signals(
     ),
     root: Path = typer.Option(Path("."), help="Project root holding the data/ directory."),
 ) -> None:
-    """Run a strategy in live mode against the latest ingested prices."""
+    """Run a strategy in live mode against the latest ingested prices.
+
+    Live and paper pricing use the formula cost model, not book execution;
+    research runs default to book, so a recommendation's quoted outlay can
+    differ from what a book backtest would have charged.
+    """
     from pkmn_quant.data.warehouse import Warehouse
     from pkmn_quant.live.ledger import LedgerError, load_portfolio
     from pkmn_quant.live.report import render_signals_markdown, signals_to_json
@@ -867,11 +872,17 @@ def evaluate(
 
     # -- discover strategy artifacts (longest curve wins per strategy) --
     curves: dict[str, pl.DataFrame] = {}
+    # Execution mode of EVERY discovered artifact (missing key = formula, as
+    # every artifact before Plan B was): book and formula curves are priced
+    # by different execution models and never belong in one Reality Check.
+    dirs_by_mode: dict[str, list[str]] = {}
     for d in sorted(results_dir.glob("wf-*")):
         meta, parquet = d / "walkforward.json", d / "stitched_equity.parquet"
         if not (meta.exists() and parquet.exists()):
             continue
-        name = str(json.loads(meta.read_text())["strategy"])
+        meta_obj = json.loads(meta.read_text())
+        name = str(meta_obj["strategy"])
+        dirs_by_mode.setdefault(str(meta_obj.get("execution", "formula")), []).append(d.name)
         frame = pl.read_parquet(parquet)
         if frame.height < 2:
             typer.echo(f"skipping {d.name}: curve too short", err=True)
@@ -880,6 +891,12 @@ def evaluate(
             typer.echo(f"skipping {d.name}: shorter than another {name} artifact", err=True)
             continue
         curves[name] = frame
+    if len(dirs_by_mode) > 1:
+        listing = "; ".join(
+            f"{mode}: {', '.join(sorted(names))}" for mode, names in sorted(dirs_by_mode.items())
+        )
+        fail(f"walk-forward artifacts mix execution modes ({listing}); evaluate one mode at a time")
+    execution = next(iter(dirs_by_mode), "formula")
     if not curves:
         fail(f"no walk-forward artifacts found under {results_dir}/wf-*")
     if len(curves) < 2:
@@ -896,14 +913,32 @@ def evaluate(
     # benchmarks tagged `benchmark_for`, which cover somebody else's window
     # (one on disk here spans 61 days) and which the old fallback happily
     # returned.
+    # The bar must be priced under the strategies' execution mode too: auto
+    # picks the newest in-mode candidate; an explicit directory is looked up in
+    # the registry by artifact_path (no record = formula, the pre-Plan-B rule)
+    # and refused on a mismatch.
+    records = load_runs(root)
     if benchmark is None:
-        candidates = _benchmark_candidates(load_runs(root))
+        candidates = _benchmark_candidates(records, execution)
         if not candidates:
             fail(
-                "no buy-and-hold benchmark backtest in the run registry; run "
-                "`pkmn backtest` to make one, or pass --benchmark <dir>"
+                f"no {execution}-execution buy-and-hold benchmark backtest in the run "
+                "registry; run `pkmn backtest` to make one, or pass --benchmark <dir>"
             )
         benchmark = Path(candidates[0].artifact_path)
+    else:
+        target = benchmark.resolve()
+        matches = sorted(
+            (r for r in records if Path(r.artifact_path).resolve() == target),
+            key=lambda r: r.recorded_at,
+            reverse=True,
+        )
+        bench_mode = str(matches[0].config.get("execution", "formula")) if matches else "formula"
+        if bench_mode != execution:
+            fail(
+                f"benchmark {benchmark} is a {bench_mode}-execution run but the walk-forward "
+                f"artifacts are {execution}; book and formula curves are not comparable"
+            )
     bench_frame = pl.read_parquet(benchmark / "equity.parquet")
 
     # -- the benchmark must SPAN the strategies' window --
@@ -969,6 +1004,7 @@ def evaluate(
         "strategies": per_strategy,
         "reality_check_p": p_value,
         "benchmark": str(benchmark),
+        "execution": execution,
         "n_days": len(dates),
         "start": str(dates[0]),
         "end": str(dates[-1]),
@@ -1020,6 +1056,7 @@ def evaluate(
             "command": "evaluate",
             "strategies": sorted(strat_r),
             "benchmark": str(benchmark),
+            "execution": execution,
             "n_boot": n_boot,
             "mean_block": block,
             "seed": seed,
@@ -1036,8 +1073,9 @@ def evaluate(
     typer.echo(f"results written to {out_dir}")
 
 
-def _benchmark_candidates(records: list[RunRecord]) -> list[RunRecord]:
-    """Buy-and-hold benchmark runs from the REGISTRY, newest first.
+def _benchmark_candidates(records: list[RunRecord], execution: str) -> list[RunRecord]:
+    """Buy-and-hold benchmark runs in ``execution`` mode from the REGISTRY,
+    newest first.
 
     Never a directory glob, and there is deliberately no glob fallback.
     `pkmn evaluate` used to auto-discover its benchmark by globbing
@@ -1056,6 +1094,10 @@ def _benchmark_candidates(records: list[RunRecord]) -> list[RunRecord]:
     `benchmark_runs()` already apply: a `backtest` run of a buy-and-hold
     strategy, minus the paired sidecar benchmarks tagged `benchmark_for`
     (those cover somebody else's, often very short, window).
+
+    Plan B adds the mode filter: a record's ``config["execution"]`` (missing
+    = formula, as every record before Plan B was) must equal ``execution``,
+    so a book run is never scored against a formula bar or vice versa.
     """
     return sorted(
         (
@@ -1064,6 +1106,7 @@ def _benchmark_candidates(records: list[RunRecord]) -> list[RunRecord]:
             if r.command == "backtest"
             and r.strategy.startswith("buy-and-hold")
             and not r.config.get("benchmark_for")
+            and r.config.get("execution", "formula") == execution
             and (Path(r.artifact_path) / "equity.parquet").is_file()
         ),
         key=lambda r: r.recorded_at,
@@ -1170,6 +1213,8 @@ def horizon(
     data/results/horizon-<run-id>/{report.md,horizon.json} and records a
     registry entry like every other run.
     """
+    from collections.abc import Callable
+
     from pkmn_quant.data.warehouse import Warehouse
     from pkmn_quant.engine.costs import CostModel
     from pkmn_quant.engine.data import MarketData
@@ -1202,6 +1247,11 @@ def horizon(
     first_day: dt.date = equity["date"][0]
     last_day: dt.date = equity["date"][-1]
 
+    # The run's execution mode (missing = formula, every pre-Plan-B record).
+    # The benchmark must share it: book and formula bars are priced by
+    # different execution models.
+    execution = str(run.config.get("execution", "formula"))
+
     # -- benchmark: registry only, see _benchmark_candidates --
     if benchmark is not None:
         bench = by_id.get(benchmark)
@@ -1209,12 +1259,18 @@ def horizon(
             fail(f"no run matching benchmark {benchmark!r}; see `pkmn runs list`")
         if not (Path(bench.artifact_path) / "equity.parquet").is_file():
             fail(f"benchmark run {benchmark} has no equity.parquet under {bench.artifact_path}")
+        bench_mode = str(bench.config.get("execution", "formula"))
+        if bench_mode != execution:
+            fail(
+                f"benchmark run {benchmark} is a {bench_mode}-execution run but run "
+                f"{run_id} is {execution}; book and formula runs are not comparable"
+            )
     else:
-        candidates = _benchmark_candidates(records)
+        candidates = _benchmark_candidates(records, execution)
         if not candidates:
             fail(
-                "no buy-and-hold benchmark backtest in the run registry; run "
-                "`pkmn backtest` to make one, or pass --benchmark <run-id> "
+                f"no {execution}-execution buy-and-hold benchmark backtest in the run "
+                "registry; run `pkmn backtest` to make one, or pass --benchmark <run-id> "
                 "(a run id, never a directory)"
             )
         bench = candidates[0]
@@ -1268,9 +1324,19 @@ def horizon(
     # through it — closed trips already paid fees, shipping and impact, so
     # scoring open ones gross put them ~13 points ahead for free.
     run_costs = CostModel(impact_enabled=bool(run.config.get("impact", True)))
+    # A book run's open lots exit through the modelled bid book (synthetic,
+    # built from the day's tcgcsv quote), like its closed trips did; units
+    # past the day's depth go on the ramp's extension (hypothetical exit only).
+    exit_impact: Callable[[float, float | None, int], float] | None = None
+    if execution == "book":
+        from pkmn_quant.engine.native import book_sell_impact
+
+        exit_impact = lambda mark, low, qty: book_sell_impact(run_costs, mark, low, qty)  # noqa: E731
 
     try:
-        report = horizon_report(fills, index, final_marks, last_day, run_costs, final_lows)
+        report = horizon_report(
+            fills, index, final_marks, last_day, run_costs, final_lows, exit_impact=exit_impact
+        )
     except ValueError as exc:
         fail(str(exc))
 
@@ -1302,6 +1368,7 @@ def horizon(
         "backtest_run_id": run_id,
         "strategy": run.strategy,
         "git_sha": run.git_sha,
+        "execution": execution,
         **bench_info,
         "start": first_day.isoformat(),
         "last_day": last_day.isoformat(),
@@ -1346,6 +1413,7 @@ def horizon(
         config={
             "command": "horizon",
             "backtest_run_id": run_id,
+            "execution": execution,
             **bench_info,
             "start": first_day.isoformat(),
             "end": last_day.isoformat(),

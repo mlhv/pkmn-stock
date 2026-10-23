@@ -229,3 +229,54 @@ TEST_CASE("book: impact off ignores execution mode") {
         CHECK(a.fills[i].impact == b.fills[i].impact);
     }
 }
+
+TEST_CASE("book: hypothetical sale beyond depth extends the ramp") {
+    // market 60 is in the < $200 tier: depth 3. A 5-unit hypothetical exit
+    // matches the 3 resting bids, then prices units 3 and 4 on the extended
+    // ramp (extrapolation, used only by hypothetical exits).
+    CostModel cm = book_cm();
+    DayQuote q{60.0, NaN, 50.0};
+    LadderShape s = bid_shape(q, cm);
+    REQUIRE(s.depth == 3);
+    std::int64_t ticks = 0;
+    for (std::int64_t k = 0; k < 5; ++k)
+        ticks += unit_ticks(s, book::Side::Buy, k, LadderPricing::Cent);
+    double expected = 5 * 60.0 - static_cast<double>(ticks) / 100.0;
+    CHECK(hypothetical_sell_impact(q, cm, LadderPricing::Cent, 5) == expected);
+    // At the exact ladder the extension is the formula's closed form.
+    CHECK(hypothetical_sell_impact(q, cm, LadderPricing::ExactTest, 5) ==
+          Approx(cm.sell_impact(60.0, 50.0, 5, 0)).margin(1e-6));
+    // Within depth, too.
+    CHECK(hypothetical_sell_impact(q, cm, LadderPricing::ExactTest, 2) ==
+          Approx(cm.sell_impact(60.0, 50.0, 2, 0)).margin(1e-6));
+}
+
+TEST_CASE("book: hypothetical sale degenerate inputs are zero") {
+    CostModel cm = book_cm();
+    CHECK(hypothetical_sell_impact({60.0, NaN, NaN}, cm, LadderPricing::Cent, 5) == 0.0);
+    CHECK(hypothetical_sell_impact({60.0, NaN, 50.0}, cm, LadderPricing::Cent, 0) == 0.0);
+    // low >= market: flat bid book at market, no walk.
+    CHECK(hypothetical_sell_impact({60.0, NaN, 70.0}, cm, LadderPricing::Cent, 5) == 0.0);
+}
+
+TEST_CASE("book: penny bid ramp extension clamps at zero ticks") {
+    // Carry-over from Task 1: the >= 0 clamp in unit_ticks. market 0.02,
+    // low 0.01, depth 20 (< $5 tier): unit 200 sits at 0.02 - 0.01*200.5/20
+    // = -0.08025 dollars before the clamp.
+    CostModel cm = book_cm();
+    DayQuote q{0.02, NaN, 0.01};
+    LadderShape s = bid_shape(q, cm);
+    REQUIRE(s.depth == 20);
+    CHECK(unit_ticks(s, book::Side::Buy, 200, LadderPricing::Cent) == 0);
+    CHECK(unit_ticks(s, book::Side::Buy, 200, LadderPricing::ExactTest) == 0);
+    for (std::int64_t qty : {1, 20, 21, 60, 201, 500}) {
+        double imp = hypothetical_sell_impact(q, cm, LadderPricing::Cent, qty);
+        CHECK(imp >= 0.0);
+        CHECK(imp <= static_cast<double>(qty) * 0.02);
+    }
+    // Past the zero crossing every further unit fetches nothing, so the
+    // impact on those units is the whole of their market value.
+    double a = hypothetical_sell_impact(q, cm, LadderPricing::Cent, 300);
+    double b = hypothetical_sell_impact(q, cm, LadderPricing::Cent, 400);
+    CHECK(b - a == Approx(100 * 0.02).margin(1e-9));
+}

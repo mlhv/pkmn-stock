@@ -48,4 +48,17 @@ std::vector<Fill> execute_book(const std::vector<Order>& orders, const MarketVie
                                Portfolio& portfolio, Day day, const CostModel& cm,
                                DayBooks& books);
 
+// Sell-side impact of a HYPOTHETICAL sale of `qty` units on quote `q` (used to
+// price a still-open lot's modelled exit in `pkmn horizon`; never a fill).
+// Units 0..min(qty, depth)-1 match a freshly built bid book of modelled
+// resting orders (synthetic, built from the day's tcgcsv quote); units
+// depth..qty-1 are priced by unit_ticks on the same bid ramp extended past its
+// last level -- extrapolation, the book's analogue of the formula's exact
+// limit. Returns qty*market - notional/tpd, clamped >= 0 (as execute_book's
+// sells). Every unit price is >= 0 ticks, so the result never exceeds
+// qty*market. 0 for qty <= 0 or a non-positive / NaN market. Requires
+// cm.impact_enabled (asserted by the ladder builder).
+double hypothetical_sell_impact(const DayQuote& q, const CostModel& cm, LadderPricing p,
+                                std::int64_t qty);
+
 }  // namespace pkmn

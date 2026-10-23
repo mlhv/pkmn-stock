@@ -5,6 +5,7 @@ day's tcgcsv quote), priced in whole cents. Pins the cent golden on a
 controlled 1-asset warehouse and checks the formula default is untouched.
 """
 
+import math
 from datetime import date
 from pathlib import Path
 
@@ -91,3 +92,30 @@ def test_binding_rejects_unknown_execution(tmp_path: Path, monkeypatch: pytest.M
     monkeypatch.setattr(native, "EXECUTION_MODES", frozenset({"fast"}))
     with pytest.raises(ValueError, match="unknown execution 'fast'"):
         _run(tmp_path, execution="fast")
+
+
+def _llround(x: float) -> int:
+    """std::llround for non-negative x: nearest, halves away from zero."""
+    return math.floor(x + 0.5)
+
+
+def test_book_sell_impact_beyond_depth_extends_ramp() -> None:
+    """A hypothetical 5-unit exit on a $60 product with bid depth 3 (tier
+    < $200): units 0..2 match the modelled bids (synthetic, built from the
+    day's tcgcsv quote), units 3..4 are priced on the same ramp extended past
+    the last level. Unit k bids 60 - 10*(k+0.5)/3, rounded to whole cents."""
+    from pkmn_quant.engine.native import book_sell_impact
+
+    cents = sum(_llround((60.0 - 10.0 * (k + 0.5) / 3.0) * 100.0) for k in range(5))
+    assert cents == 25833  # 5833 + 5500 + 5167 + 4833 + 4500
+    hand = 5 * 60.0 - cents / 100.0
+    costs = CostModel(impact_enabled=True)
+    got = book_sell_impact(costs, 60.0, 50.0, 5)
+    assert got == pytest.approx(hand, abs=1e-9)
+    assert got == pytest.approx(costs.sell_impact(60.0, 50.0, 5), abs=0.03)
+
+
+def test_book_sell_impact_no_low_is_zero() -> None:
+    from pkmn_quant.engine.native import book_sell_impact
+
+    assert book_sell_impact(CostModel(impact_enabled=True), 60.0, None, 5) == 0.0
