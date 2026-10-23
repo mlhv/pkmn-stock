@@ -1,6 +1,6 @@
 <?xml version="1.0" standalone="no"?>
 <!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
-<svg version="1.1" width="1200" height="278" onload="init(evt)" viewBox="0 0 1200 278" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+<svg version="1.1" width="1200" height="246" onload="init(evt)" viewBox="0 0 1200 246" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
 <!-- Flame graph stack visualization. See https://github.com/brendangregg/FlameGraph for latest version, and http://www.brendangregg.com/flamegraphs.html for examples. -->
 <!-- NOTES:  -->
 <defs>
@@ -422,405 +422,245 @@
 	}
 ]]>
 </script>
-<rect x="0.0" y="0" width="1200.0" height="278.0" fill="url(#background)"  />
+<rect x="0.0" y="0" width="1200.0" height="246.0" fill="url(#background)"  />
 <text id="title" x="600.00" y="24" >iex_bench ram throughput pass (decode + apply), perf -F 999 -g</text>
-<text id="details" x="10.00" y="261" > </text>
+<text id="details" x="10.00" y="229" > </text>
 <text id="unzoom" x="10.00" y="24" class="hide">Reset Zoom</text>
 <text id="search" x="1090.00" y="24" >Search</text>
 <text id="ignorecase" x="1174.00" y="24" >ic</text>
-<text id="matched" x="1090.00" y="261" > </text>
+<text id="matched" x="1090.00" y="229" > </text>
 <g id="frames">
 <g >
-<title>pkmn::md::BookSet::apply (884,884,884 samples, 8.65%)</title><rect x="755.4" y="117" width="102.1" height="15.0" fill="rgb(243,176,42)" rx="2" ry="2" />
-<text  x="758.44" y="127.5" >pkmn::md::Bo..</text>
+<title>std::__detail::_Prime_rehash_policy::_M_need_rehash (1,001,001 samples, 0.01%)</title><rect x="743.7" y="53" width="0.2" height="15.0" fill="rgb(228,109,26)" rx="2" ry="2" />
+<text  x="746.71" y="63.5" ></text>
 </g>
 <g >
-<title>iex_bench (10,228,228,218 samples, 100.00%)</title><rect x="10.0" y="213" width="1180.0" height="15.0" fill="rgb(236,144,34)" rx="2" ry="2" />
-<text  x="13.00" y="223.5" >iex_bench</text>
+<title>pkmn::book::OrderBook::level_pos (26,026,026 samples, 0.37%)</title><rect x="295.9" y="53" width="4.3" height="15.0" fill="rgb(234,137,32)" rx="2" ry="2" />
+<text  x="298.92" y="63.5" ></text>
 </g>
 <g >
-<title>operator delete (14,014,014 samples, 0.14%)</title><rect x="392.5" y="85" width="1.6" height="15.0" fill="rgb(247,196,46)" rx="2" ry="2" />
-<text  x="395.48" y="95.5" ></text>
+<title>pkmn::book::OrderBook::add (1,249,249,248 samples, 17.54%)</title><rect x="76.3" y="85" width="207.0" height="15.0" fill="rgb(225,95,22)" rx="2" ry="2" />
+<text  x="79.34" y="95.5" >pkmn::book::OrderBook::add</text>
 </g>
 <g >
-<title>_int_free (91,091,091 samples, 0.89%)</title><rect x="741.1" y="69" width="10.5" height="15.0" fill="rgb(247,196,46)" rx="2" ry="2" />
-<text  x="744.12" y="79.5" ></text>
+<title>operator new (3,003,003 samples, 0.04%)</title><rect x="164.1" y="53" width="0.5" height="15.0" fill="rgb(216,51,12)" rx="2" ry="2" />
+<text  x="167.07" y="63.5" ></text>
 </g>
 <g >
-<title>std::_Rb_tree_iterator&lt;std::pair&lt;long const, pkmn::book::OrderBook::LevelData&gt; &gt; std::_Rb_tree&lt;long, std::pair&lt;long const, pkmn::book::OrderBook::LevelData&gt;, std::_Select1st&lt;std::pair&lt;long const, pkmn::book::OrderBook::LevelData&gt; &gt;, std::less&lt;long&gt;, std::allocator&lt;std::pair&lt;long const, pkmn::book::OrderBook::LevelData&gt; &gt; &gt;::_M_emplace_hint_unique&lt;std::piecewise_construct_t const&amp;, std::tuple&lt;long const&amp;&gt;, std::tuple&lt;&gt; &gt; (6,006,006 samples, 0.06%)</title><rect x="312.0" y="85" width="0.7" height="15.0" fill="rgb(237,150,35)" rx="2" ry="2" />
-<text  x="314.99" y="95.5" ></text>
+<title>pkmn::book::OrderBook::alloc_node (2,002,002 samples, 0.03%)</title><rect x="287.6" y="69" width="0.4" height="15.0" fill="rgb(226,97,23)" rx="2" ry="2" />
+<text  x="290.63" y="79.5" ></text>
 </g>
 <g >
-<title>std::_Rb_tree_rebalance_for_erase (113,113,113 samples, 1.11%)</title><rect x="679.6" y="85" width="13.0" height="15.0" fill="rgb(205,2,0)" rx="2" ry="2" />
-<text  x="682.57" y="95.5" ></text>
+<title>all (7,122,122,115 samples, 100%)</title><rect x="10.0" y="197" width="1180.0" height="15.0" fill="rgb(213,39,9)" rx="2" ry="2" />
+<text  x="13.00" y="207.5" ></text>
 </g>
 <g >
-<title>std::_Hashtable&lt;unsigned long, std::pair&lt;unsigned long const, pkmn::book::OrderBook::Loc&gt;, std::allocator&lt;std::pair&lt;unsigned long const, pkmn::book::OrderBook::Loc&gt; &gt;, std::__detail::_Select1st, std::equal_to&lt;unsigned long&gt;, std::hash&lt;unsigned long&gt;, std::__detail::_Mod_range_hashing, std::__detail::_Default_ranged_hash, std::__detail::_Prime_rehash_policy, std::__detail::_Hashtable_traits&lt;false, false, true&gt; &gt;::_M_rehash (7,007,007 samples, 0.07%)</title><rect x="288.2" y="101" width="0.8" height="15.0" fill="rgb(213,38,9)" rx="2" ry="2" />
-<text  x="291.20" y="111.5" ></text>
+<title>pkmn::book::OrderBook::free_node (2,002,002 samples, 0.03%)</title><rect x="290.3" y="69" width="0.3" height="15.0" fill="rgb(254,227,54)" rx="2" ry="2" />
+<text  x="293.28" y="79.5" ></text>
 </g>
 <g >
-<title>_int_free (26,026,026 samples, 0.25%)</title><rect x="389.0" y="69" width="3.0" height="15.0" fill="rgb(247,196,46)" rx="2" ry="2" />
-<text  x="392.01" y="79.5" ></text>
+<title>pkmn::book::OrderBook::link_back (834,834,834 samples, 11.72%)</title><rect x="145.0" y="69" width="138.3" height="15.0" fill="rgb(212,34,8)" rx="2" ry="2" />
+<text  x="148.00" y="79.5" >pkmn::book::Order..</text>
 </g>
 <g >
-<title>malloc_consolidate (5,005,005 samples, 0.05%)</title><rect x="288.4" y="37" width="0.6" height="15.0" fill="rgb(239,159,38)" rx="2" ry="2" />
-<text  x="291.43" y="47.5" ></text>
+<title>__memmove_generic (1,001,001 samples, 0.01%)</title><rect x="303.7" y="53" width="0.2" height="15.0" fill="rgb(240,164,39)" rx="2" ry="2" />
+<text  x="306.71" y="63.5" ></text>
 </g>
 <g >
-<title>malloc (47,047,047 samples, 0.46%)</title><rect x="294.0" y="69" width="5.4" height="15.0" fill="rgb(230,119,28)" rx="2" ry="2" />
-<text  x="296.97" y="79.5" ></text>
+<title>operator new (2,002,002 samples, 0.03%)</title><rect x="743.4" y="53" width="0.3" height="15.0" fill="rgb(216,51,12)" rx="2" ry="2" />
+<text  x="746.37" y="63.5" ></text>
 </g>
 <g >
-<title>std::__detail::_List_node_base::_M_hook (7,007,007 samples, 0.07%)</title><rect x="364.8" y="85" width="0.8" height="15.0" fill="rgb(244,179,42)" rx="2" ry="2" />
-<text  x="367.76" y="95.5" ></text>
+<title>_int_free_create_chunk (1,001,001 samples, 0.01%)</title><rect x="1186.5" y="37" width="0.2" height="15.0" fill="rgb(244,182,43)" rx="2" ry="2" />
+<text  x="1189.52" y="47.5" ></text>
 </g>
 <g >
-<title>cfree@GLIBC_2.17 (40,040,040 samples, 0.39%)</title><rect x="387.4" y="85" width="4.6" height="15.0" fill="rgb(224,88,21)" rx="2" ry="2" />
-<text  x="390.40" y="95.5" ></text>
+<title>pkmn::book::OrderBook::grow_table (2,002,002 samples, 0.03%)</title><rect x="144.7" y="69" width="0.3" height="15.0" fill="rgb(234,133,31)" rx="2" ry="2" />
+<text  x="147.67" y="79.5" ></text>
 </g>
 <g >
-<title>std::__detail::_Map_base&lt;unsigned long, std::pair&lt;unsigned long const, pkmn::book::OrderBook&gt;, std::allocator&lt;std::pair&lt;unsigned long const, pkmn::book::OrderBook&gt; &gt;, std::__detail::_Select1st, std::equal_to&lt;unsigned long&gt;, std::hash&lt;unsigned long&gt;, std::__detail::_Mod_range_hashing, std::__detail::_Default_ranged_hash, std::__detail::_Prime_rehash_policy, std::__detail::_Hashtable_traits&lt;false, false, true&gt;, true&gt;::operator[] (23,023,023 samples, 0.23%)</title><rect x="1187.3" y="117" width="2.7" height="15.0" fill="rgb(230,117,28)" rx="2" ry="2" />
-<text  x="1190.34" y="127.5" ></text>
+<title>_start (7,122,122,115 samples, 100.00%)</title><rect x="10.0" y="165" width="1180.0" height="15.0" fill="rgb(245,185,44)" rx="2" ry="2" />
+<text  x="13.00" y="175.5" >_start</text>
 </g>
 <g >
-<title>pkmn::book::OrderBook::remove (3,061,061,058 samples, 29.93%)</title><rect x="402.3" y="117" width="353.1" height="15.0" fill="rgb(219,67,16)" rx="2" ry="2" />
-<text  x="405.29" y="127.5" >pkmn::book::OrderBook::remove</text>
+<title>pkmn::book::OrderBook::unlink_free (1,153,153,152 samples, 16.19%)</title><rect x="393.8" y="69" width="191.0" height="15.0" fill="rgb(236,144,34)" rx="2" ry="2" />
+<text  x="396.77" y="79.5" >pkmn::book::OrderBook::u..</text>
 </g>
 <g >
-<title>cfree@GLIBC_2.17 (3,003,003 samples, 0.03%)</title><rect x="344.7" y="85" width="0.3" height="15.0" fill="rgb(224,88,21)" rx="2" ry="2" />
-<text  x="347.67" y="95.5" ></text>
+<title>pkmn::book::OrderBook::level_pos (17,017,017 samples, 0.24%)</title><rect x="290.6" y="69" width="2.8" height="15.0" fill="rgb(234,137,32)" rx="2" ry="2" />
+<text  x="293.61" y="79.5" ></text>
 </g>
 <g >
-<title>free@plt (9,009,009 samples, 0.09%)</title><rect x="751.6" y="85" width="1.1" height="15.0" fill="rgb(229,112,26)" rx="2" ry="2" />
-<text  x="754.63" y="95.5" ></text>
+<title>bench::PassResult bench::replay&lt;pkmn::md::CallStep&gt; (7,122,122,115 samples, 100.00%)</title><rect x="10.0" y="101" width="1180.0" height="15.0" fill="rgb(235,139,33)" rx="2" ry="2" />
+<text  x="13.00" y="111.5" >bench::PassResult bench::replay&lt;pkmn::md::CallStep&gt;</text>
 </g>
 <g >
-<title>std::_Hashtable&lt;unsigned long, std::pair&lt;unsigned long const, pkmn::book::OrderBook::Loc&gt;, std::allocator&lt;std::pair&lt;unsigned long const, pkmn::book::OrderBook::Loc&gt; &gt;, std::__detail::_Select1st, std::equal_to&lt;unsigned long&gt;, std::hash&lt;unsigned long&gt;, std::__detail::_Mod_range_hashing, std::__detail::_Default_ranged_hash, std::__detail::_Prime_rehash_policy, std::__detail::_Hashtable_traits&lt;false, false, true&gt; &gt;::_M_erase (4,004,004 samples, 0.04%)</title><rect x="345.2" y="101" width="0.5" height="15.0" fill="rgb(254,228,54)" rx="2" ry="2" />
-<text  x="348.25" y="111.5" ></text>
+<title>__memcpy_generic (1,001,001 samples, 0.01%)</title><rect x="453.8" y="53" width="0.2" height="15.0" fill="rgb(231,124,29)" rx="2" ry="2" />
+<text  x="456.81" y="63.5" ></text>
 </g>
 <g >
-<title>_int_malloc (2,002,002 samples, 0.02%)</title><rect x="857.3" y="53" width="0.2" height="15.0" fill="rgb(215,47,11)" rx="2" ry="2" />
-<text  x="860.29" y="63.5" ></text>
+<title>std::__detail::_Map_base&lt;unsigned long, std::pair&lt;unsigned long const, pkmn::book::OrderBook&gt;, std::allocator&lt;std::pair&lt;unsigned long const, pkmn::book::OrderBook&gt; &gt;, std::__detail::_Select1st, std::equal_to&lt;unsigned long&gt;, std::hash&lt;unsigned long&gt;, std::__detail::_Mod_range_hashing, std::__detail::_Default_ranged_hash, std::__detail::_Prime_rehash_policy, std::__detail::_Hashtable_traits&lt;false, false, true&gt;, true&gt;::operator[] (20,020,020 samples, 0.28%)</title><rect x="1186.7" y="85" width="3.3" height="15.0" fill="rgb(230,117,28)" rx="2" ry="2" />
+<text  x="1189.68" y="95.5" ></text>
 </g>
 <g >
-<title>pkmn::md::parse_tp_header (1,097,097,096 samples, 10.73%)</title><rect x="918.2" y="101" width="126.5" height="15.0" fill="rgb(217,57,13)" rx="2" ry="2" />
-<text  x="921.15" y="111.5" >pkmn::md::parse..</text>
+<title>std::_Hashtable&lt;unsigned long, std::pair&lt;unsigned long const, pkmn::book::OrderBook&gt;, std::allocator&lt;std::pair&lt;unsigned long const, pkmn::book::OrderBook&gt; &gt;, std::__detail::_Select1st, std::equal_to&lt;unsigned long&gt;, std::hash&lt;unsigned long&gt;, std::__detail::_Mod_range_hashing, std::__detail::_Default_ranged_hash, std::__detail::_Prime_rehash_policy, std::__detail::_Hashtable_traits&lt;false, false, true&gt; &gt;::~_Hashtable (1,001,001 samples, 0.01%)</title><rect x="1186.5" y="85" width="0.2" height="15.0" fill="rgb(240,164,39)" rx="2" ry="2" />
+<text  x="1189.52" y="95.5" ></text>
 </g>
 <g >
-<title>bench::PassResult bench::replay&lt;pkmn::md::CallStep&gt; (10,228,228,218 samples, 100.00%)</title><rect x="10.0" y="133" width="1180.0" height="15.0" fill="rgb(235,139,33)" rx="2" ry="2" />
-<text  x="13.00" y="143.5" >bench::PassResult bench::replay&lt;pkmn::md::CallStep&gt;</text>
+<title>pkmn::md::BookSet::apply (959,959,959 samples, 13.48%)</title><rect x="584.8" y="85" width="159.1" height="15.0" fill="rgb(243,176,42)" rx="2" ry="2" />
+<text  x="587.83" y="95.5" >pkmn::md::BookSet::a..</text>
 </g>
 <g >
-<title>operator new (6,006,006 samples, 0.06%)</title><rect x="312.0" y="69" width="0.7" height="15.0" fill="rgb(216,51,12)" rx="2" ry="2" />
-<text  x="314.99" y="79.5" ></text>
+<title>pkmn::book::OrderBook::level_pos (3,003,003 samples, 0.04%)</title><rect x="284.6" y="69" width="0.5" height="15.0" fill="rgb(234,137,32)" rx="2" ry="2" />
+<text  x="287.64" y="79.5" ></text>
 </g>
 <g >
-<title>malloc (1,001,001 samples, 0.01%)</title><rect x="362.1" y="53" width="0.1" height="15.0" fill="rgb(230,119,28)" rx="2" ry="2" />
-<text  x="365.11" y="63.5" ></text>
+<title>__libc_start_call_main (7,122,122,115 samples, 100.00%)</title><rect x="10.0" y="133" width="1180.0" height="15.0" fill="rgb(210,26,6)" rx="2" ry="2" />
+<text  x="13.00" y="143.5" >__libc_start_call_main</text>
 </g>
 <g >
-<title>pkmn::book::OrderBook::add (146,146,146 samples, 1.43%)</title><rect x="350.3" y="101" width="16.9" height="15.0" fill="rgb(225,95,22)" rx="2" ry="2" />
-<text  x="353.33" y="111.5" ></text>
+<title>__memmove_generic (2,002,002 samples, 0.03%)</title><rect x="163.7" y="53" width="0.4" height="15.0" fill="rgb(240,164,39)" rx="2" ry="2" />
+<text  x="166.74" y="63.5" ></text>
 </g>
 <g >
-<title>_int_free (2,002,002 samples, 0.02%)</title><rect x="344.8" y="69" width="0.2" height="15.0" fill="rgb(247,196,46)" rx="2" ry="2" />
-<text  x="347.78" y="79.5" ></text>
+<title>pkmn::book::OrderBook::level_pos (716,716,716 samples, 10.06%)</title><rect x="164.6" y="53" width="118.7" height="15.0" fill="rgb(234,137,32)" rx="2" ry="2" />
+<text  x="167.57" y="63.5" >pkmn::book::Or..</text>
 </g>
 <g >
-<title>free@plt (4,004,004 samples, 0.04%)</title><rect x="392.0" y="85" width="0.5" height="15.0" fill="rgb(229,112,26)" rx="2" ry="2" />
-<text  x="395.02" y="95.5" ></text>
+<title>pkmn::book::OrderBook::modify (173,173,173 samples, 2.43%)</title><rect x="285.5" y="85" width="28.7" height="15.0" fill="rgb(208,15,3)" rx="2" ry="2" />
+<text  x="288.47" y="95.5" >pk..</text>
 </g>
 <g >
-<title>_int_malloc (6,006,006 samples, 0.06%)</title><rect x="288.3" y="53" width="0.7" height="15.0" fill="rgb(215,47,11)" rx="2" ry="2" />
-<text  x="291.31" y="63.5" ></text>
+<title>pkmn::book::OrderBook::erase_order (2,002,002 samples, 0.03%)</title><rect x="283.8" y="69" width="0.3" height="15.0" fill="rgb(231,122,29)" rx="2" ry="2" />
+<text  x="286.81" y="79.5" ></text>
 </g>
 <g >
-<title>_int_malloc (40,040,040 samples, 0.39%)</title><rect x="275.1" y="69" width="4.7" height="15.0" fill="rgb(215,47,11)" rx="2" ry="2" />
-<text  x="278.15" y="79.5" ></text>
+<title>pkmn::book::OrderBook::level_pos (1,001,001 samples, 0.01%)</title><rect x="285.3" y="53" width="0.2" height="15.0" fill="rgb(234,137,32)" rx="2" ry="2" />
+<text  x="288.31" y="63.5" ></text>
 </g>
 <g >
-<title>operator new (4,004,004 samples, 0.04%)</title><rect x="361.0" y="69" width="0.4" height="15.0" fill="rgb(216,51,12)" rx="2" ry="2" />
-<text  x="363.95" y="79.5" ></text>
+<title>std::__detail::_Map_base&lt;unsigned long, std::pair&lt;unsigned long const, pkmn::book::OrderBook&gt;, std::allocator&lt;std::pair&lt;unsigned long const, pkmn::book::OrderBook&gt; &gt;, std::__detail::_Select1st, std::equal_to&lt;unsigned long&gt;, std::hash&lt;unsigned long&gt;, std::__detail::_Mod_range_hashing, std::__detail::_Default_ranged_hash, std::__detail::_Prime_rehash_policy, std::__detail::_Hashtable_traits&lt;false, false, true&gt;, true&gt;::operator[] (874,874,874 samples, 12.28%)</title><rect x="598.9" y="69" width="145.0" height="15.0" fill="rgb(230,117,28)" rx="2" ry="2" />
+<text  x="601.92" y="79.5" >std::__detail::_Ma..</text>
 </g>
 <g >
-<title>operator new (72,072,072 samples, 0.70%)</title><rect x="292.0" y="85" width="8.3" height="15.0" fill="rgb(216,51,12)" rx="2" ry="2" />
-<text  x="295.01" y="95.5" ></text>
+<title>pkmn::book::OrderBook::find_entry (178,178,178 samples, 2.50%)</title><rect x="361.1" y="69" width="29.5" height="15.0" fill="rgb(206,6,1)" rx="2" ry="2" />
+<text  x="364.10" y="79.5" >pk..</text>
 </g>
 <g >
-<title>malloc_consolidate (5,005,005 samples, 0.05%)</title><rect x="1186.8" y="69" width="0.5" height="15.0" fill="rgb(239,159,38)" rx="2" ry="2" />
-<text  x="1189.77" y="79.5" ></text>
+<title>pkmn::md::SegmentFilter::accept (1,624,624,623 samples, 22.81%)</title><rect x="743.9" y="85" width="269.1" height="15.0" fill="rgb(218,60,14)" rx="2" ry="2" />
+<text  x="746.87" y="95.5" >pkmn::md::SegmentFilter::accept</text>
 </g>
 <g >
-<title>std::_Rb_tree_rebalance_for_erase (1,001,001 samples, 0.01%)</title><rect x="345.1" y="85" width="0.1" height="15.0" fill="rgb(205,2,0)" rx="2" ry="2" />
-<text  x="348.13" y="95.5" ></text>
+<title>main (7,122,122,115 samples, 100.00%)</title><rect x="10.0" y="117" width="1180.0" height="15.0" fill="rgb(243,179,42)" rx="2" ry="2" />
+<text  x="13.00" y="127.5" >main</text>
 </g>
 <g >
-<title>operator new (2,002,002 samples, 0.02%)</title><rect x="857.3" y="85" width="0.2" height="15.0" fill="rgb(216,51,12)" rx="2" ry="2" />
-<text  x="860.29" y="95.5" ></text>
+<title>pkmn::book::OrderBook::free_node (19,019,019 samples, 0.27%)</title><rect x="390.6" y="69" width="3.2" height="15.0" fill="rgb(254,227,54)" rx="2" ry="2" />
+<text  x="393.62" y="79.5" ></text>
 </g>
 <g >
-<title>pkmn::book::OrderBook::add (2,412,412,410 samples, 23.59%)</title><rect x="64.2" y="117" width="278.3" height="15.0" fill="rgb(225,95,22)" rx="2" ry="2" />
-<text  x="67.16" y="127.5" >pkmn::book::OrderBook::add</text>
+<title>iex_bench (7,122,122,115 samples, 100.00%)</title><rect x="10.0" y="181" width="1180.0" height="15.0" fill="rgb(236,144,34)" rx="2" ry="2" />
+<text  x="13.00" y="191.5" >iex_bench</text>
 </g>
 <g >
-<title>pkmn::md::decode_deep_plus (1,174,174,173 samples, 11.48%)</title><rect x="1044.7" y="117" width="135.5" height="15.0" fill="rgb(210,23,5)" rx="2" ry="2" />
-<text  x="1047.72" y="127.5" >pkmn::md::decode_..</text>
+<title>__memmove_generic (1,001,001 samples, 0.01%)</title><rect x="144.0" y="53" width="0.2" height="15.0" fill="rgb(240,164,39)" rx="2" ry="2" />
+<text  x="147.00" y="63.5" ></text>
 </g>
 <g >
-<title>all (10,228,228,218 samples, 100%)</title><rect x="10.0" y="229" width="1180.0" height="15.0" fill="rgb(213,39,9)" rx="2" ry="2" />
-<text  x="13.00" y="239.5" ></text>
+<title>_int_free_merge_chunk (1,001,001 samples, 0.01%)</title><rect x="1186.5" y="53" width="0.2" height="15.0" fill="rgb(240,163,39)" rx="2" ry="2" />
+<text  x="1189.52" y="63.5" ></text>
 </g>
 <g >
-<title>pkmn::book::OrderBook::modify (490,490,490 samples, 4.80%)</title><rect x="345.7" y="117" width="56.6" height="15.0" fill="rgb(208,15,3)" rx="2" ry="2" />
-<text  x="348.71" y="127.5" >pkmn:..</text>
+<title>pkmn::md::decode_deep_plus (980,980,980 samples, 13.77%)</title><rect x="1013.0" y="85" width="162.6" height="15.0" fill="rgb(210,23,5)" rx="2" ry="2" />
+<text  x="1016.04" y="95.5" >pkmn::md::decode_dee..</text>
 </g>
 <g >
-<title>operator new (1,001,001 samples, 0.01%)</title><rect x="361.4" y="69" width="0.1" height="15.0" fill="rgb(216,51,12)" rx="2" ry="2" />
-<text  x="364.41" y="79.5" ></text>
+<title>pkmn::book::OrderBook::link_back (41,041,041 samples, 0.58%)</title><rect x="293.4" y="69" width="6.8" height="15.0" fill="rgb(212,34,8)" rx="2" ry="2" />
+<text  x="296.43" y="79.5" ></text>
 </g>
 <g >
-<title>std::_Hashtable&lt;unsigned long, std::pair&lt;unsigned long const, pkmn::book::OrderBook::Loc&gt;, std::allocator&lt;std::pair&lt;unsigned long const, pkmn::book::OrderBook::Loc&gt; &gt;, std::__detail::_Select1st, std::equal_to&lt;unsigned long&gt;, std::hash&lt;unsigned long&gt;, std::__detail::_Mod_range_hashing, std::__detail::_Default_ranged_hash, std::__detail::_Prime_rehash_policy, std::__detail::_Hashtable_traits&lt;false, false, true&gt; &gt;::_M_erase (42,042,042 samples, 0.41%)</title><rect x="397.4" y="101" width="4.9" height="15.0" fill="rgb(254,228,54)" rx="2" ry="2" />
-<text  x="400.44" y="111.5" ></text>
+<title>pkmn::book::OrderBook::erase_entry (2,002,002 samples, 0.03%)</title><rect x="283.8" y="53" width="0.3" height="15.0" fill="rgb(239,158,37)" rx="2" ry="2" />
+<text  x="286.81" y="63.5" ></text>
 </g>
 <g >
-<title>malloc_consolidate (1,001,001 samples, 0.01%)</title><rect x="857.4" y="37" width="0.1" height="15.0" fill="rgb(239,159,38)" rx="2" ry="2" />
-<text  x="860.41" y="47.5" ></text>
+<title>malloc (2,002,002 samples, 0.03%)</title><rect x="743.4" y="37" width="0.3" height="15.0" fill="rgb(230,119,28)" rx="2" ry="2" />
+<text  x="746.37" y="47.5" ></text>
 </g>
 <g >
-<title>malloc@plt (26,026,026 samples, 0.25%)</title><rect x="279.8" y="85" width="3.0" height="15.0" fill="rgb(246,192,46)" rx="2" ry="2" />
-<text  x="282.77" y="95.5" ></text>
+<title>pkmn::book::OrderBook::erase_entry (241,241,241 samples, 3.39%)</title><rect x="321.1" y="53" width="40.0" height="15.0" fill="rgb(239,158,37)" rx="2" ry="2" />
+<text  x="324.13" y="63.5" >pkm..</text>
 </g>
 <g >
-<title>operator new (15,015,015 samples, 0.15%)</title><rect x="282.8" y="85" width="1.7" height="15.0" fill="rgb(216,51,12)" rx="2" ry="2" />
-<text  x="285.77" y="95.5" ></text>
+<title>pkmn::book::OrderBook::erase_order (256,256,256 samples, 3.60%)</title><rect x="318.6" y="69" width="42.5" height="15.0" fill="rgb(231,122,29)" rx="2" ry="2" />
+<text  x="321.64" y="79.5" >pkm..</text>
 </g>
 <g >
-<title>malloc@plt (4,004,004 samples, 0.04%)</title><rect x="299.4" y="69" width="0.5" height="15.0" fill="rgb(246,192,46)" rx="2" ry="2" />
-<text  x="302.40" y="79.5" ></text>
+<title>pkmn::book::OrderBook::level_pos (62,062,062 samples, 0.87%)</title><rect x="303.9" y="53" width="10.3" height="15.0" fill="rgb(234,137,32)" rx="2" ry="2" />
+<text  x="306.88" y="63.5" ></text>
 </g>
 <g >
-<title>__libc_start_main@@GLIBC_2.34 (10,228,228,218 samples, 100.00%)</title><rect x="10.0" y="181" width="1180.0" height="15.0" fill="rgb(229,113,27)" rx="2" ry="2" />
-<text  x="13.00" y="191.5" >__libc_start_main@@GLIBC_2.34</text>
+<title>malloc (3,003,003 samples, 0.04%)</title><rect x="144.2" y="37" width="0.5" height="15.0" fill="rgb(230,119,28)" rx="2" ry="2" />
+<text  x="147.17" y="47.5" ></text>
 </g>
 <g >
-<title>main (10,228,228,218 samples, 100.00%)</title><rect x="10.0" y="149" width="1180.0" height="15.0" fill="rgb(243,179,42)" rx="2" ry="2" />
-<text  x="13.00" y="159.5" >main</text>
+<title>__libc_start_main@@GLIBC_2.34 (7,122,122,115 samples, 100.00%)</title><rect x="10.0" y="149" width="1180.0" height="15.0" fill="rgb(229,113,27)" rx="2" ry="2" />
+<text  x="13.00" y="159.5" >__libc_start_main@@GLIBC_2.34</text>
 </g>
 <g >
-<title>_int_malloc (6,006,006 samples, 0.06%)</title><rect x="298.7" y="53" width="0.7" height="15.0" fill="rgb(215,47,11)" rx="2" ry="2" />
-<text  x="301.71" y="63.5" ></text>
+<title>pkmn::book::OrderBook::remove (1,633,633,632 samples, 22.94%)</title><rect x="314.2" y="85" width="270.6" height="15.0" fill="rgb(219,67,16)" rx="2" ry="2" />
+<text  x="317.16" y="95.5" >pkmn::book::OrderBook::remove</text>
 </g>
 <g >
-<title>__libc_start_call_main (10,228,228,218 samples, 100.00%)</title><rect x="10.0" y="165" width="1180.0" height="15.0" fill="rgb(210,26,6)" rx="2" ry="2" />
-<text  x="13.00" y="175.5" >__libc_start_call_main</text>
+<title>pkmn::book::OrderBook::alloc_node (40,040,040 samples, 0.56%)</title><rect x="138.0" y="69" width="6.7" height="15.0" fill="rgb(226,97,23)" rx="2" ry="2" />
+<text  x="141.03" y="79.5" ></text>
 </g>
 <g >
-<title>operator new (32,032,032 samples, 0.31%)</title><rect x="284.5" y="85" width="3.7" height="15.0" fill="rgb(216,51,12)" rx="2" ry="2" />
-<text  x="287.50" y="95.5" ></text>
+<title>pkmn::book::OrderBook::level_pos (789,789,789 samples, 11.09%)</title><rect x="454.0" y="53" width="130.8" height="15.0" fill="rgb(234,137,32)" rx="2" ry="2" />
+<text  x="456.97" y="63.5" >pkmn::book::Orde..</text>
 </g>
 <g >
-<title>pkmn::book::OrderBook::erase_order (14,014,014 samples, 0.14%)</title><rect x="343.6" y="101" width="1.6" height="15.0" fill="rgb(231,122,29)" rx="2" ry="2" />
-<text  x="346.63" y="111.5" ></text>
+<title>pkmn::book::OrderBook::find_entry (14,014,014 samples, 0.20%)</title><rect x="288.0" y="69" width="2.3" height="15.0" fill="rgb(206,6,1)" rx="2" ry="2" />
+<text  x="290.96" y="79.5" ></text>
 </g>
 <g >
-<title>cfree@GLIBC_2.17 (160,160,160 samples, 1.57%)</title><rect x="733.2" y="85" width="18.4" height="15.0" fill="rgb(224,88,21)" rx="2" ry="2" />
-<text  x="736.15" y="95.5" ></text>
+<title>operator new (3,003,003 samples, 0.04%)</title><rect x="144.2" y="53" width="0.5" height="15.0" fill="rgb(216,51,12)" rx="2" ry="2" />
+<text  x="147.17" y="63.5" ></text>
 </g>
 <g >
-<title>operator delete (104,104,104 samples, 1.02%)</title><rect x="667.6" y="85" width="12.0" height="15.0" fill="rgb(247,196,46)" rx="2" ry="2" />
-<text  x="670.56" y="95.5" ></text>
+<title>malloc (1,001,001 samples, 0.01%)</title><rect x="164.4" y="37" width="0.2" height="15.0" fill="rgb(230,119,28)" rx="2" ry="2" />
+<text  x="167.40" y="47.5" ></text>
 </g>
 <g >
-<title>std::__detail::_Prime_rehash_policy::_M_need_rehash (14,014,014 samples, 0.14%)</title><rect x="365.6" y="85" width="1.6" height="15.0" fill="rgb(228,109,26)" rx="2" ry="2" />
-<text  x="368.57" y="95.5" ></text>
+<title>.plt (1,001,001 samples, 0.01%)</title><rect x="743.7" y="37" width="0.2" height="15.0" fill="rgb(245,187,44)" rx="2" ry="2" />
+<text  x="746.71" y="47.5" ></text>
 </g>
 <g >
-<title>_start (10,228,228,218 samples, 100.00%)</title><rect x="10.0" y="197" width="1180.0" height="15.0" fill="rgb(245,185,44)" rx="2" ry="2" />
-<text  x="13.00" y="207.5" >_start</text>
+<title>cfree@GLIBC_2.17 (1,001,001 samples, 0.01%)</title><rect x="1186.5" y="69" width="0.2" height="15.0" fill="rgb(224,88,21)" rx="2" ry="2" />
+<text  x="1189.52" y="79.5" ></text>
 </g>
 <g >
-<title>pkmn::book::OrderBook::erase_order (2,470,470,468 samples, 24.15%)</title><rect x="414.8" y="101" width="285.0" height="15.0" fill="rgb(231,122,29)" rx="2" ry="2" />
-<text  x="417.77" y="111.5" >pkmn::book::OrderBook::erase_order</text>
+<title>pkmn::md::parse_tp_header (1,058,058,057 samples, 14.86%)</title><rect x="837.7" y="69" width="175.3" height="15.0" fill="rgb(217,57,13)" rx="2" ry="2" />
+<text  x="840.74" y="79.5" >pkmn::md::parse_tp_hea..</text>
 </g>
 <g >
-<title>std::_Rb_tree_decrement (6,006,006 samples, 0.06%)</title><rect x="300.3" y="85" width="0.7" height="15.0" fill="rgb(238,152,36)" rx="2" ry="2" />
-<text  x="303.32" y="95.5" ></text>
+<title>pkmn::book::OrderBook::unlink_free (2,002,002 samples, 0.03%)</title><rect x="285.1" y="69" width="0.4" height="15.0" fill="rgb(236,144,34)" rx="2" ry="2" />
+<text  x="288.14" y="79.5" ></text>
 </g>
 <g >
-<title>malloc (2,002,002 samples, 0.02%)</title><rect x="857.3" y="69" width="0.2" height="15.0" fill="rgb(230,119,28)" rx="2" ry="2" />
-<text  x="860.29" y="79.5" ></text>
+<title>pkmn::book::OrderBook::find_entry (3,003,003 samples, 0.04%)</title><rect x="284.1" y="69" width="0.5" height="15.0" fill="rgb(206,6,1)" rx="2" ry="2" />
+<text  x="287.14" y="79.5" ></text>
 </g>
 <g >
-<title>pkmn::book::OrderBook::execute (28,028,028 samples, 0.27%)</title><rect x="342.5" y="117" width="3.2" height="15.0" fill="rgb(217,56,13)" rx="2" ry="2" />
-<text  x="345.47" y="127.5" ></text>
+<title>pkmn::book::OrderBook::execute (13,013,013 samples, 0.18%)</title><rect x="283.3" y="85" width="2.2" height="15.0" fill="rgb(217,56,13)" rx="2" ry="2" />
+<text  x="286.32" y="95.5" ></text>
 </g>
 <g >
-<title>std::__detail::_List_node_base::_M_hook (124,124,124 samples, 1.21%)</title><rect x="312.7" y="101" width="14.3" height="15.0" fill="rgb(244,179,42)" rx="2" ry="2" />
-<text  x="315.68" y="111.5" ></text>
+<title>pkmn::md::parse_tp_header (66,066,066 samples, 0.93%)</title><rect x="1175.6" y="85" width="10.9" height="15.0" fill="rgb(217,57,13)" rx="2" ry="2" />
+<text  x="1178.57" y="95.5" ></text>
 </g>
 <g >
-<title>operator delete (3,003,003 samples, 0.03%)</title><rect x="401.9" y="85" width="0.4" height="15.0" fill="rgb(247,196,46)" rx="2" ry="2" />
-<text  x="404.95" y="95.5" ></text>
-</g>
-<g >
-<title>operator delete (1,001,001 samples, 0.01%)</title><rect x="345.6" y="85" width="0.1" height="15.0" fill="rgb(247,196,46)" rx="2" ry="2" />
-<text  x="348.59" y="95.5" ></text>
-</g>
-<g >
-<title>_int_free (287,287,287 samples, 2.81%)</title><rect x="631.2" y="69" width="33.1" height="15.0" fill="rgb(247,196,46)" rx="2" ry="2" />
-<text  x="634.18" y="79.5" >_i..</text>
-</g>
-<g >
-<title>operator delete (1,001,001 samples, 0.01%)</title><rect x="345.0" y="85" width="0.1" height="15.0" fill="rgb(247,196,46)" rx="2" ry="2" />
-<text  x="348.01" y="95.5" ></text>
-</g>
-<g >
-<title>operator new (6,006,006 samples, 0.06%)</title><rect x="288.3" y="85" width="0.7" height="15.0" fill="rgb(216,51,12)" rx="2" ry="2" />
-<text  x="291.31" y="95.5" ></text>
-</g>
-<g >
-<title>std::_Rb_tree_iterator&lt;std::pair&lt;long const, pkmn::book::OrderBook::LevelData&gt; &gt; std::_Rb_tree&lt;long, std::pair&lt;long const, pkmn::book::OrderBook::LevelData&gt;, std::_Select1st&lt;std::pair&lt;long const, pkmn::book::OrderBook::LevelData&gt; &gt;, std::less&lt;long&gt;, std::allocator&lt;std::pair&lt;long const, pkmn::book::OrderBook::LevelData&gt; &gt; &gt;::_M_emplace_hint_unique&lt;std::piecewise_construct_t const&amp;, std::tuple&lt;long const&amp;&gt;, std::tuple&lt;&gt; &gt; (1,001,001 samples, 0.01%)</title><rect x="364.6" y="69" width="0.2" height="15.0" fill="rgb(237,150,35)" rx="2" ry="2" />
-<text  x="367.65" y="79.5" ></text>
-</g>
-<g >
-<title>std::_Rb_tree_insert_and_rebalance (95,095,095 samples, 0.93%)</title><rect x="301.0" y="85" width="11.0" height="15.0" fill="rgb(225,94,22)" rx="2" ry="2" />
-<text  x="304.02" y="95.5" ></text>
-</g>
-<g >
-<title>pkmn::md::parse_tp_header (57,057,057 samples, 0.56%)</title><rect x="1180.2" y="117" width="6.6" height="15.0" fill="rgb(217,57,13)" rx="2" ry="2" />
-<text  x="1183.18" y="127.5" ></text>
-</g>
-<g >
-<title>std::_Hashtable&lt;unsigned long, std::pair&lt;unsigned long const, pkmn::book::OrderBook&gt;, std::allocator&lt;std::pair&lt;unsigned long const, pkmn::book::OrderBook&gt; &gt;, std::__detail::_Select1st, std::equal_to&lt;unsigned long&gt;, std::hash&lt;unsigned long&gt;, std::__detail::_Mod_range_hashing, std::__detail::_Default_ranged_hash, std::__detail::_Prime_rehash_policy, std::__detail::_Hashtable_traits&lt;false, false, true&gt; &gt;::~_Hashtable (5,005,005 samples, 0.05%)</title><rect x="1186.8" y="117" width="0.5" height="15.0" fill="rgb(240,164,39)" rx="2" ry="2" />
-<text  x="1189.77" y="127.5" ></text>
-</g>
-<g >
-<title>malloc (233,233,233 samples, 2.28%)</title><rect x="252.9" y="85" width="26.9" height="15.0" fill="rgb(230,119,28)" rx="2" ry="2" />
-<text  x="255.86" y="95.5" >m..</text>
-</g>
-<g >
-<title>free@plt (28,028,028 samples, 0.27%)</title><rect x="664.3" y="85" width="3.3" height="15.0" fill="rgb(229,112,26)" rx="2" ry="2" />
-<text  x="667.32" y="95.5" ></text>
-</g>
-<g >
-<title>std::__detail::_Prime_rehash_policy::_M_need_rehash (134,134,134 samples, 1.31%)</title><rect x="327.0" y="101" width="15.5" height="15.0" fill="rgb(228,109,26)" rx="2" ry="2" />
-<text  x="330.00" y="111.5" ></text>
-</g>
-<g >
-<title>cfree@GLIBC_2.17 (5,005,005 samples, 0.05%)</title><rect x="1186.8" y="101" width="0.5" height="15.0" fill="rgb(224,88,21)" rx="2" ry="2" />
-<text  x="1189.77" y="111.5" ></text>
-</g>
-<g >
-<title>pkmn::book::OrderBook::add (1,001,001 samples, 0.01%)</title><rect x="361.4" y="85" width="0.1" height="15.0" fill="rgb(225,95,22)" rx="2" ry="2" />
-<text  x="364.41" y="95.5" ></text>
-</g>
-<g >
-<title>operator new (3,003,003 samples, 0.03%)</title><rect x="361.9" y="69" width="0.3" height="15.0" fill="rgb(216,51,12)" rx="2" ry="2" />
-<text  x="364.88" y="79.5" ></text>
-</g>
-<g >
-<title>pkmn::md::SegmentFilter::accept (1,621,621,620 samples, 15.85%)</title><rect x="857.6" y="117" width="187.1" height="15.0" fill="rgb(218,60,14)" rx="2" ry="2" />
-<text  x="860.64" y="127.5" >pkmn::md::SegmentFilter:..</text>
-</g>
-<g >
-<title>_int_free_maybe_consolidate.part.0 (5,005,005 samples, 0.05%)</title><rect x="1186.8" y="85" width="0.5" height="15.0" fill="rgb(254,228,54)" rx="2" ry="2" />
-<text  x="1189.77" y="95.5" ></text>
-</g>
-<g >
-<title>std::_Rb_tree_decrement (5,005,005 samples, 0.05%)</title><rect x="362.2" y="69" width="0.6" height="15.0" fill="rgb(238,152,36)" rx="2" ry="2" />
-<text  x="365.22" y="79.5" ></text>
-</g>
-<g >
-<title>pkmn::book::OrderBook::erase_order (262,262,262 samples, 2.56%)</title><rect x="367.2" y="101" width="30.2" height="15.0" fill="rgb(231,122,29)" rx="2" ry="2" />
-<text  x="370.19" y="111.5" >pk..</text>
-</g>
-<g >
-<title>std::_Rb_tree_iterator&lt;std::pair&lt;long const, pkmn::book::OrderBook::LevelData&gt; &gt; std::_Rb_tree&lt;long, std::pair&lt;long const, pkmn::book::OrderBook::LevelData&gt;, std::_Select1st&lt;std::pair&lt;long const, pkmn::book::OrderBook::LevelData&gt; &gt;, std::less&lt;long&gt;, std::allocator&lt;std::pair&lt;long const, pkmn::book::OrderBook::LevelData&gt; &gt; &gt;::_M_emplace_hint_unique&lt;std::piecewise_construct_t const&amp;, std::tuple&lt;long const&amp;&gt;, std::tuple&lt;&gt; &gt; (205,205,205 samples, 2.01%)</title><rect x="289.0" y="101" width="23.7" height="15.0" fill="rgb(237,150,35)" rx="2" ry="2" />
-<text  x="292.01" y="111.5" >s..</text>
-</g>
-<g >
-<title>std::__detail::_Map_base&lt;unsigned long, std::pair&lt;unsigned long const, pkmn::book::OrderBook&gt;, std::allocator&lt;std::pair&lt;unsigned long const, pkmn::book::OrderBook&gt; &gt;, std::__detail::_Select1st, std::equal_to&lt;unsigned long&gt;, std::hash&lt;unsigned long&gt;, std::__detail::_Mod_range_hashing, std::__detail::_Default_ranged_hash, std::__detail::_Prime_rehash_policy, std::__detail::_Hashtable_traits&lt;false, false, true&gt;, true&gt;::operator[] (817,817,817 samples, 8.00%)</title><rect x="763.2" y="101" width="94.3" height="15.0" fill="rgb(230,117,28)" rx="2" ry="2" />
-<text  x="766.18" y="111.5" >std::__deta..</text>
-</g>
-<g >
-<title>free@plt (2,002,002 samples, 0.02%)</title><rect x="401.7" y="85" width="0.2" height="15.0" fill="rgb(229,112,26)" rx="2" ry="2" />
-<text  x="404.72" y="95.5" ></text>
-</g>
-<g >
-<title>operator new (34,034,034 samples, 0.33%)</title><rect x="357.5" y="85" width="3.9" height="15.0" fill="rgb(216,51,12)" rx="2" ry="2" />
-<text  x="360.49" y="95.5" ></text>
-</g>
-<g >
-<title>operator new (371,371,371 samples, 3.63%)</title><rect x="241.7" y="101" width="42.8" height="15.0" fill="rgb(216,51,12)" rx="2" ry="2" />
-<text  x="244.66" y="111.5" >oper..</text>
-</g>
-<g >
-<title>operator delete (24,024,024 samples, 0.23%)</title><rect x="752.7" y="85" width="2.7" height="15.0" fill="rgb(247,196,46)" rx="2" ry="2" />
-<text  x="755.67" y="95.5" ></text>
-</g>
-<g >
-<title>cfree@GLIBC_2.17 (20,020,020 samples, 0.20%)</title><rect x="399.4" y="85" width="2.3" height="15.0" fill="rgb(224,88,21)" rx="2" ry="2" />
-<text  x="402.41" y="95.5" ></text>
-</g>
-<g >
-<title>pkmn::md::BookSet::order_count (1,001,001 samples, 0.01%)</title><rect x="857.5" y="117" width="0.1" height="15.0" fill="rgb(221,78,18)" rx="2" ry="2" />
-<text  x="860.53" y="127.5" ></text>
-</g>
-<g >
-<title>std::_Rb_tree_insert_and_rebalance (16,016,016 samples, 0.16%)</title><rect x="362.8" y="69" width="1.8" height="15.0" fill="rgb(225,94,22)" rx="2" ry="2" />
-<text  x="365.80" y="79.5" ></text>
-</g>
-<g >
-<title>std::__detail::_List_node_base::_M_unhook (5,005,005 samples, 0.05%)</title><rect x="396.9" y="85" width="0.5" height="15.0" fill="rgb(227,104,24)" rx="2" ry="2" />
-<text  x="399.87" y="95.5" ></text>
-</g>
-<g >
-<title>std::_Hashtable&lt;unsigned long, std::pair&lt;unsigned long const, pkmn::book::OrderBook::Loc&gt;, std::allocator&lt;std::pair&lt;unsigned long const, pkmn::book::OrderBook::Loc&gt; &gt;, std::__detail::_Select1st, std::equal_to&lt;unsigned long&gt;, std::hash&lt;unsigned long&gt;, std::__detail::_Mod_range_hashing, std::__detail::_Default_ranged_hash, std::__detail::_Prime_rehash_policy, std::__detail::_Hashtable_traits&lt;false, false, true&gt; &gt;::_M_erase (482,482,482 samples, 4.72%)</title><rect x="699.8" y="101" width="55.6" height="15.0" fill="rgb(254,228,54)" rx="2" ry="2" />
-<text  x="702.78" y="111.5" >std::..</text>
-</g>
-<g >
-<title>_int_free (11,011,011 samples, 0.11%)</title><rect x="400.4" y="69" width="1.3" height="15.0" fill="rgb(247,196,46)" rx="2" ry="2" />
-<text  x="403.45" y="79.5" ></text>
-</g>
-<g >
-<title>malloc@plt (1,001,001 samples, 0.01%)</title><rect x="360.8" y="69" width="0.2" height="15.0" fill="rgb(246,192,46)" rx="2" ry="2" />
-<text  x="363.84" y="79.5" ></text>
-</g>
-<g >
-<title>std::_Rb_tree_iterator&lt;std::pair&lt;long const, pkmn::book::OrderBook::LevelData&gt; &gt; std::_Rb_tree&lt;long, std::pair&lt;long const, pkmn::book::OrderBook::LevelData&gt;, std::_Select1st&lt;std::pair&lt;long const, pkmn::book::OrderBook::LevelData&gt; &gt;, std::less&lt;long&gt;, std::allocator&lt;std::pair&lt;long const, pkmn::book::OrderBook::LevelData&gt; &gt; &gt;::_M_emplace_hint_unique&lt;std::piecewise_construct_t const&amp;, std::tuple&lt;long const&amp;&gt;, std::tuple&lt;&gt; &gt; (28,028,028 samples, 0.27%)</title><rect x="361.5" y="85" width="3.3" height="15.0" fill="rgb(237,150,35)" rx="2" ry="2" />
-<text  x="364.53" y="95.5" ></text>
-</g>
-<g >
-<title>std::__detail::_List_node_base::_M_unhook (62,062,062 samples, 0.61%)</title><rect x="692.6" y="85" width="7.2" height="15.0" fill="rgb(227,104,24)" rx="2" ry="2" />
-<text  x="695.62" y="95.5" ></text>
-</g>
-<g >
-<title>malloc (6,006,006 samples, 0.06%)</title><rect x="288.3" y="69" width="0.7" height="15.0" fill="rgb(230,119,28)" rx="2" ry="2" />
-<text  x="291.31" y="79.5" ></text>
-</g>
-<g >
-<title>pkmn::book::OrderBook::add (32,032,032 samples, 0.31%)</title><rect x="284.5" y="101" width="3.7" height="15.0" fill="rgb(225,95,22)" rx="2" ry="2" />
-<text  x="287.50" y="111.5" ></text>
-</g>
-<g >
-<title>cfree@GLIBC_2.17 (390,390,390 samples, 3.82%)</title><rect x="619.3" y="85" width="45.0" height="15.0" fill="rgb(224,88,21)" rx="2" ry="2" />
-<text  x="622.29" y="95.5" >cfre..</text>
-</g>
-<g >
-<title>std::_Rb_tree_rebalance_for_erase (24,024,024 samples, 0.23%)</title><rect x="394.1" y="85" width="2.8" height="15.0" fill="rgb(205,2,0)" rx="2" ry="2" />
-<text  x="397.09" y="95.5" ></text>
-</g>
-<g >
-<title>malloc (19,019,019 samples, 0.19%)</title><rect x="358.6" y="69" width="2.2" height="15.0" fill="rgb(230,119,28)" rx="2" ry="2" />
-<text  x="361.64" y="79.5" ></text>
-</g>
-<g >
-<title>operator new (4,004,004 samples, 0.04%)</title><rect x="299.9" y="69" width="0.4" height="15.0" fill="rgb(216,51,12)" rx="2" ry="2" />
-<text  x="302.86" y="79.5" ></text>
-</g>
-<g >
-<title>operator new (1,001,001 samples, 0.01%)</title><rect x="364.6" y="53" width="0.2" height="15.0" fill="rgb(216,51,12)" rx="2" ry="2" />
-<text  x="367.65" y="63.5" ></text>
+<title>pkmn::book::OrderBook::unlink_free (84,084,084 samples, 1.18%)</title><rect x="300.2" y="69" width="14.0" height="15.0" fill="rgb(236,144,34)" rx="2" ry="2" />
+<text  x="303.23" y="79.5" ></text>
 </g>
 </g>
 </svg>
