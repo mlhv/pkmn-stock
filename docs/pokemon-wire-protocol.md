@@ -80,7 +80,7 @@ One packet holding a D (instrument 0, product 12345, sub_type "Normal"), an S
 
 - `0000-000f` header: `PKW1`, msg_count 3, payload_len 0x46 = 70, first_seq 1.
 - `0010` D: len 0x26 = 38, type `D` (0x44), instrument 0, product_id 0x3039 =
-  12345, sub_type_len 6, then `Normal` and 18 zero bytes (ends at `0x37`).
+  12345, sub_type_len 6, then `Normal` and 18 zero bytes (the message ends at byte `0x37`).
 - `0038` S: len 5, type `S` (0x53), day 0x4e20 = 20000.
 - `003f` Q: len 0x15 = 21, type `Q` (0x51), instrument 0, market 0x4e2 = 1250,
   low 0x4b0 = 1200, mid 0x514 = 1300, high `ffffffff` (null).
