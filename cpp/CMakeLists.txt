@@ -112,6 +112,7 @@ if(PKMN_BUILD_TESTS)
     tests/test_strategies.cpp
     tests/test_concurrency.cpp
     tests/test_order_book.cpp
+    tests/test_order_book_paths.cpp
   )
   find_package(Threads REQUIRED)
   target_link_libraries(engine_tests PRIVATE pkmn_engine_core pkmn_book Catch2::Catch2WithMain Threads::Threads)
