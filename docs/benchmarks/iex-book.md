@@ -2,6 +2,37 @@
 
 Results of `scripts/bench_iex.sh` (DEEP+ decode + `BookSet::apply`, `cpp/tools/iex_bench.cpp`), newest first.
 
+## Task 6 — optimization target (written 2026-10-22, before any code change)
+
+Named from the 2026-10-22 baseline profile below (`c9e60e0c2bf6`, perf `-F 999 -g` over the ram
+throughput pass, 10,228,228,218 sample-weight units under `replay<CallStep>`; all percentages are of that
+total). The two largest costs are both inside `OrderBook`:
+
+1. **Order removal, `OrderBook::remove` -> `erase_order`: 29.9% inclusive** (erase_order 19.1% self,
+   26.9% inclusive). Below it: `cfree` 4.2%, `operator delete` 1.2%, `_Rb_tree_rebalance_for_erase`
+   1.4%, `_List_node_base::_M_unhook` 0.7%; plus the `index_` hashtable find under `remove`, 4.7%.
+   The large self time is pointer chasing: an `unordered_map` bucket/node hop, a `std::map::find` tree
+   walk to re-locate the level by price, then freeing one list node, one hash node and (when the level
+   empties) one tree node.
+2. **Order insertion, `OrderBook::add`: 25.0% inclusive** (15.7% self). Below it: `operator new` 4.0%,
+   `std::map` insert-or-find 2.3%, `_Prime_rehash_policy::_M_need_rehash` 1.4%, `_List_node_base::_M_hook`
+   1.3%. Same shape: a hash probe for the duplicate check, a tree walk to the level, and up to three heap
+   allocations (list node, hash node, tree node) per order.
+
+Common cause of both: every resting order costs up to three node allocations and three dependent
+pointer-chasing lookups. malloc/free/new/delete together are ~10% of the pass (self).
+
+Named but **out of scope for this task** (the brief limits the change to `OrderBook`): `decode_deep_plus`
+11.5%, `parse_tp_header` 11.3%, `SegmentFilter::accept` 15.9% inclusive, and `BookSet`'s per-symbol
+`std::unordered_map<uint64_t, OrderBook>::operator[]` 8.2%.
+
+Plan: replace the book's three node-based containers with (a) a per-book pooled order arena with a free
+list and intrusive index-linked FIFO (no per-order heap allocation in steady state), (b) an
+open-addressing `OrderId -> slot` hash table (linear probing, backward-shift delete), and (c) per-side
+price levels in a sorted contiguous vector with the best price at the back (most activity is near the
+touch, so search starts there). Measured A/B against `c9e60e0`-equivalent code in one VM session; kept
+only if it beats the interleaved runs' spread.
+
 ## 2026-10-22 — 20241223_IEXTP1_DPLS1.0.pcap.gz
 
 - Hardware: Apple M1 Pro, 7-vCPU OrbStack Ubuntu 24.04 arm64 VM
