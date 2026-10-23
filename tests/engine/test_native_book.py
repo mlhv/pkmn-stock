@@ -119,3 +119,34 @@ def test_book_sell_impact_no_low_is_zero() -> None:
     from pkmn_quant.engine.native import book_sell_impact
 
     assert book_sell_impact(CostModel(impact_enabled=True), 60.0, None, 5) == 0.0
+
+
+def test_bindings_reject_mismatched_tier_arrays(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """tier_thresholds and tier_qtys must have equal length at both binding
+    sites; a mismatch is a clean ValueError, never an out-of-bounds read."""
+    import numpy as np
+
+    from pkmn_quant import _engine
+    from pkmn_quant.engine import native
+
+    with pytest.raises(ValueError, match="tier_thresholds and tier_qtys differ"):
+        _engine.book_sell_impact(
+            market=60.0,
+            low=50.0,
+            qty=5,
+            tier_thresholds=np.array([5.0, 50.0, 200.0]),
+            tier_qtys=np.array([20, 8], dtype=np.int64),
+            fallback_max_qty=1,
+        )
+
+    real = _engine.run_backtest
+
+    def truncated(**kw: object) -> object:
+        kw["tier_qtys"] = kw["tier_qtys"][:-1]  # type: ignore[index]
+        return real(**kw)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(native._engine, "run_backtest", truncated)
+    with pytest.raises(ValueError, match="tier_thresholds and tier_qtys differ"):
+        _run(tmp_path)

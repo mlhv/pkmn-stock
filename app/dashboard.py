@@ -32,8 +32,15 @@ def wf_runs() -> list[Path]:
     return sorted(p for p in RESULTS.iterdir() if p.is_dir() and (p / "walkforward.json").exists())
 
 
-def benchmark_runs() -> list[Path]:
+def benchmark_runs(execution: str | None = None) -> list[Path]:
     """Buy-and-hold benchmark artifacts, newest first.
+
+    ``execution`` ("book"/"formula") keeps only benchmarks recorded in that
+    mode (a missing ``config["execution"]`` is formula, as every record before
+    Plan B was; legacy pre-registry directories are formula too). The overlay
+    passes the viewed walk-forward's mode so a formula bar is never drawn over
+    a book run or vice versa. ``None`` lists every mode (the Trades tab, which
+    only lists ledgers and compares nothing).
 
     Registry-driven rather than directory-scanning: since Plan 2b every
     backtest mints its own `data/results/<run_id>/` directory, and since
@@ -53,11 +60,14 @@ def benchmark_runs() -> list[Path]:
             continue
         if r.config.get("benchmark_for"):
             continue
+        if execution is not None and r.config.get("execution", "formula") != execution:
+            continue
         art = Path(r.artifact_path)
         if (art / "equity.parquet").exists():
             out.append(art)
-    # legacy pre-registry (pre-Plan-9) directories, still on disk and readable
-    if RESULTS.exists():
+    # legacy pre-registry (pre-Plan-9) directories, still on disk and readable;
+    # all predate Plan B, so they are formula.
+    if RESULTS.exists() and execution in (None, "formula"):
         out.extend(
             p
             for p in sorted(RESULTS.iterdir())
@@ -110,7 +120,11 @@ with tab_wf:
 
         stitched = pl.read_parquet(run_dir / "stitched_equity.parquet")
         curve = stitched.rename({"equity": wf["strategy"]})
-        bench = benchmark_runs()
+        # Only benchmarks in the viewed run's execution mode (missing = formula):
+        # no comparison mixes book and formula runs.
+        wf_mode = str(wf.get("execution", "formula"))
+        st.caption(f"Execution: {wf_mode}")
+        bench = benchmark_runs(wf_mode)
         if bench:
             bench_dir = st.selectbox("Benchmark overlay", bench, format_func=lambda p: p.name)
             b = pl.read_parquet(bench_dir / "equity.parquet")

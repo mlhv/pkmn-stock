@@ -97,8 +97,15 @@ def seed_everything(
         _write_curve(results / f"wf-{name}-x", name, eq)
 
 
-def run_eval(root: Path, *extra: str) -> object:
-    return CliRunner().invoke(app, ["evaluate", "--root", str(root), "--n-boot", "500", *extra])
+def run_eval(root: Path, *extra: str, execution: str | None = "formula") -> object:
+    """seed_everything writes legacy artifacts and records (no execution key,
+    i.e. formula), so the pre-Plan-B tests evaluate in formula mode and keep
+    testing exactly what they tested. ``execution=None`` passes no flag and
+    exercises the default (book)."""
+    mode = [] if execution is None else ["--execution", execution]
+    return CliRunner().invoke(
+        app, ["evaluate", "--root", str(root), "--n-boot", "500", *mode, *extra]
+    )
 
 
 def test_evaluate_end_to_end(tmp_path: Path) -> None:
@@ -187,11 +194,12 @@ def test_evaluate_finds_benchmark_via_run_registry(tmp_path: Path) -> None:
     # sanity: the old glob pattern really is undiscoverable on this branch
     assert not list((tmp_path / "data" / "results").glob("buy-and-hold-sealed-*"))
 
-    result = run_eval(tmp_path)
+    result = run_eval(tmp_path, execution=None)  # the default mode, book
     assert result.exit_code == 0, result.output
     out = next((tmp_path / "data" / "results").glob("evaluate-*"))
     payload = json.loads((out / "evaluate.json").read_text())
     assert set(payload["strategies"]) == {"alpha", "beta"}
+    assert payload["execution"] == "book"
 
 
 def test_evaluate_ignores_a_hand_made_benchmark_directory(tmp_path: Path) -> None:
@@ -343,17 +351,76 @@ def _rewrite_wf_execution(root: Path, modes: dict[str, str]) -> None:
         meta_path.write_text(json.dumps(meta))
 
 
-def test_evaluate_refuses_mixed_execution(tmp_path: Path) -> None:
-    seed_everything(tmp_path)
-    _rewrite_wf_execution(tmp_path, {"alpha": "book", "beta": "formula"})
-    result = run_eval(tmp_path)
+def _seed_book_beside_legacy(root: Path) -> str:
+    """seed_everything's legacy (formula) alpha/beta artifacts and benchmark,
+    plus book gamma/delta artifacts and an OLDER book benchmark record."""
+    book_id = "20260731T110000Z-bbb999"
+    seed_everything(
+        root,
+        extra_records=[
+            _record(
+                root,
+                book_id,
+                "buy-and-hold-sealed",
+                config={"execution": "book"},
+                recorded_at="2026-07-31T11:00:00+00:00",
+            )
+        ],
+    )
+    results = root / "data" / "results"
+    _write_curve(
+        results / book_id, "buy-and-hold-sealed", [100.0 + 0.1 * i for i in range(200)], False
+    )
+    rng = np.random.default_rng(7)
+    for name in ("gamma", "delta"):
+        eq = list(100.0 * np.cumprod(1.0 + rng.normal(0.0, 0.01, 200)))
+        _write_curve(results / f"wf-{name}-x-book", name, eq, execution="book")
+    return book_id
+
+
+def _eval_payload(root: Path) -> dict[str, object]:
+    out = next((root / "data" / "results").glob("evaluate-*"))
+    payload: dict[str, object] = json.loads((out / "evaluate.json").read_text())
+    return payload
+
+
+def test_evaluate_default_book_ignores_legacy_formula_artifacts(tmp_path: Path) -> None:
+    """Book artifacts beside legacy formula ones: the default evaluation reads
+    only the book ones, against the book benchmark, and does not refuse."""
+    book_id = _seed_book_beside_legacy(tmp_path)
+    result = run_eval(tmp_path, execution=None)
+    assert result.exit_code == 0, result.output
+    payload = _eval_payload(tmp_path)
+    assert set(payload["strategies"]) == {"gamma", "delta"}  # type: ignore[arg-type]
+    assert payload["execution"] == "book"
+    assert payload["benchmark"] == str(tmp_path / "data" / "results" / book_id)
+
+
+def test_evaluate_formula_flag_reads_only_legacy_artifacts(tmp_path: Path) -> None:
+    _seed_book_beside_legacy(tmp_path)
+    result = run_eval(tmp_path, execution="formula")
+    assert result.exit_code == 0, result.output
+    payload = _eval_payload(tmp_path)
+    assert set(payload["strategies"]) == {"alpha", "beta"}  # type: ignore[arg-type]
+    assert payload["execution"] == "formula"
+    assert payload["benchmark"] == str(tmp_path / "data" / "results" / BENCH_ID)
+
+
+def test_evaluate_no_artifacts_in_mode_names_the_mode(tmp_path: Path) -> None:
+    seed_everything(tmp_path)  # legacy (formula) only
+    result = run_eval(tmp_path, execution=None)  # default book
     assert result.exit_code == 1
-    assert (
-        "error: walk-forward artifacts mix execution modes "
-        "(book: wf-alpha-x; formula: wf-beta-x); evaluate one mode at a time"
-    ) in result.output
+    assert "no walk-forward artifacts in book execution" in result.output
+    assert "--execution formula" in result.output  # points at the skipped ones
     assert "Traceback" not in result.output
-    assert not list((tmp_path / "data" / "results").glob("evaluate-*"))
+
+
+def test_evaluate_rejects_unknown_execution(tmp_path: Path) -> None:
+    seed_everything(tmp_path)
+    result = run_eval(tmp_path, execution="fast")
+    assert result.exit_code == 1
+    assert "unknown execution 'fast'" in result.output
+    assert "Traceback" not in result.output
 
 
 def test_evaluate_picks_benchmark_in_mode(tmp_path: Path) -> None:
@@ -379,7 +446,7 @@ def test_evaluate_picks_benchmark_in_mode(tmp_path: Path) -> None:
         as_wf=False,
     )
     _rewrite_wf_execution(tmp_path, {"alpha": "book", "beta": "book"})
-    result = run_eval(tmp_path)
+    result = run_eval(tmp_path, execution="book")
     assert result.exit_code == 0, result.output
     payload = json.loads(
         (next((tmp_path / "data" / "results").glob("evaluate-*")) / "evaluate.json").read_text()
@@ -412,7 +479,7 @@ def test_evaluate_refuses_explicit_benchmark_in_other_mode(tmp_path: Path) -> No
     seed_everything(tmp_path)
     _rewrite_wf_execution(tmp_path, {"alpha": "book", "beta": "book"})
     bench_dir = tmp_path / "data" / "results" / BENCH_ID
-    result = run_eval(tmp_path, "--benchmark", str(bench_dir))
+    result = run_eval(tmp_path, "--benchmark", str(bench_dir), execution="book")
     assert result.exit_code == 1
     assert "formula" in result.output and "book" in result.output
     assert "Traceback" not in result.output
@@ -427,5 +494,5 @@ def test_evaluate_explicit_unregistered_benchmark_is_formula(tmp_path: Path) -> 
     ok = run_eval(tmp_path, "--benchmark", str(loose))
     assert ok.exit_code == 0, ok.output
     _rewrite_wf_execution(tmp_path, {"alpha": "book", "beta": "book"})
-    bad = run_eval(tmp_path, "--benchmark", str(loose))
+    bad = run_eval(tmp_path, "--benchmark", str(loose), execution="book")
     assert bad.exit_code == 1

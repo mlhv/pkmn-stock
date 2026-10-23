@@ -24,6 +24,14 @@ namespace {
 template <typename T>
 using Arr = nb::ndarray<const T, nb::ndim<1>, nb::c_contig, nb::device::cpu>;
 
+// std::invalid_argument -> ValueError.
+void check_tiers(const Arr<double>& thresholds, const Arr<std::int64_t>& qtys) {
+    if (thresholds.size() != qtys.size())
+        throw std::invalid_argument("tier_thresholds and tier_qtys differ in length (" +
+                                    std::to_string(thresholds.size()) + " vs " +
+                                    std::to_string(qtys.size()) + ")");
+}
+
 // One flat entry point: arrays in, plain Python lists out. Crossed once per
 // run — clarity over marshaling micro-optimizations.
 nb::object run_backtest_py(
@@ -49,6 +57,7 @@ nb::object run_backtest_py(
     else
         throw std::invalid_argument("unknown execution '" + execution +
                                     "'; choose formula, book or book-exact-test");
+    check_tiers(tier_thresholds, tier_qtys);
     std::size_t n_assets = prod_id.size();
 
     std::vector<Day> days(trading_days.data(), trading_days.data() + trading_days.size());
@@ -137,6 +146,7 @@ nb::object run_backtest_py(
 double book_sell_impact_py(double market, double low, std::int64_t qty,
                            Arr<double> tier_thresholds, Arr<std::int64_t> tier_qtys,
                            std::int64_t fallback_max_qty) {
+    check_tiers(tier_thresholds, tier_qtys);
     CostModel cm;
     cm.liquidity_tiers.clear();
     for (std::size_t i = 0; i < tier_thresholds.size(); ++i) {

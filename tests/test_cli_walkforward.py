@@ -313,3 +313,20 @@ def test_walkforward_records_execution(tmp_path: Path) -> None:
     assert json.loads((run_dir / "walkforward.json").read_text())["execution"] == "book"
     (record,) = load_runs(tmp_path)
     assert record.config["execution"] == "book"
+
+
+def test_walkforward_book_and_formula_artifacts_sit_side_by_side(tmp_path: Path) -> None:
+    """Same strategy, same window, both modes: book writes wf-...-book, formula
+    keeps the legacy wf-... name, so neither overwrites the other."""
+    import json
+
+    seed_forty_days(tmp_path)
+    for extra in ([], ["--execution", "formula"]):
+        result = CliRunner().invoke(app, [*_WF_ARGS, *extra, "--root", str(tmp_path)])
+        assert result.exit_code == 0, result.output
+    out = tmp_path / "data" / "results"
+    book_dir = out / "wf-sealed-accumulation-2025-01-01-2025-02-09-book"
+    formula_dir = out / "wf-sealed-accumulation-2025-01-01-2025-02-09"
+    assert sorted(p.name for p in out.iterdir()) == sorted([book_dir.name, formula_dir.name])
+    assert json.loads((book_dir / "walkforward.json").read_text())["execution"] == "book"
+    assert json.loads((formula_dir / "walkforward.json").read_text())["execution"] == "formula"

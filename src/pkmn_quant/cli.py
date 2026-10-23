@@ -528,7 +528,11 @@ def walkforward(
     daily = daily_returns_from_curve(result.stitched_curve)
     stitched_ci = bootstrap_ci(daily, "total_return") if daily.size >= 2 else None
 
-    run_dir = root / "data" / "results" / f"wf-{strategy}-{start}-{end}"
+    # Book runs get a "-book" suffix so a book and a formula walk-forward over
+    # the same window sit side by side instead of overwriting each other;
+    # formula keeps the legacy name, so every existing artifact stays valid.
+    suffix = "-book" if mode == "book" else ""
+    run_dir = root / "data" / "results" / f"wf-{strategy}-{start}-{end}{suffix}"
     if run_dir.exists():
         typer.echo(f"warning: overwriting existing results in {run_dir}", err=True)
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -841,6 +845,15 @@ def evaluate(
     n_boot: int = typer.Option(10_000, min=1, help="Bootstrap resamples."),
     block: float = typer.Option(10.0, help="Mean bootstrap block length, days."),
     seed: int = typer.Option(42, help="Bootstrap seed (results are deterministic)."),
+    execution: str = typer.Option(
+        "book",
+        help=(
+            "Execution mode to evaluate: book (default; modelled resting orders, "
+            "synthetic, built from the day's tcgcsv quote) or formula. Only wf-* "
+            "artifacts recorded in this mode are read (a missing key is formula), "
+            "and the benchmark must be in it too."
+        ),
+    ),
 ) -> None:
     """Cross-strategy rigor: bootstrap CIs, deflated Sharpe, Reality Check.
 
@@ -856,6 +869,7 @@ def evaluate(
 
     from pkmn_quant.data.warehouse import Warehouse
     from pkmn_quant.engine.metrics import TRADING_DAYS_PER_YEAR
+    from pkmn_quant.research.backtest_run import effective_execution
     from pkmn_quant.research.runs import load_runs, record_run
     from pkmn_quant.research.stats import (
         bootstrap_ci,
@@ -870,19 +884,27 @@ def evaluate(
         typer.echo(f"error: {msg}", err=True)
         raise typer.Exit(1)
 
-    # -- discover strategy artifacts (longest curve wins per strategy) --
+    try:
+        execution = effective_execution(execution, True)
+    except ValueError as exc:
+        fail(str(exc))
+
+    # -- discover strategy artifacts in this mode (longest curve wins per strategy) --
+    # Book and formula curves are priced by different execution models and
+    # never belong in one Reality Check, so only artifacts recorded in the
+    # requested mode are read (missing key = formula, as every artifact before
+    # Plan B was); the others are skipped, never mixed in.
     curves: dict[str, pl.DataFrame] = {}
-    # Execution mode of EVERY discovered artifact (missing key = formula, as
-    # every artifact before Plan B was): book and formula curves are priced
-    # by different execution models and never belong in one Reality Check.
-    dirs_by_mode: dict[str, list[str]] = {}
+    n_other_mode = 0
     for d in sorted(results_dir.glob("wf-*")):
         meta, parquet = d / "walkforward.json", d / "stitched_equity.parquet"
         if not (meta.exists() and parquet.exists()):
             continue
         meta_obj = json.loads(meta.read_text())
+        if str(meta_obj.get("execution", "formula")) != execution:
+            n_other_mode += 1
+            continue
         name = str(meta_obj["strategy"])
-        dirs_by_mode.setdefault(str(meta_obj.get("execution", "formula")), []).append(d.name)
         frame = pl.read_parquet(parquet)
         if frame.height < 2:
             typer.echo(f"skipping {d.name}: curve too short", err=True)
@@ -891,14 +913,14 @@ def evaluate(
             typer.echo(f"skipping {d.name}: shorter than another {name} artifact", err=True)
             continue
         curves[name] = frame
-    if len(dirs_by_mode) > 1:
-        listing = "; ".join(
-            f"{mode}: {', '.join(sorted(names))}" for mode, names in sorted(dirs_by_mode.items())
-        )
-        fail(f"walk-forward artifacts mix execution modes ({listing}); evaluate one mode at a time")
-    execution = next(iter(dirs_by_mode), "formula")
     if not curves:
-        fail(f"no walk-forward artifacts found under {results_dir}/wf-*")
+        hint = (
+            f" ({n_other_mode} artifact(s) in the other mode skipped; pass --execution "
+            f"{'formula' if execution == 'book' else 'book'} to evaluate those)"
+            if n_other_mode
+            else ""
+        )
+        fail(f"no walk-forward artifacts in {execution} execution under {results_dir}/wf-*{hint}")
     if len(curves) < 2:
         fail(f"Reality Check needs >= 2 strategies, found {len(curves)}")
 
@@ -1331,7 +1353,10 @@ def horizon(
     if execution == "book":
         from pkmn_quant.engine.native import book_sell_impact
 
-        exit_impact = lambda mark, low, qty: book_sell_impact(run_costs, mark, low, qty)  # noqa: E731
+        def book_exit(mark: float, low: float | None, qty: int) -> float:
+            return book_sell_impact(run_costs, mark, low, qty)
+
+        exit_impact = book_exit
 
     try:
         report = horizon_report(
