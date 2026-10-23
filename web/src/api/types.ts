@@ -71,7 +71,7 @@ export interface HoldingInput {
 export interface BacktestRequest {
   strategy: string; start: string; end: string;
   params: Record<string, number>;
-  cash: number; impact: boolean; kind: string;
+  cash: number; impact: boolean; execution: "book" | "formula"; kind: string;
   holdings: HoldingInput[];
 }
 

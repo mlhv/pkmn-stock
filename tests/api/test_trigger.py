@@ -153,3 +153,33 @@ def test_holding_without_day_one_mark_fails_the_job(live_client: TestClient) -> 
     assert body["status"] == "failed"
     assert "no price on/before window start" in body["error"]
     assert body["run_id"] is None
+
+
+def test_execution_defaults_to_book_and_reaches_the_run(
+    live_client: TestClient, live_root: Path
+) -> None:
+    from pkmn_quant.api.models import BacktestRequest
+    from pkmn_quant.research.runs import load_runs
+
+    assert BacktestRequest(**BASE).execution == "book"
+    body = live_client.post(
+        "/api/backtest", json={**BASE, "strategy": "sealed-accumulation"}
+    ).json()
+    by_id = {r.run_id: r for r in load_runs(live_root)}
+    assert by_id[body["run_id"]].config["execution"] == "book"
+    assert by_id[body["benchmark_run_id"]].config["execution"] == "book"
+
+
+def test_execution_formula_is_honoured(live_client: TestClient, live_root: Path) -> None:
+    from pkmn_quant.research.runs import load_runs
+
+    body = live_client.post(
+        "/api/backtest", json={**BASE, "strategy": "sealed-accumulation", "execution": "formula"}
+    ).json()
+    by_id = {r.run_id: r for r in load_runs(live_root)}
+    assert by_id[body["run_id"]].config["execution"] == "formula"
+    assert by_id[body["benchmark_run_id"]].config["execution"] == "formula"
+
+
+def test_bad_execution_is_422(live_client: TestClient) -> None:
+    assert live_client.post("/api/backtest", json={**BASE, "execution": "fast"}).status_code == 422

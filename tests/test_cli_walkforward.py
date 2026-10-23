@@ -264,3 +264,52 @@ def test_walkforward_report_carries_bootstrap_ci(tmp_path: Path) -> None:
     ci = rigor["stitched_total_return_ci"]
     assert ci["lo"] <= ci["point"] <= ci["hi"]
     assert ci["seed"] == 42
+
+
+_WF_ARGS = [
+    "walkforward",
+    "--strategy",
+    "sealed-accumulation",
+    "--start",
+    "2025-01-01",
+    "--end",
+    "2025-02-09",
+    "--is-days",
+    "10",
+    "--oos-days",
+    "10",
+    "--trials",
+    "2",
+    "--cash",
+    "1000",
+]
+
+
+def test_walkforward_python_engine_rejects_book(tmp_path: Path) -> None:
+    seed_forty_days(tmp_path)
+    result = CliRunner().invoke(
+        app,
+        [*_WF_ARGS, "--engine", "python", "--execution", "book", "--root", str(tmp_path)],
+    )
+    assert result.exit_code != 0
+    assert "Traceback" not in result.output
+    # rich wraps the error in a box; flatten before matching.
+    flat = " ".join(result.output.replace("│", " ").split())
+    assert (
+        "--execution book needs the cpp engine; the Python engine is the frozen formula reference"
+        in flat
+    )
+
+
+def test_walkforward_records_execution(tmp_path: Path) -> None:
+    import json
+
+    from pkmn_quant.research.runs import load_runs
+
+    seed_forty_days(tmp_path)
+    result = CliRunner().invoke(app, [*_WF_ARGS, "--root", str(tmp_path)])
+    assert result.exit_code == 0, result.output
+    run_dir = next(iter((tmp_path / "data" / "results").iterdir()))
+    assert json.loads((run_dir / "walkforward.json").read_text())["execution"] == "book"
+    (record,) = load_runs(tmp_path)
+    assert record.config["execution"] == "book"

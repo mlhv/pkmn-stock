@@ -42,9 +42,11 @@ def write_walkforward_json(
     result: WalkForwardResult,
     strategy_name: str,
     ci: BootstrapCI | None = None,
+    execution: str = "formula",
 ) -> None:
     payload = {
         "strategy": strategy_name,
+        "execution": execution,
         "folds": [
             {
                 "is_start": f.fold.is_start.isoformat(),

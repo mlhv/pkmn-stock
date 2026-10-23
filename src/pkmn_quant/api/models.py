@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict
 
@@ -138,6 +138,7 @@ class BacktestRequest(ApiModel):
     params: dict[str, float | int | str] = {}
     cash: float = 10_000.0
     impact: bool = True
+    execution: Literal["book", "formula"] = "book"
     kind: str = "sealed"
     holdings: list[HoldingInput] = []
 

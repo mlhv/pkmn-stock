@@ -42,6 +42,19 @@ BUY_AND_HOLD_PARAMS: tuple[ParamSpec, ...] = (
 )
 
 
+EXECUTION_MODES = ("book", "formula")
+
+
+def effective_execution(execution: str, impact: bool) -> str:
+    """Map a requested (execution, impact) pair to the mode actually run and
+    recorded. ``--no-impact`` is flat cost and overrides both modes, so an
+    impact-off run is "formula" whatever was asked. Otherwise the request must
+    be "book" or "formula"."""
+    if execution not in EXECUTION_MODES:
+        raise ValueError(f"unknown execution {execution!r}; choose book or formula")
+    return execution if impact else "formula"
+
+
 @dataclass(frozen=True)
 class BacktestRunResult:
     run_id: str | None
@@ -211,11 +224,13 @@ def run_single_backtest(
     end: date,
     *,
     impact: bool = True,
+    execution: str = "book",
     warmup_days: int = 0,
     kind: str = "sealed",
     config_extra: dict[str, Any] | None = None,
 ) -> BacktestRunResult:
     resolved = resolve_params(strategy_name, params)
+    mode = effective_execution(execution, impact)
     wh = Warehouse(Paths(root=root))
     cm = CostModel(impact_enabled=impact)
     prepared = PreparedMarket.prepare(wh, start, end, warmup_days=warmup_days)
@@ -232,6 +247,7 @@ def run_single_backtest(
         warmup_days=warmup_days,
         initial_holdings=holdings,
         prepared=prepared,
+        execution=mode,
     ).run()
 
     run_id = new_run_id()
@@ -248,6 +264,7 @@ def run_single_backtest(
         "start": start.isoformat(),
         "end": end.isoformat(),
         "impact": impact,
+        "execution": mode,
         "warmup_days": warmup_days,
         "cost_model": cm.as_dict(),
     }
@@ -285,6 +302,7 @@ def run_with_benchmark(
     end: date,
     *,
     impact: bool = True,
+    execution: str = "book",
     warmup_days: int = 0,
     kind: str = "sealed",
 ) -> PairedRunResult:
@@ -308,6 +326,7 @@ def run_with_benchmark(
         start=start,
         end=end,
         impact=impact,
+        execution=execution,
         warmup_days=warmup_days,
         kind=kind,
     )
@@ -326,6 +345,7 @@ def run_with_benchmark(
         start=start,
         end=end,
         impact=impact,
+        execution=execution,
         warmup_days=warmup_days,
         kind="sealed",
         config_extra={"benchmark_for": primary.run_id},

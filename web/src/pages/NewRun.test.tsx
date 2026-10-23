@@ -73,7 +73,7 @@ describe("NewRun", () => {
     );
     expect(posted).toMatchObject({
       strategy: "buy-and-hold", start: "2025-01-01", end: "2025-01-08", cash: 500,
-      impact: true, holdings: [],
+      impact: true, execution: "book", holdings: [],
     });
   });
 

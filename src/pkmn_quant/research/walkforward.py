@@ -111,6 +111,7 @@ def run_walkforward(
     engine: str = "python",
     strategy_name: str | None = None,
     workers: int = 1,
+    execution: str = "formula",
 ) -> WalkForwardResult:
     """Run walk-forward optimization and return stitched OOS equity curve.
 
@@ -131,6 +132,10 @@ def run_walkforward(
     ``strategy_factory(params)`` is passed to NativeBacktest as-is and runs
     via the per-bar callback bridge (e.g. ml-ranker). ``strategy_name`` is
     required when ``engine="cpp"``.
+
+    ``execution`` ("formula" at library level, "book" at the CLI) selects the
+    fill model on the cpp engine; ``cost_model.impact_enabled=False`` makes
+    the native engine ignore it. The Python engine is formula-only.
 
     ``workers`` controls fold-level parallelism: ``0`` means auto
     (``min(n_folds, os.cpu_count() or 1)``), ``1`` (the default) runs the
@@ -157,6 +162,13 @@ def run_walkforward(
         )
     if engine not in ("python", "cpp"):
         raise ValueError(f"unknown engine {engine!r}; choose python or cpp")
+    if execution not in ("book", "formula"):
+        raise ValueError(f"unknown execution {execution!r}; choose book or formula")
+    if engine == "python" and execution == "book":
+        raise ValueError(
+            "--execution book needs the cpp engine; "
+            "the Python engine is the frozen formula reference"
+        )
     if engine == "cpp" and strategy_name is None:
         raise ValueError("engine='cpp' requires strategy_name")
 
@@ -222,6 +234,7 @@ def run_walkforward(
                     initial_cash=initial_cash,
                     warmup_days=warmup_days,
                     prepared=prepared,
+                    execution=execution,
                 ).run()
             return Backtest(
                 warehouse=warehouse,

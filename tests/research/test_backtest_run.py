@@ -374,3 +374,15 @@ def test_run_with_benchmark_skips_self_pairing(tmp_path: Path) -> None:
         kind="sealed",
     )
     assert paired.benchmark is None
+
+
+def test_effective_execution() -> None:
+    import pytest
+
+    from pkmn_quant.research.backtest_run import effective_execution
+
+    assert effective_execution("book", True) == "book"
+    assert effective_execution("formula", True) == "formula"
+    assert effective_execution("book", False) == "formula"
+    with pytest.raises(ValueError, match="book"):
+        effective_execution("fast", True)

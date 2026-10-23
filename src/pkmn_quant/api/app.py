@@ -203,6 +203,7 @@ def create_app(root: Path, executor: Executor | None = None) -> FastAPI:
                 start=start,
                 end=end,
                 impact=req.impact,
+                execution=req.execution,
                 kind=req.kind,
             )
             bench_id = paired.benchmark.run_id if paired.benchmark else None

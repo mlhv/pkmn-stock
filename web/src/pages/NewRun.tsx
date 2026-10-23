@@ -15,6 +15,7 @@ export function NewRun() {
   const [end, setEnd] = useState("");
   const [cash, setCash] = useState(10000);
   const [impact, setImpact] = useState(true);
+  const [execution, setExecution] = useState<"book" | "formula">("book");
   const [kind, setKind] = useState("sealed");
   const [holdings, setHoldings] = useState<HoldingRow[]>([]);
   const [submitError, setSubmitError] = useState<string | null>(null);
@@ -27,7 +28,7 @@ export function NewRun() {
     );
     try {
       await apiClient.triggerBacktest({
-        strategy, start, end, params: filled, cash, impact, kind,
+        strategy, start, end, params: filled, cash, impact, execution, kind,
         holdings: holdings.map(({ product_id, sub_type, quantity, avg_cost, opened_on }) =>
           ({ product_id, sub_type, quantity, avg_cost, opened_on })),
       });
@@ -86,6 +87,12 @@ export function NewRun() {
                   onChange={(e) => setImpact(e.target.checked)} />
                 Walk-the-spread market impact
               </label>
+              <label htmlFor="execution">Execution</label>
+              <select id="execution" value={execution}
+                onChange={(e) => setExecution(e.target.value as "book" | "formula")}>
+                <option value="book">book (modelled resting orders)</option>
+                <option value="formula">formula</option>
+              </select>
               {strategy === "buy-and-hold" && (
                 <>
                   <label htmlFor="kind">Universe</label>

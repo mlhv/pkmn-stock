@@ -326,6 +326,12 @@ def _read_holdings_csv(path: Path) -> list[SeededHolding]:
     return out
 
 
+def _execution_line(mode: str) -> str:
+    if mode == "book":
+        return "execution: book (modelled resting orders, synthetic)"
+    return f"execution: {mode}"
+
+
 @app.command()
 def backtest(
     start: str = typer.Option(..., help="Backtest start date (YYYY-MM-DD)."),
@@ -348,10 +354,18 @@ def backtest(
         "--impact/--no-impact",
         help="Walk-the-spread market impact on fills (see Plan 9 spec).",
     ),
+    execution: str = typer.Option(
+        "book",
+        help=(
+            "book (default): fills walk modelled resting orders (synthetic, built "
+            "from the day's tcgcsv quote), whole-cent levels. formula: the "
+            "continuous walk-the-spread charge. --no-impact overrides both."
+        ),
+    ),
     root: Path = typer.Option(Path("."), help="Project root holding the data/ directory."),
 ) -> None:
     """Run a single backtest of any registered strategy with cash + holdings."""
-    from pkmn_quant.research.backtest_run import run_single_backtest
+    from pkmn_quant.research.backtest_run import effective_execution, run_single_backtest
 
     try:
         start_date = dt.date.fromisoformat(start)
@@ -382,6 +396,7 @@ def backtest(
             start=start_date,
             end=end_date,
             impact=impact,
+            execution=execution,
             kind=kind,
         )
     except ValueError as exc:
@@ -391,6 +406,7 @@ def backtest(
     if out.run_id is not None:
         typer.echo(f"run recorded: {out.run_id}")
     typer.echo(f"strategy: {result.strategy_name}  ({len(result.fills)} fills)")
+    typer.echo(_execution_line(effective_execution(execution, impact)))
     for key, value in result.summary.items():
         typer.echo(f"{key}: {value:.4f}")
     typer.echo(f"results written to {out.artifact_dir}")
@@ -426,6 +442,14 @@ def walkforward(
         0,
         help="Fold-level parallelism: 0 = auto (min(folds, cores)), 1 = serial, N = N threads.",
     ),
+    execution: str = typer.Option(
+        "book",
+        help=(
+            "book (default): fills walk modelled resting orders (synthetic, built "
+            "from the day's tcgcsv quote), whole-cent levels. formula: the "
+            "continuous walk-the-spread charge. --no-impact overrides both."
+        ),
+    ),
     root: Path = typer.Option(Path("."), help="Project root holding the data/ directory."),
 ) -> None:
     """Walk-forward analysis: optimize in-sample, evaluate out-of-sample."""
@@ -434,6 +458,7 @@ def walkforward(
     from pkmn_quant.data.warehouse import Warehouse
     from pkmn_quant.engine.costs import CostModel
     from pkmn_quant.research.artifacts import write_walkforward_json
+    from pkmn_quant.research.backtest_run import effective_execution
     from pkmn_quant.research.folds import Fold
     from pkmn_quant.research.registry import REGISTRY
     from pkmn_quant.research.report import render_markdown
@@ -456,6 +481,15 @@ def walkforward(
         raise typer.BadParameter(f"unknown engine {engine!r}; choose python or cpp")
     if workers < 0:
         raise typer.BadParameter(f"workers must be >= 0, got {workers}")
+    try:
+        mode = effective_execution(execution, impact)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    if engine == "python" and mode == "book":
+        raise typer.BadParameter(
+            "--execution book needs the cpp engine; "
+            "the Python engine is the frozen formula reference"
+        )
     try:
         start_date = dt.date.fromisoformat(start)
         end_date = dt.date.fromisoformat(end)
@@ -486,6 +520,7 @@ def walkforward(
         engine=engine,
         strategy_name=strategy,
         workers=workers,
+        execution=mode,
     )
 
     from pkmn_quant.research.stats import bootstrap_ci, daily_returns_from_curve
@@ -501,7 +536,7 @@ def walkforward(
     (run_dir / "report.md").write_text(
         render_markdown(result, strategy_name=strategy, ci=stitched_ci)
     )
-    write_walkforward_json(run_dir, result, strategy_name=strategy, ci=stitched_ci)
+    write_walkforward_json(run_dir, result, strategy_name=strategy, ci=stitched_ci, execution=mode)
 
     from pkmn_quant.research.runs import record_run
 
@@ -523,6 +558,7 @@ def walkforward(
             "objective_metric": objective_metric,
             "cost_model": cm.as_dict(),
             "engine": engine,
+            "execution": mode,
         },
         results=result.summary,
         artifact_path=run_dir,
@@ -538,6 +574,7 @@ def walkforward(
         typer.echo(f"run recorded: {run_id}")
 
     typer.echo(f"strategy: {strategy}  folds: {len(result.folds)}")
+    typer.echo(_execution_line(mode))
     for key, value in result.summary.items():
         typer.echo(f"{key}: {value:.4f}")
     typer.echo(f"report written to {run_dir / 'report.md'}")
