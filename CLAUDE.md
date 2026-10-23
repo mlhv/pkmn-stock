@@ -568,7 +568,7 @@ tcgcsv.com). Design spec: `docs/superpowers/specs/2026-06-09-pkmn-quant-design.m
   (`docs/benchmarks/iex-book.md`; DEEP+ decode + `BookSet::apply` on the
   2024-12-23 DPLS file, 50,959,176 messages, Apple M1 Pro, 7-vCPU OrbStack
   Ubuntu 24.04 arm64 VM, g++ 13.3.0, `-O3 -DNDEBUG -ffp-contract=off`, timer
-  cntvct_el0 at 24 MHz = 41.7 ns per tick with ~10 ns empty-pair overhead).
+  cntvct_el0 at 24 MHz = 41.7 ns per tick; empty read pair 9.5-11.9 ns mean across the three runs, 10.5 ns in the run the percentiles come from).
   The Task 6 optimization (pooled order arena, open-addressing id map,
   contiguous levels, commit bc6e805) was kept on an interleaved A/B of 9
   pairs: best-of-9 ram throughput 4,926,764 -> 7,584,533 msgs/s, median
@@ -635,6 +635,7 @@ uv.lock together).
 # Plan A (IEX order book); the VM is the Linux build/benchmark host
 orb -m ubuntu bash -lc 'cd /Users/ml3787/pkmn-stock && cmake -S cpp -B cpp/build-linux -DPKMN_BUILD_TESTS=ON && cmake --build cpp/build-linux -j && ctest --test-dir cpp/build-linux'
 uv run python scripts/iex_hist.py --date 20241223 --feeds DPLS DEEP TOPS --dest data/iex   # download (gzip kept on disk)
+orb -m ubuntu bash -lc 'cd /Users/ml3787/pkmn-stock && cmake -S cpp -B cpp/build-linux-release -DCMAKE_BUILD_TYPE=Release && cmake --build cpp/build-linux-release -j --target iex_oracle'   # builds the Release iex_oracle (bench_iex.sh builds only iex_bench)
 cpp/build-linux-release/iex_oracle --deep-plus data/iex/20241223_IEXTP1_DPLS1.0.pcap.gz \
     --deep data/iex/20241223_IEXTP1_DEEP1.0.pcap.gz --tops data/iex/20241223_IEXTP1_TOPS1.6.pcap.gz  # exits 1 on mismatch (currently 1, see docs/iex-oracle.md)
 scripts/bench_iex.sh [--profile] [--no-record]            # re-execs in the VM, prepends a section to docs/benchmarks/iex-book.md
