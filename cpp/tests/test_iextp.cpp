@@ -11,6 +11,7 @@
 #include "pkmn_md/deep_plus.hpp"
 #include "pkmn_md/feed_reader.hpp"
 #include "pkmn_md/iextp.hpp"
+#include "pkmn_md/replay.hpp"
 #include "pkmn_md/sequence.hpp"
 
 using namespace pkmn::md;
@@ -245,13 +246,8 @@ Replayed replay(const std::string& path) {
     Replayed r;
     while (fr.next(seg)) {
         ++r.segments;
-        if (seg.restart) {
-            ++r.restarts;
-            books.clear_all();
-        }
-        for_each_applied(seg, [&](std::span<const std::uint8_t> m) {
-            if (decode_deep_plus(m, ev, st)) books.apply(ev);
-        });
+        if (seg.restart) ++r.restarts;
+        apply_deep_plus_segment(seg, books, ev, st);
     }
     r.orders = books.order_count();
     r.dups = fr.tracker().duplicates();
@@ -310,4 +306,49 @@ TEST_CASE("feed reader: stream restart is flagged and the new epoch applied") {
     CHECK(fr.tp_parse_failures() == 1);
     CHECK(fr.by_protocol().at(kTops) == 1);
     CHECK(fr.tracker().resets() == 1);
+}
+
+TEST_CASE("segment filter over in-memory payloads matches feed reader") {
+    // iex_bench's ram mode feeds held payloads to SegmentFilter directly;
+    // it must accept, skip and restart exactly as FeedReader does.
+    const std::vector<Bytes> segs = {
+        with_send_time(tp_segment(kDeepPlus, 1, {deep_plus_add(1), deep_plus_add(2)}), 100),
+        with_send_time(tp_segment(kDeepPlus, 1, {deep_plus_add(1)}), 50),   // replay: older send time
+        with_send_time(tp_segment(kDeepPlus, 1, {deep_plus_add(1)}), 200),  // restart, reuses id 1
+        with_send_time(tp_segment(kDeepPlus, 2, {deep_plus_add(9)}), 201),
+        tp_segment(kTops, 3, {deep_plus_add(7)}),
+    };
+    std::vector<std::string> payloads;
+    for (const Bytes& s : segs) payloads.push_back(as_string(s));
+    payloads.push_back("short");
+
+    SegmentFilter filt(kDeepPlus);
+    BookSet books;
+    BookEvent ev{};
+    DecodeStats st{};
+    Segment seg{};
+    std::uint64_t restarts = 0, accepted = 0, timed = 0;
+    for (std::size_t i = 0; i < payloads.size(); ++i) {
+        const auto* b = reinterpret_cast<const std::uint8_t*>(payloads[i].data());
+        if (!filt.accept(std::span<const std::uint8_t>(b, payloads[i].size()), 0, i + 1, seg)) continue;
+        ++accepted;
+        CHECK(seg.packet_no == i + 1);
+        if (seg.restart) ++restarts;
+        apply_deep_plus_segment(seg, books, ev, st, [&](auto&& step) {
+            ++timed;
+            step();
+        });
+    }
+    TempFile f(".pcapng");
+    write_raw(f.path, capture(payloads, {1, 2, 3, 4, 5, 6}));
+    const Replayed r = replay(f.path);
+    CHECK(accepted == r.segments);
+    CHECK(restarts == r.restarts);
+    CHECK(restarts == 1);
+    CHECK(books.order_count() == r.orders);
+    CHECK(books.total_anomalies().duplicate_add == r.duplicate_add);
+    CHECK(filt.tracker().duplicates() == r.dups);
+    CHECK(filt.tp_parse_failures() == 1);
+    CHECK(filt.by_protocol().at(kTops) == 1);
+    CHECK(timed == 4);  // 2 + 1 + 1 applied messages; the replayed one skipped
 }

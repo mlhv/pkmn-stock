@@ -42,6 +42,44 @@ struct Segment {
     std::int64_t expected_before;  // tracker.expected() before this segment (before any reset)
 };
 
+// The per-packet half of FeedReader: everything after the pcapng layer.
+// Feed it every UDP payload in file order; it applies the protocol filter,
+// stream filter, framing check, restart policy and sequence tracker
+// described above. FeedReader is a PcapngReader plus one of these; iex_bench
+// drives one directly over payloads held in memory, so a replay from RAM
+// applies exactly the rules a streamed read does.
+class SegmentFilter {
+  public:
+    explicit SegmentFilter(std::uint16_t protocol_id) : protocol_id_(protocol_id) {}
+
+    // True if `udp_payload` is an accepted segment; `out` is then filled
+    // (out.payload aliases `udp_payload`). `packet_no` is the caller's
+    // 1-based packet index, copied into out.packet_no.
+    bool accept(std::span<const std::uint8_t> udp_payload, std::int64_t capture_ts_ns, std::uint64_t packet_no,
+                Segment& out);
+
+    std::uint64_t tp_parse_failures() const { return tp_parse_failures_; }
+    std::uint64_t other_stream() const { return other_stream_; }
+    std::uint64_t segments() const { return segments_; }
+    std::uint64_t heartbeats() const { return heartbeats_; }
+    const std::map<std::uint16_t, std::uint64_t>& by_protocol() const { return by_protocol_; }
+    bool have_stream() const { return have_stream_; }
+    std::uint32_t channel() const { return channel_; }
+    std::uint32_t session() const { return session_; }
+    std::int64_t first_seq() const { return first_seq_; }
+    std::int64_t last_seq_end() const { return last_seq_end_; }
+    const SequenceTracker& tracker() const { return tracker_; }
+
+  private:
+    std::uint16_t protocol_id_;
+    std::uint64_t tp_parse_failures_ = 0, other_stream_ = 0, segments_ = 0, heartbeats_ = 0;
+    std::map<std::uint16_t, std::uint64_t> by_protocol_;  // a handful of keys
+    SequenceTracker tracker_;
+    bool have_stream_ = false;
+    std::uint32_t channel_ = 0, session_ = 0;
+    std::int64_t first_seq_ = 0, last_seq_end_ = 0, max_send_time_ = 0;
+};
+
 class FeedReader {
   public:
     // Throws std::runtime_error as PcapngReader does.
@@ -57,28 +95,22 @@ class FeedReader {
     std::uint64_t packets() const { return packets_; }
     bool limit_reached() const { return limit_ != 0 && packets_ >= limit_; }
     std::uint64_t skipped_frames() const { return reader_.skipped_frames(); }
-    std::uint64_t tp_parse_failures() const { return tp_parse_failures_; }
-    std::uint64_t other_stream() const { return other_stream_; }
-    std::uint64_t segments() const { return segments_; }
-    std::uint64_t heartbeats() const { return heartbeats_; }
-    const std::map<std::uint16_t, std::uint64_t>& by_protocol() const { return by_protocol_; }
-    bool have_stream() const { return have_stream_; }
-    std::uint32_t channel() const { return channel_; }
-    std::uint32_t session() const { return session_; }
-    std::int64_t first_seq() const { return first_seq_; }
-    std::int64_t last_seq_end() const { return last_seq_end_; }
-    const SequenceTracker& tracker() const { return tracker_; }
+    std::uint64_t tp_parse_failures() const { return filter_.tp_parse_failures(); }
+    std::uint64_t other_stream() const { return filter_.other_stream(); }
+    std::uint64_t segments() const { return filter_.segments(); }
+    std::uint64_t heartbeats() const { return filter_.heartbeats(); }
+    const std::map<std::uint16_t, std::uint64_t>& by_protocol() const { return filter_.by_protocol(); }
+    bool have_stream() const { return filter_.have_stream(); }
+    std::uint32_t channel() const { return filter_.channel(); }
+    std::uint32_t session() const { return filter_.session(); }
+    std::int64_t first_seq() const { return filter_.first_seq(); }
+    std::int64_t last_seq_end() const { return filter_.last_seq_end(); }
+    const SequenceTracker& tracker() const { return filter_.tracker(); }
 
   private:
     PcapngReader reader_;
-    std::uint16_t protocol_id_;
+    SegmentFilter filter_;
     std::uint64_t limit_ = 0, packets_ = 0;
-    std::uint64_t tp_parse_failures_ = 0, other_stream_ = 0, segments_ = 0, heartbeats_ = 0;
-    std::map<std::uint16_t, std::uint64_t> by_protocol_;  // a handful of keys
-    SequenceTracker tracker_;
-    bool have_stream_ = false;
-    std::uint32_t channel_ = 0, session_ = 0;
-    std::int64_t first_seq_ = 0, last_seq_end_ = 0, max_send_time_ = 0;
 };
 
 // Calls f(message) for each message of `seg` with index >= seg.skip, in order.

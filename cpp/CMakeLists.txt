@@ -63,6 +63,25 @@ if(NOT SKBUILD)
   target_link_libraries(iex_decode PRIVATE pkmn_md)
   add_executable(iex_oracle tools/iex_oracle.cpp)
   target_link_libraries(iex_oracle PRIVATE pkmn_md)
+
+  # iex_bench reports its own build in its JSON. Both values are captured at
+  # configure time, so scripts/bench_iex.sh re-runs the configure step before
+  # every bench build.
+  add_executable(iex_bench tools/iex_bench.cpp)
+  target_link_libraries(iex_bench PRIVATE pkmn_md)
+  string(TOUPPER "${CMAKE_BUILD_TYPE}" _pkmn_bt)
+  string(STRIP "${CMAKE_CXX_FLAGS} ${CMAKE_CXX_FLAGS_${_pkmn_bt}} -ffp-contract=off" _pkmn_flags)
+  set(_pkmn_flags "CMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}: ${_pkmn_flags}")
+  execute_process(COMMAND git rev-parse --short=12 HEAD WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+                  OUTPUT_VARIABLE _pkmn_sha OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+  execute_process(COMMAND git diff --quiet HEAD -- . ../scripts WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+                  RESULT_VARIABLE _pkmn_dirty ERROR_QUIET)
+  if(NOT _pkmn_sha)
+    set(_pkmn_sha "unknown")
+  elseif(NOT _pkmn_dirty EQUAL 0)
+    set(_pkmn_sha "${_pkmn_sha}-dirty")
+  endif()
+  target_compile_definitions(iex_bench PRIVATE "PKMN_BENCH_FLAGS=\"${_pkmn_flags}\"" "PKMN_BENCH_GIT_SHA=\"${_pkmn_sha}\"")
 endif()
 
 if(SKBUILD)
@@ -104,7 +123,7 @@ if(PKMN_BUILD_TESTS)
   # global operator new, used to count allocations, stays contained).
   if(NOT SKBUILD)
     add_executable(md_tests tests/test_pcapng.cpp tests/test_iextp.cpp tests/test_deep_plus.cpp
-      tests/test_book_set.cpp tests/test_deep.cpp)
+      tests/test_book_set.cpp tests/test_deep.cpp tests/test_timing.cpp)
     target_link_libraries(md_tests PRIVATE pkmn_md ZLIB::ZLIB Catch2::Catch2WithMain)
     catch_discover_tests(md_tests)
   endif()
