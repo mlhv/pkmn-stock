@@ -12,6 +12,7 @@ add_library(pkmn_engine_core STATIC
   src/pkmn_engine/portfolio.cpp
   src/pkmn_engine/market.cpp
   src/pkmn_engine/execution.cpp
+  src/pkmn_engine/ladder.cpp
   src/pkmn_engine/backtest.cpp
   src/pkmn_engine/strategies/buy_and_hold.cpp
   src/pkmn_engine/strategies/sealed_accumulation.cpp
@@ -26,6 +27,7 @@ target_compile_options(pkmn_engine_core PUBLIC -ffp-contract=off)
 # for static-library objects by default (macOS does), so CI's .so link fails
 # without this.
 set_target_properties(pkmn_engine_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
+target_link_libraries(pkmn_engine_core PUBLIC pkmn_book)
 
 # The order book: pure C++, no deps, not part of the Python module. Same FP
 # flags as the core so anything that later links both stays consistent.
@@ -113,6 +115,7 @@ if(PKMN_BUILD_TESTS)
     tests/test_concurrency.cpp
     tests/test_order_book.cpp
     tests/test_order_book_paths.cpp
+    tests/test_ladder.cpp
   )
   find_package(Threads REQUIRED)
   target_link_libraries(engine_tests PRIVATE pkmn_engine_core pkmn_book Catch2::Catch2WithMain Threads::Threads)

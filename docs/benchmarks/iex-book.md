@@ -303,8 +303,8 @@ untouched; `cpp/tests/test_order_book_paths.cpp` (added in the review fix) cover
 delete across the wrap-around, the binary-search level path, slot reuse after clear, and a seeded
 differential run against a naive reference book; a 14-seed randomized differential trace (add/remove/modify/execute/match/depth/clear, deep books
 past the 8-level linear probe, ASan + UBSan) hashed identically for both books, but that was a scratch run
-that is not in the repo (the committed differential test in `test_order_book_paths.cpp` runs 3 seeds); `iex_oracle` on the full
-2024-12-23 day (VM Release, default args) gives output identical to the baseline build line for line except
+that is not in the repo (the committed differential test in `test_order_book_paths.cpp` runs 3 seeds); `iex_oracle` on the
+2024-12-23 files (an incident day; see docs/iex-oracle.md) (VM Release, default args) gives output identical to the baseline build line for line except
 wall time and RSS: 96,980,017 points evaluated (96,974,545 checked once the 5,472 excluded by name are
 taken out; the tool counted them together at the time), 7,870 mismatches (deep_level_ask 7, deep_level_bid 29,
 tops_ask 6,632, tops_bid 1,202, same symbols), book anomalies all 0, exit 1.
