@@ -4,14 +4,35 @@ Results of `iex_oracle`. It rebuilds the order book from IEX's order-by-order DE
 and checks it against IEX's own aggregated DEEP price levels and TOPS best quotes for the
 same day. Newest first.
 
-## 2026-10-22: 2024-12-23 full day, success criterion NOT met
+## 2026-10-22: 2024-12-23 (an incident day, not a full normal session), success criterion NOT met
 
 **The spec's success criterion, "matches at every checked point on at least one full real
-day", is not met on 2024-12-23.** 7,870 of 96,980,017 checked points mismatch. Almost all
-of them (7,819) trace to an IEX-side order-id rewind that no IEX specification documents.
+day", is not met on 2024-12-23.** 7,870 of 96,974,545 checked points mismatch (96,980,017
+checkpoints evaluated, of which the 5,472 excluded by name are not checked). Almost all of
+them (7,819) trace to an IEX-side order-id rewind that no IEX specification documents.
 The open options are a second oracle day, asking IEX, or a named rule approved by the
-owner. None has been taken. The tool keeps reporting the rewind family, and the default
-full-day run exits 1.
+owner. None has been taken. The tool keeps reporting the rewind family. A run over all
+three files exits 1 (MISMATCH): every validity precondition held, and there are
+mismatches.
+
+**What the files cover.** 2024-12-23 is not a normal full session:
+
+- At 10:22:29.38 ET every symbol gets an Operational Halt.
+- At 11:32:50.036 ET all three feeds restart from sequence 1. DEEP+ messages resume at
+  11:39 ET.
+- DEEP+ carries 50,878,184 messages before the restart and 80,992 after it (50,959,176 in
+  all).
+- The last book event on DEEP+ and DEEP is at 13:45:40.82 ET, and the last TOPS quote at
+  13:45:52.02 ET. Regular hours end at 16:00 ET. The DEEP+ stream itself runs on with
+  system events to its end-of-messages event at 17:10 ET, but carries no book event after
+  13:45:40.
+
+So the checks cover a morning plus a thin early afternoon, not a trading day. **Even a
+zero-mismatch run on these files would arguably not meet the "full real day" criterion.**
+The second oracle day should be a normal session: no incident, no mid-day restart, and
+not on a DST boundary (the tool's ET labels assume UTC-5). One inference, not
+established: the 09:48:38 order-id rewind and the 6 `H`/`O`/`P` messages in that second
+may be part of the same incident.
 
 ### Day and files
 
@@ -27,7 +48,32 @@ cpp/build-linux-release/iex_oracle --deep-plus data/iex/20241223_IEXTP1_DPLS1.0.
     --deep data/iex/20241223_IEXTP1_DEEP1.0.pcap.gz --tops data/iex/20241223_IEXTP1_TOPS1.6.pcap.gz
 ```
 
-Wall time 72.5 s, peak RSS 48.3 MiB.
+First run (2026-10-22): wall time 72.5 s, peak RSS 48.3 MiB. Re-run 2026-10-23 after the
+exit-status and checked-count fix (same files, same command): wall time 61.0 s, peak RSS
+51.1 MiB, and every count identical except that the TOPS line now splits evaluated,
+excluded and checked.
+
+### Exit status
+
+| exit | result | meaning |
+|---|---|---|
+| 0 | PASS | every validity precondition held, and 0 mismatches |
+| 1 | MISMATCH | every validity precondition held, and at least one mismatch |
+| 3 | INCONCLUSIVE | at least one validity precondition failed, whatever the mismatch count |
+| 2 | error | usage or I/O error |
+
+The validity preconditions are checked after the run, and each failure is printed by
+name:
+
+- On each of DEEP+, DEEP and TOPS: 0 sequence gaps, 0 `tp_parse_failures` and 0
+  `other_stream` segments. A restart under a new session id would make every later segment
+  `other_stream`, which would otherwise leave the rest of that feed silently unchecked.
+- 0 DEEP+ per-symbol timestamp regressions, and 0 DEEP transitions left open.
+- Book anomalies `unknown_id`, `duplicate_add` and `exec_clamped` all 0.
+- 0 `late_checkpoint` (a check that arrived after DEEP+ had passed its timestamp).
+- At least 1 DEEP check and at least 1 TOPS check.
+
+On 2024-12-23 every precondition holds and the run exits 1.
 
 ### Headline
 
@@ -35,10 +81,13 @@ Wall time 72.5 s, peak RSS 48.3 MiB.
 |---|---|
 | DEEP+ book events applied | 50,165,396 (0 gaps, 0 duplicates, 1 restart) |
 | DEEP event-complete checkpoints | 49,732,804 (51,357,193 levels checked) |
-| TOPS checkpoints | 45,622,824 |
-| **checked points** | **96,980,017** |
-| **mismatches** | **7,870** (0.008%) in 8 symbols |
-| excluded by name | 5,472 (`tops_unavailable_zero_quote`) |
+| TOPS checkpoints | 45,622,824 evaluated, 5,472 excluded by name, 45,617,352 checked |
+| points evaluated | 96,980,017 |
+| excluded by name | 5,472 (`tops_unavailable_zero_quote`), not in checked |
+| **checked points** | **96,974,545** |
+| **mismatches** | **7,870** (0.008% of checked) in 8 symbols |
+| validity preconditions | all held |
+| exit status | 1 (MISMATCH) |
 | book anomalies | unknown_id 0, duplicate_add 0, exec_clamped 0 |
 | per-symbol DEEP+ timestamp regressions | 0 |
 | late checkpoints (merge failures) | 0 |
@@ -79,8 +128,11 @@ capture time.
   Availability flag 0x80 ("halted, paused, or otherwise not available for trading on IEX",
   TOPS v1.66 p.26) and all four fields zero. DEEP+ and DEEP send no deletes, so the book
   keeps its resting orders. Only that exact shape is excluded: flag 0x80 *and* all fields
-  zero. Every other quote is checked. The spec documents the flag; the all-zero values are
-  observed behaviour.
+  zero, against a book that still has orders. Every other quote is checked. The spec
+  documents the flag; the all-zero values are observed behaviour. The excluded quotes are
+  not in the checked count. The same zero quote against a book that is itself empty on both
+  sides is compared like any other quote, matches, and is counted as checked. The tool does
+  not print how many of those there are.
 - **Round lots (counted by default, 51).** The round lot comes from the DEEP+ Security
   Directory (p.14) when one is sent. That day only 6 are sent, all for IEX-listed
   securities. Otherwise the round lot is 100. NVR (45 mismatches), MKL (3) and SEB (3) are
@@ -142,7 +194,10 @@ capture time.
 - **Simultaneous restart.** All three feeds restart at the identical send_time
   1734971570036197067 (11:32:50.036 ET), each detected by its own sequence tracker. The
   oracle resolves every pending check from before the restart, then clears every book.
-  Data resumes at 11:39 ET. All three feeds end at about 13:45:40 ET (TOPS 13:45:52).
+  Data resumes at 11:39 ET. DEEP+ carries 50,878,184 messages before the restart and only
+  80,992 after it. The last book event on DEEP+ and DEEP is at 13:45:40.82 ET, and the last
+  TOPS quote at 13:45:52.02 ET. Regular hours end at 16:00 ET. The DEEP+ stream continues
+  with system events only, up to end-of-messages at 17:10 ET.
 - **Operational halt** of every symbol at 10:22:29.38 ET; see Halt and round-lot handling.
 - 0 gaps and 0 duplicates on all three feeds. DEEP+ capture timestamps run about 37 s
   ahead of feed timestamps, which is why only feed timestamps are used.

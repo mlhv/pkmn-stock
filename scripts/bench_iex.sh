@@ -9,8 +9,9 @@
 #
 # Steps:
 #   1. Configure + build iex_bench as Release in cpp/build-linux-release
-#      (re-configured every time: the binary's git SHA and flags are captured
-#      at configure time).
+#      (re-configured every time, because the compile flags are captured at
+#      configure time; the git SHA, dirty flag and working-tree hash are
+#      regenerated on every build by cpp/cmake/bench_build_info.cmake).
 #   2. iex_bench --mode ram three times, --mode stream once.
 #   3. Prepend a dated section to docs/benchmarks/iex-book.md (newest first):
 #      hardware line, git SHA, compiler, flags, the best ram msgs/sec, the
@@ -129,6 +130,8 @@ best, median = by_rate[-1], by_rate[1]
 rates = [r["msgs_per_sec"] for r in rams]
 spread = (max(rates) - min(rates)) / median["msgs_per_sec"] * 100
 head = rams[0]
+median_no = rams.index(median) + 1  # the latency source: its overhead goes in the Timer line
+overheads = ", ".join(f"{r['timer_overhead_ns']:.1f}" for r in rams)
 res = head["timer_resolution_ns"]
 # Within this many ticks a percentile's +-1-tick quantization is >= 10% of it.
 QUANT_TICKS = 10
@@ -154,10 +157,14 @@ L.append(f"- Host: `{head['host']}`")
 L.append(f"- git: `{head['git_sha']}`" + (f", working-tree hash `{head['tree_hash']}`" if head.get("tree_hash") else ""))
 L.append(f"- Compiler: `{head['compiler']}`")
 L.append(f"- Flags: `{head['flags']}`")
-L.append(f"- Timer: {head['timer']}, cntfrq {head['cntfrq_hz']:,} Hz, calibrated "
-         f"{head['ticks_per_ns']:.6f} ticks/ns, resolution {head['timer_resolution_ns']:.1f} ns per tick; "
-         f"empty ticks() pair {head['timer_overhead_ns']:.1f} ns mean (p50 {head['timer_overhead_ticks_p50']} ticks); "
-         f"steady_clock resolution {head['steady_clock_resolution_ns']:.0f} ns")
+# Timer figures come from the median run, the run the percentiles come from,
+# so the overhead quoted here is the one included in the quoted latencies.
+L.append(f"- Timer (ram run {median_no}, the median run the percentiles come from): {median['timer']}, "
+         f"cntfrq {median['cntfrq_hz']:,} Hz, calibrated "
+         f"{median['ticks_per_ns']:.6f} ticks/ns, resolution {median['timer_resolution_ns']:.1f} ns per tick; "
+         f"empty ticks() pair {median['timer_overhead_ns']:.1f} ns mean (p50 {median['timer_overhead_ticks_p50']} ticks; "
+         f"{overheads} ns in runs 1-3); "
+         f"steady_clock resolution {median['steady_clock_resolution_ns']:.0f} ns")
 L.append(f"- ram held {head['held_bytes']:,} payload bytes in {head['held_packets']:,} packets "
          f"(cap {head['ram_bytes']:,}, truncated: {str(head['ram_truncated']).lower()}); "
          f"{head['messages']:,} messages, {head['restarts']} restart(s)")

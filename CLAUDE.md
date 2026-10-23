@@ -533,8 +533,8 @@ tcgcsv.com). Design spec: `docs/superpowers/specs/2026-06-09-pkmn-quant-design.m
   conclusion, because every strategy figure moves against a bar that moves
   too.
 - **Plan A (IEX order book) complete on feat/iex-book (615 passed pytest via
-  `uv sync --group api --group dashboard && uv run pytest`; 117 Catch2 tests
-  via ctest on macOS and 117 in the OrbStack VM; ruff, format and mypy clean
+  `uv sync --group api --group dashboard && uv run pytest`; 130 Catch2 tests
+  via ctest on macOS and 130 in the OrbStack VM; ruff, format and mypy clean
   over 58 source files).** Plan A of 4 in the market-data / CLOB track (spec:
   `docs/superpowers/specs/2026-10-22-market-data-and-clob-design.md`, plan `docs/superpowers/plans/2026-10-22-iex-book.md`).
   **This branch was cut from `feat/instrument-repair-horizon`, not main, by
@@ -542,16 +542,26 @@ tcgcsv.com). Design spec: `docs/superpowers/specs/2026-06-09-pkmn-quant-design.m
   carries those commits with it.** Shipped, all C++20 under `cpp/` with no
   Python dependency: a price-time `OrderBook` (`cpp/src/pkmn_book`), a
   streaming pcapng-over-zlib reader, IEX-TP framing with sequence tracking,
-  DEEP+ and DEEP decoders, a per-symbol `BookSet` (`cpp/src/pkmn_md`), tools
+  DEEP+ and DEEP decoders and the TOPS Quote decoder, a per-symbol `BookSet`
+  (`cpp/src/pkmn_md`), tools
   `iex_decode`, `pcap_count`, `iex_oracle`, `iex_bench` (`cpp/tools`), the
   HIST downloader `scripts/iex_hist.py`, and `scripts/bench_iex.sh`. Plans B-D
   are NOT STARTED. **Oracle result, stated plainly: the spec's success
   criterion ("matches at every checked point on at least one full real day")
   is NOT met on 2024-12-23.** `iex_oracle` rebuilds the book from DEEP+ and
-  checks it against DEEP price levels and TOPS best quotes: of 96,980,017
-  checkpoints evaluated (that figure includes 5,472 halt zero-quotes excluded
-  by name, `tops_unavailable_zero_quote`, so it is not a "matched" count),
-  7,870 mismatch (0.008%) in 8 symbols; the default full-day run exits 1.
+  checks it against DEEP price levels and TOPS best quotes: 96,980,017
+  checkpoints evaluated, 5,472 halt zero-quotes excluded by name
+  (`tops_unavailable_zero_quote`), 96,974,545 checked, of which 7,870
+  mismatch (0.008%) in 8 symbols. Every validity precondition held, so the
+  run exits 1 (exit codes: 0 pass, 1 mismatch, 3 inconclusive when a
+  precondition such as gaps, `other_stream` or zero TOPS checks fails).
+  **Coverage: 2024-12-23 is an incident day, not a full session.** Every
+  symbol is operationally halted at 10:22:29 ET, all three feeds restart at
+  11:32:50 ET, DEEP+ carries 80,992 messages after the restart against
+  50,878,184 before, and the last book event is at 13:45:40 ET against a
+  16:00 ET close. Even a zero-mismatch run on these files would arguably not
+  meet the "full real day" criterion; the second oracle day should be a
+  normal session (no incident, no mid-day restart, not a DST boundary).
   7,819 of the 7,870 trace to an undocumented DEEP+ order-id rewind starting
   at 09:48:38 ET (926,703 Adds below their symbol's running maximum id across
   901 symbols; only 5 symbols mismatch: DRIP, OTEX, CNH, KBE, WMT). The other
@@ -566,7 +576,8 @@ tcgcsv.com). Design spec: `docs/superpowers/specs/2026-06-09-pkmn-quant-design.m
   not one continuous stream; the oracle resolves pending checks and clears
   every book at the restart. Full detail: `docs/iex-oracle.md`. **Benchmark**
   (`docs/benchmarks/iex-book.md`; DEEP+ decode + `BookSet::apply` on the
-  2024-12-23 DPLS file, 50,959,176 messages, Apple M1 Pro, 7-vCPU OrbStack
+  2024-12-23 DPLS file, 50,959,176 messages, so measured on that incident
+  day's message mix, not a normal session's; Apple M1 Pro, 7-vCPU OrbStack
   Ubuntu 24.04 arm64 VM, g++ 13.3.0, `-O3 -DNDEBUG -ffp-contract=off`, timer
   cntvct_el0 at 24 MHz = 41.7 ns per tick; empty read pair 9.5-11.9 ns mean across the three runs, 10.5 ns in the run the percentiles come from).
   The Task 6 optimization (pooled order arena, open-addressing id map,
@@ -637,7 +648,7 @@ orb -m ubuntu bash -lc 'cd /Users/ml3787/pkmn-stock && cmake -S cpp -B cpp/build
 uv run python scripts/iex_hist.py --date 20241223 --feeds DPLS DEEP TOPS --dest data/iex   # download (gzip kept on disk)
 orb -m ubuntu bash -lc 'cd /Users/ml3787/pkmn-stock && cmake -S cpp -B cpp/build-linux-release -DCMAKE_BUILD_TYPE=Release && cmake --build cpp/build-linux-release -j --target iex_oracle'   # builds the Release iex_oracle (bench_iex.sh builds only iex_bench)
 cpp/build-linux-release/iex_oracle --deep-plus data/iex/20241223_IEXTP1_DPLS1.0.pcap.gz \
-    --deep data/iex/20241223_IEXTP1_DEEP1.0.pcap.gz --tops data/iex/20241223_IEXTP1_TOPS1.6.pcap.gz  # exits 1 on mismatch (currently 1, see docs/iex-oracle.md)
+    --deep data/iex/20241223_IEXTP1_DEEP1.0.pcap.gz --tops data/iex/20241223_IEXTP1_TOPS1.6.pcap.gz  # exit 0 pass, 1 mismatch, 3 inconclusive (currently 1, see docs/iex-oracle.md)
 scripts/bench_iex.sh [--profile] [--no-record]            # re-execs in the VM, prepends a section to docs/benchmarks/iex-book.md
 ```
 
@@ -793,7 +804,8 @@ scripts/bench_iex.sh [--profile] [--no-record]            # re-execs in the VM, 
   price levels with the best price at the back). No Python or zlib dependency.
 - `cpp/src/pkmn_md/` — IEX market data: streaming pcapng reader over zlib,
   IEX-TP framing + sequence tracker (a seq-1 packet with a newer send time is
-  a stream restart), DEEP+ and DEEP decoders, `BookSet` (one `OrderBook` per
+  a stream restart), DEEP+ and DEEP decoders, the TOPS Quote decoder,
+  `BookSet` (one `OrderBook` per
   symbol), `timing.hpp` (cntvct_el0 timer). Built into `md_tests`, separate
   from `engine_tests`, and kept out of the Python wheel build.
 - `cpp/tools/` — `iex_decode`, `pcap_count`, `iex_oracle` (book vs DEEP/TOPS,

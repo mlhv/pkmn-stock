@@ -2,6 +2,12 @@
 
 Results of `scripts/bench_iex.sh` (DEEP+ decode + `BookSet::apply`, `cpp/tools/iex_bench.cpp`), newest first.
 
+Every result here is measured on one capture, the 2024-12-23 DPLS file, so it describes that day's message mix,
+not a normal session's. That day was an incident: every symbol was operationally halted at 10:22:29 ET, the feed
+restarted at 11:32:50 ET, 50,878,184 of its 50,959,176 messages come before the restart and 80,992 after, and the
+last book event is at 13:45:40 ET (see `docs/iex-oracle.md`). Throughput and latency on a normal full day may
+differ.
+
 ## 2026-10-22 — 20241223_IEXTP1_DPLS1.0.pcap.gz
 
 - Hardware: Apple M1 Pro, 7-vCPU OrbStack Ubuntu 24.04 arm64 VM
@@ -9,7 +15,8 @@ Results of `scripts/bench_iex.sh` (DEEP+ decode + `BookSet::apply`, `cpp/tools/i
 - git: `bc6e8059807b`
 - Compiler: `g++ 13.3.0`
 - Flags: `CMAKE_BUILD_TYPE=Release: -O3 -DNDEBUG -ffp-contract=off`
-- Timer: cntvct_el0 (isb before read), cntfrq 24,000,000 Hz, calibrated 0.024000 ticks/ns, resolution 41.7 ns per tick; empty ticks() pair 11.9 ns mean (p50 0 ticks); steady_clock resolution 41 ns
+- Timer (ram run 2, the median run the percentiles come from): cntvct_el0 (isb before read), cntfrq 24,000,000 Hz, calibrated 0.024000 ticks/ns, resolution 41.7 ns per tick; empty ticks() pair 10.5 ns mean (p50 0 ticks; 11.9, 10.5, 9.5 ns in runs 1-3); steady_clock resolution 41 ns
+- *Corrected 2026-10-23, not re-run:* the Timer line above originally showed run 1's overhead (11.9 ns) while the percentiles come from run 2. The generator now takes it from the median run; this line is that generator's output on the JSON below, pasted in by hand.
 - ram held 3,445,841,433 payload bytes in 42,492,551 packets (cap 4,294,967,296, truncated: false); 50,959,176 messages, 1 restart(s)
 
 > **Quantization warning (generated):** p50 = 2 ticks (±50.0%) of a 41.7 ns counter. Each sample is a whole number of ticks, so a percentile at or under 10 ticks carries a ±1-tick uncertainty of 10% or more; a change smaller than one tick (41.7 ns) at that percentile cannot be seen. Use the timed-region mean (not quantized) and msgs/s for small changes.
@@ -295,9 +302,11 @@ does not move: p99.9 and max are unchanged within noise, and p99 overlaps betwee
 untouched; `cpp/tests/test_order_book_paths.cpp` (added in the review fix) covers id-table growth, backward-shift
 delete across the wrap-around, the binary-search level path, slot reuse after clear, and a seeded
 differential run against a naive reference book; a 14-seed randomized differential trace (add/remove/modify/execute/match/depth/clear, deep books
-past the 8-level linear probe, ASan + UBSan) hashes identically for both books; `iex_oracle` on the full
+past the 8-level linear probe, ASan + UBSan) hashed identically for both books, but that was a scratch run
+that is not in the repo (the committed differential test in `test_order_book_paths.cpp` runs 3 seeds); `iex_oracle` on the full
 2024-12-23 day (VM Release, default args) gives output identical to the baseline build line for line except
-wall time and RSS: 96,980,017 checked points, 7,870 mismatches (deep_level_ask 7, deep_level_bid 29,
+wall time and RSS: 96,980,017 points evaluated (96,974,545 checked once the 5,472 excluded by name are
+taken out; the tool counted them together at the time), 7,870 mismatches (deep_level_ask 7, deep_level_bid 29,
 tops_ask 6,632, tops_bid 1,202, same symbols), book anomalies all 0, exit 1.
 
 **Profile after** (generated section above; `iex-book-flamegraph.svg` is now the after profile, the
