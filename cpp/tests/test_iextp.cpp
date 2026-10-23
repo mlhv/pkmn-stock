@@ -1,5 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <cstdint>
 #include <span>
 #include <string>
@@ -137,4 +138,76 @@ TEST_CASE("sequence tracker: default start is 1, a late start is a gap") {
     SequenceTracker joined(5);  // a live join mid-session declares where it starts
     CHECK(joined.observe(5, 1) == SeqVerdict::Next);
     CHECK(joined.gaps() == 0);
+}
+
+TEST_CASE("sequence tracker: reset changes only expected and counts resets") {
+    SequenceTracker t;
+    CHECK(t.observe(1, 3) == SeqVerdict::Next);
+    CHECK(t.observe(1, 3) == SeqVerdict::Duplicate);
+    CHECK(t.observe(10, 2) == SeqVerdict::Gap);  // expected 12, gap 6 messages
+    CHECK(t.resets() == 0);
+    t.reset(1);
+    CHECK(t.resets() == 1);
+    CHECK(t.expected() == 1);
+    CHECK(t.gaps() == 1);
+    CHECK(t.gap_messages() == 6);
+    CHECK(t.duplicates() == 3);
+    CHECK(t.observe(1, 2) == SeqVerdict::Next);
+    CHECK(t.expected() == 3);
+}
+
+namespace {
+
+TpHeader header_of(const Bytes& seg) {
+    TpHeader h{};
+    REQUIRE(parse_tp_header(std::span<const std::uint8_t>(seg), h));
+    return h;
+}
+
+// tp_segment's fixed send time, overwritten at header offset 32.
+Bytes with_send_time(Bytes seg, std::int64_t send_time) {
+    for (int i = 0; i < 8; ++i) seg[32 + i] = static_cast<std::uint8_t>(static_cast<std::uint64_t>(send_time) >> (8 * i));
+    return seg;
+}
+
+}  // namespace
+
+TEST_CASE("stream restart: a newer-send-time seq-1 packet resets and is applied") {
+    SequenceTracker t;
+    std::int64_t max_send = 0;
+    const Bytes morning = with_send_time(tp_segment(kDeepPlus, 1, {bytes_of("a"), bytes_of("b"), bytes_of("c")}), 100);
+    TpHeader h = header_of(morning);
+    CHECK_FALSE(is_stream_restart(h, t.expected(), max_send));  // expected is still 1: the normal start
+    CHECK(t.observe(h.first_seq, h.msg_count) == SeqVerdict::Next);
+    max_send = std::max(max_send, h.send_time);
+
+    const Bytes restart = with_send_time(tp_segment(kDeepPlus, 1, {bytes_of("x"), bytes_of("y")}), 200);
+    h = header_of(restart);
+    REQUIRE(is_stream_restart(h, t.expected(), max_send));
+    t.reset(1);
+    CHECK(t.observe(h.first_seq, h.msg_count) == SeqVerdict::Next);
+    CHECK(t.skip() == 0);  // every message of the restart packet is applied
+    CHECK(t.expected() == 3);
+    CHECK(t.resets() == 1);
+    CHECK(t.duplicates() == 0);
+}
+
+TEST_CASE("stream restart: a replayed seq-1 packet with an older send time stays Duplicate") {
+    SequenceTracker t;
+    std::int64_t max_send = 0;
+    const Bytes first = with_send_time(tp_segment(kDeepPlus, 1, {bytes_of("a"), bytes_of("b")}), 100);
+    const Bytes later = with_send_time(tp_segment(kDeepPlus, 3, {bytes_of("c")}), 150);
+    for (const Bytes* seg : {&first, &later}) {
+        const TpHeader h = header_of(*seg);
+        CHECK(t.observe(h.first_seq, h.msg_count) == SeqVerdict::Next);
+        max_send = std::max(max_send, h.send_time);
+    }
+    for (std::int64_t replay_send : {std::int64_t{100}, std::int64_t{150}}) {  // older, and equal
+        const TpHeader h = header_of(with_send_time(first, replay_send));
+        CHECK_FALSE(is_stream_restart(h, t.expected(), max_send));
+    }
+    const TpHeader h = header_of(first);
+    CHECK(t.observe(h.first_seq, h.msg_count) == SeqVerdict::Duplicate);
+    CHECK(t.skip() == 2);
+    CHECK(t.resets() == 0);
 }

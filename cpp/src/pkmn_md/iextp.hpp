@@ -76,4 +76,18 @@ bool for_each_message(std::span<const std::uint8_t> payload, TpHeader& hdr, F&& 
     return true;
 }
 
+// Caller-side restart policy for SequenceTracker (see sequence.hpp). True
+// iff this segment starts a new sequence epoch: first_seq == 1 while the
+// tracker expects something later, and a send_time newer than any segment
+// seen so far (`max_send_time_seen`). Then the caller does tracker.reset(1),
+// observe() (which yields Next) and applies the whole segment.
+//   Restart: IEX restarted the feed and numbers from 1 again, under the same
+//     session id (2024-12-23 11:39 ET) -- the send time moves forward.
+//   Replay: a seq-1 segment whose send_time is not newer than anything seen
+//     is an old segment arriving again (e.g. at a merge seam); it is not a
+//     restart and stays Duplicate.
+inline bool is_stream_restart(const TpHeader& hdr, std::int64_t expected, std::int64_t max_send_time_seen) {
+    return hdr.first_seq == 1 && expected > 1 && hdr.send_time > max_send_time_seen;
+}
+
 }  // namespace pkmn::md

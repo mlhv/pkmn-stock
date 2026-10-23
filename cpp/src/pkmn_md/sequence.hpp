@@ -19,6 +19,18 @@
 // across them, and duplicates() counts duplicate MESSAGES, not segments -- a
 // whole-duplicate segment adds its count, a straddle adds only the overlap,
 // and a duplicate heartbeat adds 0.
+//
+// Restarts are not decided here. IEX can restart a feed mid-day at seq 1
+// under the same session id (2024-12-23, 11:39 ET); observe() alone would
+// call that whole restarted stream Duplicate. The caller detects a restart
+// (is_stream_restart in iextp.hpp), calls reset(1), then observe(). The
+// policy lives outside observe() so the tracker stays a pure sequence check
+// that Plan C can reuse for live UDP.
+//
+// Known limitation: a packet reordered at an A/B merge seam (seq N+1
+// arriving before N) is recorded as a Gap, and then the late N is dropped as
+// Duplicate. This rule cannot tell a reorder from a loss. 2024-12-23 shows 0
+// gaps; Plan C (retransmission) owns recovery.
 
 #include <cstdint>
 
@@ -57,17 +69,26 @@ class SequenceTracker {
         return SeqVerdict::Duplicate;
     }
 
+    // Start a new sequence epoch at `first_expected`. Changes only expected()
+    // and counts resets(); gaps, gap_messages and duplicates are untouched.
+    void reset(std::int64_t first_expected) {
+        expected_ = first_expected;
+        skip_ = 0;
+        ++resets_;
+    }
+
     std::int64_t expected() const { return expected_; }
     // Leading messages of the last observed segment that were already seen.
     std::uint16_t skip() const { return skip_; }
     std::uint64_t gaps() const { return gaps_; }
     std::uint64_t gap_messages() const { return gap_messages_; }
     std::uint64_t duplicates() const { return duplicates_; }
+    std::uint64_t resets() const { return resets_; }
 
   private:
     std::int64_t expected_;
     std::uint16_t skip_ = 0;
-    std::uint64_t gaps_ = 0, gap_messages_ = 0, duplicates_ = 0;
+    std::uint64_t gaps_ = 0, gap_messages_ = 0, duplicates_ = 0, resets_ = 0;
 };
 
 }  // namespace pkmn::md

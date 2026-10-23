@@ -12,8 +12,13 @@
 // counted, not fatal. The tracker follows the first segment's
 // (channel, session); segments from any other stream are counted and left
 // out of both stat blocks.
+//
+// A seq-1 segment with a send_time newer than any seen is a stream restart
+// (is_stream_restart): the tracker is reset to 1 and the segment applied, so
+// "applied" includes the restarted stream. Each reset is printed.
 
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -98,7 +103,13 @@ int main(int argc, char** argv) {
     SequenceTracker tracker;
     bool have_stream = false;
     std::uint32_t channel = 0, session = 0;
-    std::int64_t first_seq = 0, last_seq_end = 0;
+    std::int64_t first_seq = 0, last_seq_end = 0, max_send_time = 0;
+    struct Reset {
+        std::uint64_t packet;
+        std::int64_t send_time, first_seq, expected_before;
+    };
+    constexpr std::size_t kMaxResetsShown = 16;
+    Reset resets[kMaxResetsShown] = {};
     // Where duplicates begin and end, so a replayed tail can be located.
     std::uint64_t dup_first_packet = 0, dup_last_packet = 0, dup_segments = 0;
     std::int64_t dup_first_ts = 0, dup_first_seq = 0, dup_expected = 0, dup_last_ts = 0;
@@ -136,6 +147,12 @@ int main(int argc, char** argv) {
             }
             ++deep_plus_segments;
             if (hdr.msg_count == 0) ++heartbeats;
+            if (is_stream_restart(hdr, tracker.expected(), max_send_time)) {
+                if (tracker.resets() < kMaxResetsShown)
+                    resets[tracker.resets()] = Reset{packets, hdr.send_time, hdr.first_seq, tracker.expected()};
+                tracker.reset(1);
+            }
+            if (hdr.send_time > max_send_time) max_send_time = hdr.send_time;
             const std::int64_t expected_before = tracker.expected();
             if (tracker.observe(hdr.first_seq, hdr.msg_count) == SeqVerdict::Duplicate && hdr.msg_count > 0) {
                 if (dup_segments++ == 0) {
@@ -183,6 +200,11 @@ int main(int argc, char** argv) {
         std::printf("tracker gaps      %llu (%llu messages missing)\n", static_cast<u64>(tracker.gaps()),
                     static_cast<u64>(tracker.gap_messages()));
         std::printf("tracker dups      %llu messages\n", static_cast<u64>(tracker.duplicates()));
+        std::printf("tracker resets    %llu\n", static_cast<u64>(tracker.resets()));
+        for (std::size_t i = 0; i < tracker.resets() && i < kMaxResetsShown; ++i)
+            std::printf("  reset           packet %llu send_time %lld first_seq %lld (was expecting %lld)\n",
+                        static_cast<u64>(resets[i].packet), static_cast<long long>(resets[i].send_time),
+                        static_cast<long long>(resets[i].first_seq), static_cast<long long>(resets[i].expected_before));
         std::printf("dup segments      %llu (with messages)\n", static_cast<u64>(dup_segments));
         if (dup_segments > 0) {
             std::printf("first dup         packet %llu ts %lld first_seq %lld while expecting %lld\n",
