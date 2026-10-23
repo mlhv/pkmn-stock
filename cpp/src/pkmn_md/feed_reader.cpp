@@ -5,7 +5,10 @@ namespace pkmn::md {
 bool SegmentFilter::accept(std::span<const std::uint8_t> udp_payload, std::int64_t capture_ts_ns,
                            std::uint64_t packet_no, Segment& out) {
     TpHeader& hdr = out.hdr;
-    if (!parse_tp_header(udp_payload, hdr)) {
+    // A first_seq outside [1, INT64_MAX - 65535] cannot be a real IEX
+    // sequence number and would overflow the tracker's (and last_seq_end_'s)
+    // arithmetic: rejected as a header failure, before it can fix the stream.
+    if (!parse_tp_header(udp_payload, hdr) || !valid_first_seq(hdr.first_seq)) {
         ++tp_parse_failures_;
         return false;
     }

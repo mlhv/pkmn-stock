@@ -7,7 +7,11 @@
 //
 // Format coverage: Section Header (little-endian only), Interface
 // Description (Ethernet link type, if_tsresol option, default 10^-6),
-// Enhanced Packet. Every other block type is skipped by its length. Frames
+// Enhanced Packet. Every other block type is skipped by its length; Simple
+// Packet Blocks (type 3, no timestamp) are skipped and counted
+// (skipped_simple_packets) so a capture that uses them is not silently short.
+// A timestamp that would overflow int64 ns (from if_tsresol or if_tsoffset)
+// throws rather than wraps. Frames
 // are stripped of Ethernet (plus any 802.1Q/QinQ tags), IPv4 and UDP; a frame
 // that is not unfragmented IPv4/UDP on Ethernet is skipped and counted.
 //
@@ -55,6 +59,8 @@ class PcapngReader {
     std::uint64_t bytes_consumed() const { return consumed_; }
     // Enhanced Packet Blocks skipped as not IPv4/UDP on Ethernet.
     std::uint64_t skipped_frames() const { return skipped_; }
+    // Simple Packet Blocks (type 3) skipped: they carry no timestamp.
+    std::uint64_t skipped_simple_packets() const { return skipped_spbs_; }
 
   private:
     struct Source;  // raw fread or zlib inflate; hides zlib from this header
@@ -80,6 +86,7 @@ class PcapngReader {
     std::size_t begin_ = 0, end_ = 0;  // unconsumed window [begin_, end_)
     std::uint64_t consumed_ = 0;       // decompressed offset of buf_[begin_]
     std::uint64_t skipped_ = 0;
+    std::uint64_t skipped_spbs_ = 0;
     bool in_section_ = false;
     std::vector<Interface> interfaces_;
 };

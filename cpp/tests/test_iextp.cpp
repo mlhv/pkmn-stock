@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <limits>
 #include <span>
 #include <string>
 #include <vector>
@@ -351,4 +352,57 @@ TEST_CASE("segment filter over in-memory payloads matches feed reader") {
     CHECK(filt.tp_parse_failures() == 1);
     CHECK(filt.by_protocol().at(kTops) == 1);
     CHECK(timed == 4);  // 2 + 1 + 1 applied messages; the replayed one skipped
+}
+
+TEST_CASE("sequence: tracker arithmetic is exact at the documented range limits") {
+    REQUIRE(valid_first_seq(kMinSeq));
+    REQUIRE(valid_first_seq(kMaxFirstSeq));
+    CHECK_FALSE(valid_first_seq(0));
+    CHECK_FALSE(valid_first_seq(-1));
+    CHECK_FALSE(valid_first_seq(std::numeric_limits<std::int64_t>::min()));
+    CHECK_FALSE(valid_first_seq(kMaxFirstSeq + 1));
+    CHECK_FALSE(valid_first_seq(std::numeric_limits<std::int64_t>::max()));
+
+    // The largest first_seq with the largest count lands exactly on INT64_MAX.
+    SequenceTracker hi(kMaxFirstSeq);
+    CHECK(hi.observe(kMaxFirstSeq, 65535) == SeqVerdict::Next);
+    CHECK(hi.expected() == std::numeric_limits<std::int64_t>::max());
+    // A duplicate and a straddle against that expected value stay in range.
+    CHECK(hi.observe(kMaxFirstSeq, 65535) == SeqVerdict::Duplicate);
+    CHECK(hi.skip() == 65535);
+    // A gap from the bottom of the range to the top.
+    SequenceTracker lo;
+    CHECK(lo.observe(kMaxFirstSeq, 1) == SeqVerdict::Gap);
+    CHECK(lo.gap_messages() == static_cast<std::uint64_t>(kMaxFirstSeq - 1));
+    // And back down: the low first_seq is a duplicate of the whole segment.
+    CHECK(lo.observe(kMinSeq, 65535) == SeqVerdict::Duplicate);
+    CHECK(lo.skip() == 65535);
+}
+
+TEST_CASE("segment filter rejects first_seq outside the tracker's range") {
+    const std::int64_t bad[] = {0, -1, std::numeric_limits<std::int64_t>::min(), kMaxFirstSeq + 1,
+                                std::numeric_limits<std::int64_t>::max()};
+    for (const std::int64_t s : bad) {
+        INFO("first_seq = " << s);
+        SegmentFilter filt(kDeepPlus);
+        Segment seg{};
+        const Bytes b = tp_segment(kDeepPlus, s, {deep_plus_add(1)});
+        CHECK_FALSE(filt.accept(std::span<const std::uint8_t>(b), 0, 1, seg));
+        CHECK(filt.tp_parse_failures() == 1);
+        CHECK(filt.segments() == 0);
+        CHECK_FALSE(filt.have_stream());  // a bad header cannot fix the stream
+        CHECK(filt.tracker().expected() == 1);
+        // The next well-formed segment is accepted normally.
+        const Bytes good = tp_segment(kDeepPlus, 1, {deep_plus_add(1)});
+        REQUIRE(filt.accept(std::span<const std::uint8_t>(good), 0, 2, seg));
+        CHECK(seg.verdict == SeqVerdict::Next);
+        CHECK(filt.last_seq_end() == 2);
+    }
+    // The extreme valid value is accepted (as a gap from 1).
+    SegmentFilter filt(kDeepPlus);
+    Segment seg{};
+    const Bytes top = tp_segment(kDeepPlus, kMaxFirstSeq, {deep_plus_add(1)});
+    REQUIRE(filt.accept(std::span<const std::uint8_t>(top), 0, 1, seg));
+    CHECK(seg.verdict == SeqVerdict::Gap);
+    CHECK(filt.last_seq_end() == kMaxFirstSeq + 1);
 }

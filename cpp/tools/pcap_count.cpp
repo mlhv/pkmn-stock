@@ -1,6 +1,7 @@
 // Smoke test over a real capture: streams the whole file through
 // PcapngReader and prints packet count, UDP payload bytes, skipped frames,
-// decompressed size and the first/last timestamps.
+// skipped Simple Packet Blocks, decompressed size and the first/last
+// timestamps.
 //
 //   pcap_count data/iex/20241223_IEXTP1_DPLS1.0.pcap.gz
 
@@ -50,6 +51,8 @@ int main(int argc, char** argv) {
         std::printf("packets          %llu\n", static_cast<unsigned long long>(packets));
         std::printf("udp_payload_bytes %llu\n", static_cast<unsigned long long>(payload_bytes));
         std::printf("skipped_frames   %llu\n", static_cast<unsigned long long>(r.skipped_frames()));
+        std::printf("skipped_spbs     %llu (Simple Packet Blocks: no timestamp)\n",
+                    static_cast<unsigned long long>(r.skipped_simple_packets()));
         std::printf("decompressed     %llu\n", static_cast<unsigned long long>(r.bytes_consumed()));
         std::printf("ts_backwards     %llu\n", static_cast<unsigned long long>(out_of_order));
         std::printf("first_ts         %lld (%s)\n", static_cast<long long>(first), iso(first).c_str());

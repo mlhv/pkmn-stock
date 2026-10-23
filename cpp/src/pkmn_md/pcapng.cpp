@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <limits>
 #include <stdexcept>
 
 namespace pkmn::md {
@@ -12,6 +13,7 @@ namespace {
 
 constexpr std::uint32_t kShb = 0x0A0D0D0A;
 constexpr std::uint32_t kIdb = 1;
+constexpr std::uint32_t kSpb = 3;
 constexpr std::uint32_t kEpb = 6;
 constexpr std::uint32_t kMagicLe = 0x1A2B3C4D;
 constexpr std::uint32_t kMagicSwapped = 0x4D3C2B1A;  // the magic of a big-endian section
@@ -182,6 +184,11 @@ bool PcapngReader::next(Packet& out) {
             parse_idb(b, len);
         } else if (type == kEpb) {
             emitted = parse_epb(b, len, out);
+        } else if (type == kSpb) {
+            // Simple Packet Blocks carry no timestamp, so they cannot be
+            // ordered against feed data; skipped, but counted so a capture
+            // that uses them is not silently short.
+            ++skipped_spbs_;
         }  // anything else: skipped by length
         begin_ += len;
         consumed_ += len;
@@ -213,15 +220,34 @@ void PcapngReader::parse_idb(const std::uint8_t* b, std::uint32_t len) {
 }
 
 std::int64_t PcapngReader::to_ns(const Interface& itf, std::uint64_t ts) const {
-    std::uint64_t ns;
+    // Every step is overflow-checked: if_tsresol and if_tsoffset come from
+    // the file, so a crafted IDB must fail loudly, never wrap.
+    auto overflow = [&](const char* what) {
+        fail(std::string("timestamp overflow (") + what + ", raw ts " + std::to_string(ts) + ", if_tsoffset " +
+             std::to_string(itf.offset_s) + " s) at offset " + std::to_string(consumed_));
+    };
+    std::int64_t ns;
     if (itf.binary) {
-        ns = static_cast<std::uint64_t>((static_cast<unsigned __int128>(ts) * 1'000'000'000u) >> itf.exp);
+        const unsigned __int128 v = (static_cast<unsigned __int128>(ts) * 1'000'000'000u) >> itf.exp;
+        if (v > static_cast<unsigned __int128>(std::numeric_limits<std::int64_t>::max())) overflow("binary if_tsresol");
+        ns = static_cast<std::int64_t>(v);
     } else {
         std::uint64_t scale = 1;
-        for (int i = 0; i < (itf.exp <= 9 ? 9 - itf.exp : itf.exp - 9); ++i) scale *= 10;
-        ns = itf.exp <= 9 ? ts * scale : ts / scale;
+        for (int i = 0; i < (itf.exp <= 9 ? 9 - itf.exp : itf.exp - 9); ++i) scale *= 10;  // <= 10^9
+        std::uint64_t u = 0;
+        if (itf.exp <= 9) {
+            if (__builtin_mul_overflow(ts, scale, &u)) overflow("if_tsresol scale");
+        } else {
+            u = ts / scale;
+        }
+        if (u > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max())) overflow("if_tsresol scale");
+        ns = static_cast<std::int64_t>(u);
     }
-    return static_cast<std::int64_t>(ns) + itf.offset_s * 1'000'000'000;
+    std::int64_t off = 0;
+    if (__builtin_mul_overflow(itf.offset_s, std::int64_t{1'000'000'000}, &off)) overflow("if_tsoffset seconds to ns");
+    std::int64_t out = 0;
+    if (__builtin_add_overflow(ns, off, &out)) overflow("timestamp plus if_tsoffset");
+    return out;
 }
 
 bool PcapngReader::parse_epb(const std::uint8_t* b, std::uint32_t len, Packet& out) {

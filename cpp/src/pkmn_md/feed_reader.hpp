@@ -5,9 +5,11 @@
 // sequence tracker. This is the driver loop iex_decode and iex_oracle share,
 // so both apply exactly the same rules:
 //
-//   * Packets whose IEX-TP header does not parse, and segments whose framing
-//     overruns (for_each_message false), are counted as tp_parse_failures and
-//     never reach the tracker (their msg_count is not trusted).
+//   * Packets whose IEX-TP header does not parse, whose first_seq is outside
+//     [1, INT64_MAX - 65535] (valid_first_seq, sequence.hpp), and segments
+//     whose framing overruns (for_each_message false), are counted as
+//     tp_parse_failures and never reach the tracker (their msg_count is not
+//     trusted).
 //   * Segments of another Message Protocol ID are counted (by_protocol) and
 //     skipped.
 //   * The first accepted segment fixes the (channel, session); segments from

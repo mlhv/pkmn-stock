@@ -306,3 +306,120 @@ TEST_CASE("pcapng: steady-state next() does not allocate") {
     CHECK(bytes == 19999 * 300);
     CHECK(after == before);
 }
+
+namespace {
+
+// IDB with an if_tsresol byte (raw, so the binary 0x80 bit can be set) and
+// an optional if_tsoffset in seconds.
+Bytes idb_opts(std::uint8_t tsresol_byte, bool with_offset, std::int64_t offset_s) {
+    Bytes body;
+    put_le16(body, 1);  // Ethernet
+    put_le16(body, 0);
+    put_le32(body, 262144);
+    put_le16(body, 9);  // if_tsresol
+    put_le16(body, 1);
+    body.push_back(tsresol_byte);
+    pad4(body);
+    if (with_offset) {
+        put_le16(body, 14);  // if_tsoffset
+        put_le16(body, 8);
+        put_le64(body, static_cast<std::uint64_t>(offset_s));
+    }
+    put_le16(body, 0);
+    put_le16(body, 0);
+    return block(1, body);
+}
+
+Bytes one_packet(const Bytes& idb_block, std::uint64_t ts) {
+    Bytes b = shb();
+    append(b, idb_block);
+    append(b, epb(ts, udp_frame(bytes_of("p"))));
+    return b;
+}
+
+}  // namespace
+
+TEST_CASE("pcapng: binary if_tsresol (2^-exp seconds)") {
+    TempFile f(".pcapng");
+    // 2^-10 s per unit: 3 * 2^10 units = 3 s; 1 unit = 976562.5 ns -> 976562.
+    Bytes b = shb();
+    append(b, idb_opts(0x80 | 10, false, 0));
+    append(b, epb(3 * 1024, udp_frame(bytes_of("a"))));
+    append(b, epb(1, udp_frame(bytes_of("b"))));
+    write_raw(f.path, b);
+    auto got = read_all(f.path);
+    REQUIRE(got.size() == 2);
+    CHECK(got[0].ts_ns == 3'000'000'000LL);
+    CHECK(got[1].ts_ns == 976'562LL);
+}
+
+TEST_CASE("pcapng: if_tsoffset is added in seconds, positive and negative") {
+    TempFile pos(".pcapng"), neg(".pcapng");
+    write_raw(pos.path, one_packet(idb_opts(6, true, 1'700'000'000), 5));  // 5 us after the offset
+    write_raw(neg.path, one_packet(idb_opts(9, true, -10), 20'000'000'000ULL));
+    auto a = read_all(pos.path);
+    auto b = read_all(neg.path);
+    REQUIRE(a.size() == 1);
+    REQUIRE(b.size() == 1);
+    CHECK(a[0].ts_ns == 1'700'000'000'000'005'000LL);
+    CHECK(b[0].ts_ns == 10'000'000'000LL);
+}
+
+TEST_CASE("pcapng: timestamp overflow from the file throws instead of wrapping") {
+    SECTION("if_tsoffset seconds * 1e9 overflows int64") {
+        TempFile f(".pcapng");
+        write_raw(f.path, one_packet(idb_opts(6, true, 10'000'000'000LL), 1));
+        CHECK_THAT(drain_error(f.path), ContainsSubstring("if_tsoffset seconds to ns"));
+    }
+    SECTION("negative if_tsoffset overflows int64") {
+        TempFile f(".pcapng");
+        write_raw(f.path, one_packet(idb_opts(6, true, -10'000'000'000LL), 1));
+        CHECK_THAT(drain_error(f.path), ContainsSubstring("if_tsoffset seconds to ns"));
+    }
+    SECTION("timestamp + if_tsoffset overflows int64") {
+        TempFile f(".pcapng");
+        // 9.2e9 s * 1e9 fits; adding a ~9.0e18 ns timestamp does not.
+        write_raw(f.path, one_packet(idb_opts(9, true, 9'000'000'000LL), 9'000'000'000'000'000'000ULL));
+        CHECK_THAT(drain_error(f.path), ContainsSubstring("timestamp plus if_tsoffset"));
+    }
+    SECTION("decimal if_tsresol scale overflows") {
+        TempFile f(".pcapng");
+        // 10^0 s per unit (exp 0): ts * 10^9 past 2^64.
+        write_raw(f.path, one_packet(idb_opts(0, false, 0), 1ULL << 62));
+        CHECK_THAT(drain_error(f.path), ContainsSubstring("if_tsresol scale"));
+    }
+    SECTION("decimal if_tsresol result past int64") {
+        TempFile f(".pcapng");
+        // ns resolution, raw ts above INT64_MAX: fits u64, not int64.
+        write_raw(f.path, one_packet(idb_opts(9, false, 0), ~std::uint64_t{0}));
+        CHECK_THAT(drain_error(f.path), ContainsSubstring("if_tsresol scale"));
+    }
+    SECTION("binary if_tsresol result past int64") {
+        TempFile f(".pcapng");
+        // 2^-1 s per unit: 2^62 units = 2^61 s, far past int64 ns.
+        write_raw(f.path, one_packet(idb_opts(0x80 | 1, false, 0), 1ULL << 62));
+        CHECK_THAT(drain_error(f.path), ContainsSubstring("binary if_tsresol"));
+    }
+}
+
+TEST_CASE("pcapng: Simple Packet Blocks are skipped and counted") {
+    Bytes b = shb();
+    append(b, idb());
+    append(b, epb(1, udp_frame(bytes_of("one"))));
+    Bytes spb_body;
+    put_le32(spb_body, 60);  // original packet length
+    append(spb_body, udp_frame(bytes_of("simple")));
+    append(b, block(3, spb_body));
+    append(b, block(3, spb_body));
+    append(b, epb(2, udp_frame(bytes_of("two"))));
+    TempFile f(".pcapng");
+    write_raw(f.path, b);
+    PcapngReader r(f.path);
+    auto got = read_all(r);
+    REQUIRE(got.size() == 2);
+    CHECK(got[0].payload == "one");
+    CHECK(got[1].payload == "two");
+    CHECK(r.skipped_simple_packets() == 2);
+    CHECK(r.skipped_frames() == 0);
+    CHECK(r.bytes_consumed() == b.size());
+}
