@@ -597,6 +597,47 @@ tcgcsv.com). Design spec: `docs/superpowers/specs/2026-06-09-pkmn-quant-design.m
   Historical Data, you agree to the IEX Historical Data Terms of Use
   (`docs/iex-hist-terms.md`).
 
+- **Plan B (Pokemon order book) complete on feat/pokemon-book (657 passed
+  pytest via `uv sync --group api --group dashboard && uv run pytest`; 26
+  vitest via `cd web && npm run check`; 163 Catch2 tests via ctest, on macOS
+  and in the OrbStack VM).** Plan B of 4 in the market-data / CLOB track. **Cut
+  from `feat/instrument-repair-horizon`, not main (same owner ruling as Plan
+  A); Plans C-D are NOT STARTED.** `pkmn backtest`, `pkmn walkforward` and
+  `POST /api/backtest` now default to `--execution book`: fills run against
+  daily ladders of **modelled resting orders (synthetic, built from the day's
+  tcgcsv quote)**. tcgcsv publishes one quote per product per day, not an
+  order book, so every resting order is a model, never market data. The
+  library default (`NativeBacktest.execution`, C++ `CostModel::execution`)
+  stays formula, and so do the live paths. `--execution formula` selects the
+  walk-the-spread formula; `--no-impact` is flat cost under either mode and
+  is recorded as formula. Shipped: `ladder.*` and `execution_book.*` in
+  `cpp/src/pkmn_engine`, the ITCH-style wire protocol in `cpp/src/pkmn_wire`
+  (`docs/pokemon-wire-protocol.md`), `pkmn wire encode`, the `pokemon_replay`
+  tool, and the equivalence and benchmark scripts. **Equivalence (real
+  warehouse, 2024-03-01..2026-06-30, 949-day warehouse):** the test-only
+  exact ladder matches `buy_impact`/`sell_impact` on 34,092,324 rows and
+  11,165,181,052 `(used, qty)` checks with max abs error 4.66e-10 dollars
+  (tolerance 1e-6); on the five native strategies at default params the
+  formula and exact-ladder runs agree on every fill (0 mismatches), and
+  **zero fills fell on two-sided asset-days** (a statement about those
+  strategies at default params, not about the change). The whole-cent default
+  ladder moves per-run impact by cents to about $1.38 and leaves every fill
+  count unchanged. **Identical books:** encoding the window to the wire and
+  replaying it builds the same ladders as the backtester's in-memory path, 0
+  mismatches over 1,315,694 asset-days (June 2026). **Costs:** encode of 949
+  days, 38,250,316 messages, 890,723,220 bytes in 10.8 s (n=1); replay in
+  the VM 1,472,031 msgs/s median with ladders built for every quote (decode
+  only is far faster but its spread is 70.6%, page-cache dominated); backtest
+  book vs formula is inside the run-to-run noise on a swapping 16 GB laptop;
+  sealed-accumulation walk-forward 266.24 s book vs 266.33 s formula (n=1
+  each). `parity_full.py` still PASSes bit-for-bit on the formula path. Full
+  detail and raw JSON: `docs/benchmarks/pokemon-book.md`,
+  `docs/benchmarks/pokemon-book-raw/`. **No research number was re-run: that
+  is Plan D.** Every pre-Plan-B registry record reads as formula (a missing
+  `config["execution"]` is formula). The benchmark and horizon figures from
+  the instrument-repair final-review fix wave above are **still pending the
+  owner's re-run**; nothing here supplies them.
+
 ## Commands
 
 ```bash
@@ -630,7 +671,14 @@ uv run pkmn horizon <backtest-run-id>                     # per-trade edge vs ho
 uv run pkmn horizon <backtest-run-id> --benchmark <run-id> # pin the index run explicitly (registry ids, never a directory)
 uv run pkmn backtest --start ... --end ... --no-impact    # flat-cost, skip market-impact model
 uv run pkmn walkforward --strategy sealed-accumulation --start ... --end ... \
-    --trials 15 --engine python                          # reference (slow) Python engine, walkforward only
+    --trials 15 --engine python --execution formula      # reference (slow) Python engine, walkforward only (python + book is rejected)
+uv run pkmn walkforward ... --execution book|formula     # default book: modelled resting orders (synthetic, built from the day's tcgcsv quote)
+uv run pkmn evaluate --execution formula                 # score formula walk-forwards (default book; one mode per run)
+uv run pkmn wire encode --start 2024-02-08 --end 2026-09-13 --out data/wire/full.pkw  # warehouse -> ITCH-style quote file
+cpp/build-linux-release/pokemon_replay data/wire/full.pkw [--no-ladders] [--repeat N]   # replay a wire file, rebuild each day's ladders
+uv run python scripts/book_equivalence.py --start 2024-03-01 --end 2026-06-30   # book vs formula pricing, real data
+uv run python scripts/bench_pokemon_book.py              # encode, backtest and walk-forward cost, book vs formula
+scripts/bench_pokemon_replay.sh                          # replay throughput in the VM
 cmake -S cpp -B cpp/build -DPKMN_BUILD_TESTS=ON && cmake --build cpp/build -j && ctest --test-dir cpp/build
                              # C++ unit tests (Catch2), independent of pytest
 uv run python scripts/parity_full.py                      # full-data bit-for-bit acceptance, both engines
@@ -810,6 +858,13 @@ scripts/bench_iex.sh [--profile] [--no-record]            # re-execs in the VM, 
   from `engine_tests`, and kept out of the Python wheel build.
 - `cpp/tools/` — `iex_decode`, `pcap_count`, `iex_oracle` (book vs DEEP/TOPS,
   see `docs/iex-oracle.md`), `iex_bench` (driven by `scripts/bench_iex.sh`).
+- `cpp/src/pkmn_engine/ladder.*`, `execution_book.*` — Plan B: the daily
+  ladder builder (modelled resting orders, synthetic, built from the day's
+  tcgcsv quote) and book execution against it. `cpp/src/pkmn_wire/` — the
+  ITCH-style Pokemon quote wire format: encoder, decoder, `replay.hpp`.
+  `docs/pokemon-wire-protocol.md` specifies it; `docs/benchmarks/
+  pokemon-book.md` (raw JSON in `pokemon-book-raw/`) records the
+  measurements. `src/pkmn_quant/wire.py` feeds the encoder.
 - `docs/benchmarks/` — `iex-book.md` (dated results, newest first, plus the
   hand-written Task 6 A/B), flamegraphs and folded stacks for the baseline
   (`-c9e60e0`) and the optimized book. Also `docs/iex-oracle.md` and
@@ -1023,3 +1078,25 @@ scripts/bench_iex.sh [--profile] [--no-record]            # re-execs in the VM, 
   the tree makes a result read `-dirty`; that is why the Task 6 A/B rows
   say `1c14e20e25d7-dirty`). Benchmark comparisons in this VM need
   interleaved A/B runs; a single before/after pair is inside the noise.
+
+- **Plan B book execution gotchas.** Book and formula results are never
+  compared: `pkmn evaluate` and `pkmn horizon` refuse to mix modes.
+  `pkmn evaluate` defaults to `--execution book` and filters to one mode;
+  pass `--execution formula` for the legacy artifacts. Book walk-forwards
+  write `data/results/wf-{strategy}-{start}-{end}-book`; formula keeps the
+  legacy name, and `walkforward.json` and registry records carry
+  `"execution"` (missing means formula). Live paths are still formula:
+  `pkmn signals` prices with the formula, but it picks the lexicographically
+  last `wf-{strategy}-*` directory, which is the `-book` one when both
+  exist, so its params can come from a book walk-forward while its prices
+  stay formula. Impact-off runs are recorded as formula. The ladder prices in
+  whole cents, rounded to nearest with halves away from zero (`std::llround`);
+  the exact 1e9-ticks ladder is test-only. Each side has its own full depth
+  per asset-day (the formula shares one counter across both sides), two buys
+  walk the same ask ladder in arrival order, and the book is rebuilt fresh
+  every day. On the five native strategies at default params zero fills fell
+  on two-sided asset-days, so the one designed divergence never fired there.
+  Crossed or missing quotes build flat books at the base price. The wire
+  encoder raises `ValueError` on a price that is not a whole number of
+  cents or is at or above the u32 null sentinel. Wire files live in
+  gitignored `data/wire/`.

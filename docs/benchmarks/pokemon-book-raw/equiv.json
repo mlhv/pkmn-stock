@@ -1,0 +1,187 @@
+{
+  "date": "2026-10-23",
+  "host": "<hostname>",
+  "git_sha": "5f5ba34581cc84a6f696ee48b01faad54d21a842",
+  "git_dirty": true,
+  "window": [
+    "2024-03-01",
+    "2026-06-30"
+  ],
+  "cash": 10000.0,
+  "warmup_days": 0,
+  "prepare_seconds": 34.56618604203686,
+  "a": {
+    "rows": 34092324,
+    "checks": 11165181052,
+    "max_abs_err": 4.656612873077393e-10,
+    "worst_row": 12025137,
+    "worst_side": "buy",
+    "worst_used": 0,
+    "worst_qty": 20,
+    "input_rows": 34092324,
+    "seconds": 87.93947979202494,
+    "worst_quote": {
+      "asset": "Asset(product_id=89297, sub_type='Reverse Holofoil')",
+      "day_index": 20104,
+      "market": 3.73,
+      "mid": 182906.33,
+      "low": 2.99
+    },
+    "pass": true
+  },
+  "b": {
+    "buy-and-hold": {
+      "fills_formula": 60,
+      "fills_book_exact_test": 60,
+      "asset_days": 60,
+      "two_sided_asset_days": 0,
+      "fills_on_two_sided_formula": 0,
+      "fills_on_two_sided_book_exact_test": 0,
+      "one_sided_fills_compared": 60,
+      "max_abs_impact_err": 3.33351124481851e-10,
+      "mismatches": 0,
+      "first_mismatches": [],
+      "pass": true,
+      "seconds_formula": 3.789705250004772,
+      "seconds_book_exact_test": 3.372412124997936
+    },
+    "sealed-accumulation": {
+      "fills_formula": 50,
+      "fills_book_exact_test": 50,
+      "asset_days": 50,
+      "two_sided_asset_days": 0,
+      "fills_on_two_sided_formula": 0,
+      "fills_on_two_sided_book_exact_test": 0,
+      "one_sided_fills_compared": 50,
+      "max_abs_impact_err": 5.684341886080802e-14,
+      "mismatches": 0,
+      "first_mismatches": [],
+      "pass": true,
+      "seconds_formula": 2.128341207979247,
+      "seconds_book_exact_test": 2.0790737090283073
+    },
+    "dip-buyer": {
+      "fills_formula": 322,
+      "fills_book_exact_test": 322,
+      "asset_days": 322,
+      "two_sided_asset_days": 0,
+      "fills_on_two_sided_formula": 0,
+      "fills_on_two_sided_book_exact_test": 0,
+      "one_sided_fills_compared": 322,
+      "max_abs_impact_err": 3.333582299092086e-10,
+      "mismatches": 0,
+      "first_mismatches": [],
+      "pass": true,
+      "seconds_formula": 8.256172416033223,
+      "seconds_book_exact_test": 7.853442916995846
+    },
+    "xs-momentum": {
+      "fills_formula": 323,
+      "fills_book_exact_test": 323,
+      "asset_days": 323,
+      "two_sided_asset_days": 0,
+      "fills_on_two_sided_formula": 0,
+      "fills_on_two_sided_book_exact_test": 0,
+      "one_sided_fills_compared": 323,
+      "max_abs_impact_err": 3.333493481250116e-10,
+      "mismatches": 0,
+      "first_mismatches": [],
+      "pass": true,
+      "seconds_formula": 3.455999542027712,
+      "seconds_book_exact_test": 3.166480959043838
+    },
+    "cost-aware-reversion": {
+      "fills_formula": 226,
+      "fills_book_exact_test": 226,
+      "asset_days": 226,
+      "two_sided_asset_days": 0,
+      "fills_on_two_sided_formula": 0,
+      "fills_on_two_sided_book_exact_test": 0,
+      "one_sided_fills_compared": 226,
+      "max_abs_impact_err": 3.333298081997782e-10,
+      "mismatches": 0,
+      "first_mismatches": [],
+      "pass": true,
+      "seconds_formula": 4.7251402090187185,
+      "seconds_book_exact_test": 4.737871500023175
+    }
+  },
+  "c": {
+    "buy-and-hold": {
+      "formula": {
+        "total_return": 1.2684256458333332,
+        "fills": 60,
+        "total_impact": 1321.2135416666667,
+        "final_equity": 22684.256458333333
+      },
+      "book": {
+        "total_return": 1.2684230000000007,
+        "fills": 60,
+        "total_impact": 1321.24,
+        "final_equity": 22684.230000000007
+      },
+      "seconds_book": 2.247852459026035
+    },
+    "sealed-accumulation": {
+      "formula": {
+        "total_return": 0.062189947500000065,
+        "fills": 50,
+        "total_impact": 882.985,
+        "final_equity": 10621.899475
+      },
+      "book": {
+        "total_return": 0.0621854475000001,
+        "fills": 50,
+        "total_impact": 883.03,
+        "final_equity": 10621.854475
+      },
+      "seconds_book": 3.318010792019777
+    },
+    "dip-buyer": {
+      "formula": {
+        "total_return": -0.9970946766666665,
+        "fills": 322,
+        "total_impact": 10759.422666666667,
+        "final_equity": 29.053233333335026
+      },
+      "book": {
+        "total_return": -0.9972507874999998,
+        "fills": 322,
+        "total_impact": 10760.8,
+        "final_equity": 27.492125000001923
+      },
+      "seconds_book": 8.876306499994826
+    },
+    "xs-momentum": {
+      "formula": {
+        "total_return": -0.9869214091666673,
+        "fills": 323,
+        "total_impact": 8237.161041666666,
+        "final_equity": 130.7859083333274
+      },
+      "book": {
+        "total_return": -0.9869688625000005,
+        "fills": 323,
+        "total_impact": 8237.16,
+        "final_equity": 130.31137499999483
+      },
+      "seconds_book": 2.880806833971292
+    },
+    "cost-aware-reversion": {
+      "formula": {
+        "total_return": -0.9841115708333336,
+        "fills": 226,
+        "total_impact": 14228.351958333333,
+        "final_equity": 158.88429166666475
+      },
+      "book": {
+        "total_return": -0.9841293749999999,
+        "fills": 226,
+        "total_impact": 14228.53,
+        "final_equity": 158.70625000000138
+      },
+      "seconds_book": 4.44748116604751
+    }
+  },
+  "b_pass": true
+}

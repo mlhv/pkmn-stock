@@ -1,0 +1,151 @@
+{
+  "date": "2026-10-23",
+  "git_sha": "5f5ba34581cc84a6f696ee48b01faad54d21a842",
+  "git_dirty": true,
+  "host": {
+    "hostname": "<hostname>",
+    "machine": "Apple M1 Pro",
+    "os": "macOS-15.8.1-arm64-arm-64bit-Mach-O",
+    "python": "3.14.4"
+  },
+  "encode": {
+    "command": "pkmn wire encode --start 2024-02-08 --end 2026-09-13 --out data/wire/full.pkw",
+    "start": "2024-02-08",
+    "end": "2026-09-13",
+    "messages": 38250316,
+    "bytes": 890723220,
+    "encode_reported_seconds": 10.763,
+    "wall_seconds": 11.556369249999989
+  },
+  "backtest": {
+    "buy-and-hold": {
+      "total": {
+        "runs_s": {
+          "formula": [
+            44.06667066598311,
+            50.31401141604874,
+            53.80137866601581
+          ],
+          "book": [
+            35.90697970800102,
+            60.9463720000349,
+            58.78595787502127
+          ]
+        },
+        "best_s": {
+          "formula": 44.06667066598311,
+          "book": 35.90697970800102
+        },
+        "book_over_formula_best": 0.8148330510414327
+      },
+      "engine": {
+        "runs_s": {
+          "formula": [
+            5.824847667012364,
+            1.8350307089858688,
+            2.2065013330429792
+          ],
+          "book": [
+            1.7592473339755088,
+            2.0724702079896815,
+            2.1713802499580197
+          ]
+        },
+        "best_s": {
+          "formula": 1.8350307089858688,
+          "book": 1.7592473339755088
+        },
+        "book_over_formula_best": 0.9587018491629267
+      }
+    },
+    "dip-buyer": {
+      "total": {
+        "runs_s": {
+          "formula": [
+            77.60280325001804,
+            54.45654658402782,
+            60.18192691594595
+          ],
+          "book": [
+            67.57242958399002,
+            54.705273667001165,
+            67.58767262502806
+          ]
+        },
+        "best_s": {
+          "formula": 54.45654658402782,
+          "book": 54.705273667001165
+        },
+        "book_over_formula_best": 1.0045674413560095
+      },
+      "engine": {
+        "runs_s": {
+          "formula": [
+            17.39302266697632,
+            10.045089874998666,
+            11.772140290995594
+          ],
+          "book": [
+            14.394416957977228,
+            9.752572000026703,
+            10.422522916982416
+          ]
+        },
+        "best_s": {
+          "formula": 10.045089874998666,
+          "book": 9.752572000026703
+        },
+        "book_over_formula_best": 0.9708795163993491
+      }
+    }
+  },
+  "walkforward": {
+    "scratch_root": "<scratch>",
+    "n": 1,
+    "book": {
+      "command": "pkmn walkforward --strategy sealed-accumulation --start 2024-03-01 --end 2026-06-30 --trials 15 --workers 1 --execution book --root <scratch>",
+      "wall_seconds": 266.23810070799664,
+      "stdout_tail": [
+        "stitched_total_return: -0.1031",
+        "stitched_cagr: -0.0585",
+        "stitched_max_drawdown: -0.1608",
+        "stitched_sharpe: -0.9804",
+        "stitched_sortino: -1.0047",
+        "stitched_calmar: -0.3637",
+        "is_total_return_mean: 0.0303",
+        "oos_total_return_mean: -0.0097",
+        "is_cagr_mean: 0.0634",
+        "oos_cagr_mean: -0.0533",
+        "overfitting_gap: 0.1167",
+        "report written to <scratch>/data/results/wf-sealed-accumulation-2024-03-01-2026-06-30-book/report.md"
+      ]
+    },
+    "formula": {
+      "command": "pkmn walkforward --strategy sealed-accumulation --start 2024-03-01 --end 2026-06-30 --trials 15 --workers 1 --execution formula --root <scratch>",
+      "wall_seconds": 266.3276199999964,
+      "stdout_tail": [
+        "stitched_total_return: -0.1031",
+        "stitched_cagr: -0.0585",
+        "stitched_max_drawdown: -0.1608",
+        "stitched_sharpe: -0.9803",
+        "stitched_sortino: -1.0046",
+        "stitched_calmar: -0.3637",
+        "is_total_return_mean: 0.0303",
+        "oos_total_return_mean: -0.0097",
+        "is_cagr_mean: 0.0634",
+        "oos_cagr_mean: -0.0533",
+        "overfitting_gap: 0.1167",
+        "report written to <scratch>/data/results/wf-sealed-accumulation-2024-03-01-2026-06-30/report.md"
+      ]
+    },
+    "book_over_formula": 0.9996638752976512,
+    "artifacts": [
+      "data/results/wf-sealed-accumulation-2024-03-01-2026-06-30",
+      "data/results/wf-sealed-accumulation-2024-03-01-2026-06-30-book",
+      "data/runs/registry.jsonl",
+      "data/warehouse/prices",
+      "data/warehouse/products.parquet",
+      "data/warehouse/quarantine"
+    ]
+  }
+}

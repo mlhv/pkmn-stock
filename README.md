@@ -6,7 +6,7 @@
 ![Python 3.12](https://img.shields.io/badge/python-3.12-3776ab)
 ![C++20 / nanobind](https://img.shields.io/badge/C%2B%2B20-nanobind-00599c)
 ![mypy strict](https://img.shields.io/badge/mypy-strict-2a6db2)
-![tests](https://img.shields.io/badge/tests-615%20pytest%20%2B%2026%20vitest%20%2B%20130%20Catch2-2ea44f)
+![tests](https://img.shields.io/badge/tests-657%20pytest%20%2B%2026%20vitest%20%2B%20163%20Catch2-2ea44f)
 
 <p align="center">
   <img src="docs/assets/oos_equity.png" alt="Out-of-sample equity: buy-and-hold sealed rises about 151 percent while five active strategies end flat to negative" width="850">
@@ -225,6 +225,10 @@ A separate track, started after the card research above, is building toward a li
 **Speed.** Decoding and applying the 50,959,176 DEEP+ messages in that day's capture, with the capture held in RAM, runs at 7,342,902 messages per second in the clean benchmark run (best of 3, 13.5% spread between runs). Per-message latency is the median run (by throughput) of 3 RAM runs: p50 83 ns, p99 626 ns, p99.9 6,448 ns and max 40,436,760 ns. It is measured with the ARM virtual counter (cntvct_el0, 24 MHz, so 41.7 ns per tick), whose empty read pair costs 10.5 ns in that run (9.5 to 11.9 ns across the three runs, and included in every figure). The p50 is only two ticks (plus or minus 50%), and the maximum is most likely the VM being descheduled. Replacing the book's node-based containers with a pooled arena, an open-addressing id table and contiguous price levels was measured against the old book in 9 interleaved pairs: best-case throughput went from 4,926,764 to 7,584,533 messages per second and the median timed cost per message from 184.3 to 121.5 ns, with the new book faster in all 9 pairs. The tail latency did not improve. Hardware is an Apple M1 Pro running a 7-vCPU OrbStack Ubuntu 24.04 arm64 VM, and run-to-run noise there is 10% or more (46.8% of the median across the nine runs, for the new book's throughput), so treat the gains as direction plus rough size. All of these figures are for that one incident day's message mix (mostly a morning session, see above), not a normal full session. Method and raw runs: [docs/benchmarks/iex-book.md](docs/benchmarks/iex-book.md).
 
 Data provided for free by IEX. By accessing or using IEX Historical Data, you agree to the IEX Historical Data Terms of Use. The data is not redistributed here (`data/iex/` is gitignored); see [docs/iex-hist-terms.md](docs/iex-hist-terms.md).
+
+## Pokemon order book
+
+The backtester's default execution is now a price-time order book. tcgcsv publishes one quote per product per day, not an order book, so the resting orders are **modelled (synthetic, built from the day's tcgcsv quote)**; they are a model of the quote, never market data. Two checks back it. With a test-only exact ladder, book pricing matches the earlier walk-the-spread formula to 4.66e-10 dollars across 11.2 billion checks on 34.1 million real rows, and the five native strategies fill identically under both at default parameters. And encoding the warehouse into an ITCH-style wire file (`pkmn wire encode`, [docs/pokemon-wire-protocol.md](docs/pokemon-wire-protocol.md)) and replaying it builds the same ladders as the in-memory path, with no mismatches over 1,315,694 asset-days. This is an engine change, not a research result: no strategy number was re-run, and `--execution formula` keeps the old model. Measurements: [docs/benchmarks/pokemon-book.md](docs/benchmarks/pokemon-book.md).
 
 ## Engineering practices
 

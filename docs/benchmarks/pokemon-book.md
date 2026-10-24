@@ -136,7 +136,7 @@ loading and preparing the market itself (what one CLI backtest pays); "engine" h
 | dip-buyer | engine | 17.39, 10.05, 11.77 | 14.39, 9.75, 10.42 | 10.05 | 9.75 | 0.97 |
 
 Book execution costs nothing measurable here: every best-of-3 ratio is inside the run-to-run spread (the
-"total" rows vary by up to 70% between runs of the same mode, which is the swap pressure described above, not
+"total" rows vary by up to 70% between runs of the same mode, which is most likely the swap pressure described above, not
 the engine). A ladder is built only for an asset that has an order that day, so the extra work scales with fills,
 not with the universe. Do not read the 0.81 as book being faster.
 
@@ -151,7 +151,7 @@ Same script: `caffeinate -dimsu uv run pkmn walkforward --strategy sealed-accumu
 | book | 266.24 | −10.31% |
 | formula | 266.33 | −10.31% |
 
-book / formula = 0.9997. The two walk-forwards picked results that agree to four decimals on every stitched
+book / formula = 0.9997. The two walk-forwards picked results that agree to within 1e-4 on every stitched
 metric (Sharpe −0.9804 vs −0.9803). This is a timing run; its returns are not a research result.
 
 Both ran with `--root /var/folders/d5/vdyll6vs51j0943drp37077r0000gn/T/pkmn-bench-wf-cmiayxt2`, a scratch
@@ -183,7 +183,7 @@ the median, and treat the best as an upper bound.
 
 ## Raw JSON
 
-The scripts print their full JSON; the copies used for this page were kept outside the repo. Key fields:
+The scripts print their full JSON; the raw outputs used for this page are committed under `docs/benchmarks/pokemon-book-raw/` (`bench.json`, `equiv.json`, `replay.md`; absolute home and temp paths scrubbed to repo-relative or `<scratch>`). Key fields:
 
 ```json
 {
