@@ -13,6 +13,7 @@ import typer
 from pkmn_quant.config import Paths
 from pkmn_quant.data import tcgcsv
 from pkmn_quant.data.ingest import ingest_range, refresh_products
+from pkmn_quant.research.execution import execution_line
 
 if TYPE_CHECKING:
     from pkmn_quant.data.warehouse import Warehouse
@@ -368,9 +369,7 @@ def _read_holdings_csv(path: Path) -> list[SeededHolding]:
 
 
 def _execution_line(mode: str) -> str:
-    if mode == "book":
-        return "execution: book (modelled resting orders, synthetic)"
-    return f"execution: {mode}"
+    return execution_line(mode)
 
 
 @app.command()
@@ -393,7 +392,11 @@ def backtest(
     impact: bool = typer.Option(
         True,
         "--impact/--no-impact",
-        help="Walk-the-spread market impact on fills (see Plan 9 spec).",
+        help=(
+            "Market impact on fills (default on), priced per --execution. "
+            "--no-impact is flat cost and overrides --execution: the run is "
+            "recorded as formula."
+        ),
     ),
     execution: str = typer.Option(
         "book",
@@ -473,7 +476,11 @@ def walkforward(
     impact: bool = typer.Option(
         True,
         "--impact/--no-impact",
-        help="Walk-the-spread market impact on fills (see Plan 9 spec).",
+        help=(
+            "Market impact on fills (default on), priced per --execution. "
+            "--no-impact is flat cost and overrides --execution: the run is "
+            "recorded as formula."
+        ),
     ),
     engine: str = typer.Option(
         "cpp",
@@ -579,7 +586,7 @@ def walkforward(
     run_dir.mkdir(parents=True, exist_ok=True)
     result.stitched_curve.write_parquet(run_dir / "stitched_equity.parquet")
     (run_dir / "report.md").write_text(
-        render_markdown(result, strategy_name=strategy, ci=stitched_ci)
+        render_markdown(result, strategy_name=strategy, ci=stitched_ci, execution=mode)
     )
     write_walkforward_json(run_dir, result, strategy_name=strategy, ci=stitched_ci, execution=mode)
 
@@ -991,8 +998,21 @@ def evaluate(
         benchmark = Path(candidates[0].artifact_path)
     else:
         target = benchmark.resolve()
+
+        def recorded_dirs(r: RunRecord) -> set[Path]:
+            # A relative artifact_path is resolved against --root, not only
+            # cwd: record_run stores root / "data" / ..., and with the default
+            # root "." that is a root-relative path, so `pkmn evaluate --root
+            # /repo` run from elsewhere would otherwise miss the record and
+            # fall back to "formula". The cwd reading is kept as well for a
+            # record written under a non-"." relative root.
+            p = Path(r.artifact_path)
+            if p.is_absolute():
+                return {p.resolve()}
+            return {(root / p).resolve(), p.resolve()}
+
         matches = sorted(
-            (r for r in records if Path(r.artifact_path).resolve() == target),
+            (r for r in records if target in recorded_dirs(r)),
             key=lambda r: r.recorded_at,
             reverse=True,
         )
@@ -1059,7 +1079,13 @@ def evaluate(
     p_value = whites_reality_check(excess, n_boot=n_boot, mean_block=block, seed=seed)
 
     # -- artifact --
-    out_dir = results_dir / f"evaluate-{dt.date.today().isoformat()}"
+    # Book evaluates get a "-book" suffix (the same rule as the wf-...-book
+    # artifacts) so a book and a formula evaluate on one day sit side by side;
+    # sharing one directory let the second overwrite the first, leaving the
+    # first run's registry record pointing at the other mode's numbers.
+    # Formula keeps the legacy name, so existing artifacts stay valid.
+    suffix = "-book" if execution == "book" else ""
+    out_dir = results_dir / f"evaluate-{dt.date.today().isoformat()}{suffix}"
     if out_dir.exists():
         typer.echo(f"warning: overwriting existing results in {out_dir}", err=True)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -1077,6 +1103,8 @@ def evaluate(
 
     lines = [
         "# Cross-strategy rigor report",
+        "",
+        execution_line(execution),
         "",
         f"{len(strat_r)} strategies vs benchmark `{benchmark.name}`, "
         f"{len(dates)} aligned days ({dates[0]} .. {dates[-1]}).",
@@ -1132,6 +1160,7 @@ def evaluate(
     )
     if run_id is not None:
         typer.echo(f"run recorded: {run_id}")
+    typer.echo(execution_line(execution))
     typer.echo(f"Reality Check p = {p_value:.4f}")
     typer.echo(f"results written to {out_dir}")
 
@@ -1196,6 +1225,8 @@ def _horizon_report_md(
     n_open = sum(1 for t in report.trips if t.still_open)
     lines = [
         "# Horizon-matched trade report",
+        "",
+        execution_line(str(run.config.get("execution", "formula"))),
         "",
         f"Backtest run `{run.run_id}` (`{run.strategy}`) vs benchmark run "
         f"`{bench.run_id}` (`{bench.strategy}`), {first_day} .. {last_day}.",
@@ -1491,6 +1522,7 @@ def horizon(
     if recorded is not None:
         typer.echo(f"run recorded: {recorded}")
     typer.echo(f"{len(report.trips)} round trips vs benchmark {bench.run_id} ({bench.strategy})")
+    typer.echo(_execution_line(execution))
     typer.echo(_horizon_headline(report))
     typer.echo(f"median edge (all trips): {report.median_edge:+.2%}")
     typer.echo(f"results written to {out_dir}")

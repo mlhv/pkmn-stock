@@ -22,6 +22,13 @@ describe("RunsBrowser", () => {
     expect(evalLink).toHaveAttribute("href", "/evaluate/20260702T000000Z-bbb222");
   });
 
+  it("shows each run's execution mode, book with the synthetic label", async () => {
+    mountWith(runsFixture);
+    await waitFor(() => expect(screen.getByText("book (modelled, synthetic)")).toBeInTheDocument());
+    expect(screen.getByText("formula")).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "Execution" })).toBeInTheDocument();
+  });
+
   it("shows an error state when the fetch fails", async () => {
     vi.stubGlobal("fetch", vi.fn(async () =>
       new Response(JSON.stringify({ detail: "boom" }), { status: 500 })));

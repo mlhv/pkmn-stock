@@ -219,3 +219,7 @@ def test_overlay_offers_only_benchmarks_in_the_viewed_runs_mode(
     assert not at.exception
     [overlay] = [s for s in at.selectbox if s.label == "Benchmark overlay"]
     assert list(overlay.options) == ["20260727T100000Z-aaa111"]
+    # Final-review Important 2: the caption names the mode with the synthetic label.
+    from pkmn_quant.research.execution import BOOK_LABEL
+
+    assert f"Execution: {BOOK_LABEL}" in [c.value for c in at.caption]

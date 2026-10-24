@@ -35,4 +35,10 @@ describe("WalkForwardDetail", () => {
     expect(screen.getByText(/-9\.00%/)).toBeInTheDocument();  // rigor.lo formatted
     expect(screen.getByText(/mark smoothing/i)).toBeInTheDocument();  // honesty caveat
   });
+
+  it("states the execution mode with the synthetic label", async () => {
+    mount();
+    await waitFor(() =>
+      expect(screen.getByText("Execution: book (modelled, synthetic)")).toBeInTheDocument());
+  });
 });

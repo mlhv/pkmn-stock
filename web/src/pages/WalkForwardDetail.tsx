@@ -3,6 +3,7 @@ import { apiClient } from "../api/client";
 import { AsyncState } from "../components/AsyncState";
 import { EquityChart } from "../components/EquityChart";
 import { useAsync } from "../hooks/useAsync";
+import { executionLabel } from "../execution";
 
 const pct = (x: number) => `${(x * 100).toFixed(2)}%`;
 
@@ -15,6 +16,7 @@ export function WalkForwardDetail() {
         {(wf) => (
           <>
             <h2>Walk-forward: {wf.strategy}</h2>
+            <p>Execution: {executionLabel(wf.execution)}</p>
             <EquityChart curve={wf.equity_curve} />
             {wf.rigor && (
               <p>

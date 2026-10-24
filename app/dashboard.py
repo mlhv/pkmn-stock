@@ -21,6 +21,7 @@ from pkmn_quant.config import Paths
 from pkmn_quant.data.warehouse import Warehouse
 from pkmn_quant.engine.data import MarketData
 from pkmn_quant.live.ledger import LedgerError, ledger_path, make_snapshot
+from pkmn_quant.research.execution import execution_line
 
 ROOT = Path(".")
 RESULTS = ROOT / "data" / "results"
@@ -123,7 +124,9 @@ with tab_wf:
         # Only benchmarks in the viewed run's execution mode (missing = formula):
         # no comparison mixes book and formula runs.
         wf_mode = str(wf.get("execution", "formula"))
-        st.caption(f"Execution: {wf_mode}")
+        # Book results are fills against modelled resting orders, not real
+        # ones; the caption says so (execution_line carries the label).
+        st.caption(execution_line(wf_mode))
         bench = benchmark_runs(wf_mode)
         if bench:
             bench_dir = st.selectbox("Benchmark overlay", bench, format_func=lambda p: p.name)

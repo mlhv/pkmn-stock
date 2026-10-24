@@ -4,6 +4,7 @@ import { apiClient } from "../api/client";
 import type { StrategyStat } from "../api/types";
 import { AsyncState } from "../components/AsyncState";
 import { useAsync } from "../hooks/useAsync";
+import { executionLabel } from "../execution";
 
 const pct = (x: number) => `${(x * 100).toFixed(2)}%`;
 const dsrText = (d: number | null) => (d === null ? "n/a" : d.toFixed(3));
@@ -22,6 +23,7 @@ export function RigorCompare() {
           return (
             <>
               <h2>Rigor comparison</h2>
+              <p>Execution: {executionLabel(ev.execution)}</p>
               <p>
                 <strong>White&apos;s Reality Check</strong> (best vs benchmark, jointly over{" "}
                 {ev.strategies.length} strategies): p = {ev.reality_check_p.toFixed(4)}

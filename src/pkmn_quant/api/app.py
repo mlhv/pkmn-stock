@@ -93,6 +93,7 @@ def create_app(root: Path, executor: Executor | None = None) -> FastAPI:
                 git_sha=r.git_sha,
                 git_dirty=r.git_dirty,
                 results=r.results,
+                execution=str(r.config.get("execution", "formula")),
             )
             for r in data.list_runs(
                 root, command=command, strategy=strategy, include_benchmarks=include_benchmarks
@@ -113,6 +114,7 @@ def create_app(root: Path, executor: Executor | None = None) -> FastAPI:
             git_sha=r.git_sha,
             git_dirty=r.git_dirty,
             results=r.results,
+            execution=str(r.config.get("execution", "formula")),
             config_hash=r.config_hash,
             config=r.config,
             data_fingerprint=r.data_fingerprint,
@@ -133,6 +135,7 @@ def create_app(root: Path, executor: Executor | None = None) -> FastAPI:
             folds=[FoldRow(**f) for f in raw["folds"]],
             rigor=RigorCI(**rigor) if rigor else None,
             equity_curve=[EquityPoint(**p) for p in raw["equity_curve"]],
+            execution=str(raw.get("execution", "formula")),
         )
 
     @app.get("/api/evaluate/{run_id}", response_model=EvaluateResponse)
@@ -149,6 +152,7 @@ def create_app(root: Path, executor: Executor | None = None) -> FastAPI:
             start=raw["start"],
             end=raw["end"],
             params=raw["params"],
+            execution=str(raw.get("execution", "formula")),
             strategies=[
                 StrategyStat(
                     strategy=name,

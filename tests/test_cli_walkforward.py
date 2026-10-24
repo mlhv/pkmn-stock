@@ -330,3 +330,24 @@ def test_walkforward_book_and_formula_artifacts_sit_side_by_side(tmp_path: Path)
     assert sorted(p.name for p in out.iterdir()) == sorted([book_dir.name, formula_dir.name])
     assert json.loads((book_dir / "walkforward.json").read_text())["execution"] == "book"
     assert json.loads((formula_dir / "walkforward.json").read_text())["execution"] == "formula"
+
+
+def test_walkforward_report_states_execution_mode(tmp_path: Path) -> None:
+    """Final-review Important 2: report.md and stdout name the mode, and a book
+    run carries the synthetic label."""
+    from pkmn_quant.research.execution import BOOK_LABEL
+
+    seed_forty_days(tmp_path)
+    out = tmp_path / "data" / "results"
+    book = CliRunner().invoke(app, [*_WF_ARGS, "--root", str(tmp_path)])
+    assert book.exit_code == 0, book.output
+    assert f"Execution: {BOOK_LABEL}" in book.output
+    book_report = out / "wf-sealed-accumulation-2025-01-01-2025-02-09-book" / "report.md"
+    assert f"Execution: {BOOK_LABEL}" in book_report.read_text()
+    formula = CliRunner().invoke(
+        app, [*_WF_ARGS, "--execution", "formula", "--root", str(tmp_path)]
+    )
+    assert formula.exit_code == 0, formula.output
+    text = (out / "wf-sealed-accumulation-2025-01-01-2025-02-09" / "report.md").read_text()
+    assert "Execution: formula" in text
+    assert "synthetic" not in text

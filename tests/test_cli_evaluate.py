@@ -6,6 +6,7 @@ from pathlib import Path
 
 import numpy as np
 import polars as pl
+import pytest
 from typer.testing import CliRunner
 
 from pkmn_quant.cli import app
@@ -496,3 +497,64 @@ def test_evaluate_explicit_unregistered_benchmark_is_formula(tmp_path: Path) -> 
     _rewrite_wf_execution(tmp_path, {"alpha": "book", "beta": "book"})
     bad = run_eval(tmp_path, "--benchmark", str(loose), execution="book")
     assert bad.exit_code == 1
+
+
+def test_evaluate_book_and_formula_same_day_keep_separate_artifacts(tmp_path: Path) -> None:
+    """Final-review Important 1: both modes evaluated on one day used to share
+    evaluate-<date>/, so the second overwrote the first and the first run's
+    registry record (served by /api/evaluate/{run_id}) pointed at the other
+    mode's numbers. Book now writes evaluate-<date>-book/; formula keeps the
+    legacy name. Each report and stdout also states the mode (Important 2)."""
+    from pkmn_quant.research.execution import BOOK_LABEL
+    from pkmn_quant.research.runs import load_runs
+
+    _seed_book_beside_legacy(tmp_path)
+    book = run_eval(tmp_path, execution="book")
+    assert book.exit_code == 0, book.output
+    formula = run_eval(tmp_path, execution="formula")
+    assert formula.exit_code == 0, formula.output
+    assert f"Execution: {BOOK_LABEL}" in book.output
+    assert "Execution: formula" in formula.output
+
+    results = tmp_path / "data" / "results"
+    dirs = sorted(d.name for d in results.glob("evaluate-*"))
+    assert len(dirs) == 2
+    formula_dir, book_dir = dirs  # "...-book" sorts after the bare date
+    assert book_dir == f"{formula_dir}-book"
+    for name, mode, strategies in [
+        (book_dir, "book", {"gamma", "delta"}),
+        (formula_dir, "formula", {"alpha", "beta"}),
+    ]:
+        payload = json.loads((results / name / "evaluate.json").read_text())
+        assert payload["execution"] == mode
+        assert set(payload["strategies"]) == strategies
+        report = (results / name / "report.md").read_text()
+        expected = f"Execution: {BOOK_LABEL}" if mode == "book" else "Execution: formula"
+        assert expected in report
+    records = {r.config["execution"]: r for r in load_runs(tmp_path) if r.command == "evaluate"}
+    assert Path(records["book"].artifact_path).name == book_dir
+    assert Path(records["formula"].artifact_path).name == formula_dir
+
+
+def test_evaluate_explicit_benchmark_resolves_relative_record_against_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Final-review M7: a registry record written with the default --root "."
+    stores a root-relative artifact_path. `pkmn evaluate --root <repo>
+    --benchmark <dir>` run from another cwd used to resolve it against cwd,
+    miss the record, read the benchmark as formula and refuse a book bar."""
+    repo = tmp_path / "repo"
+    book_id = "20260731T110000Z-bbb999"
+    rel = _record(repo, book_id, "buy-and-hold-sealed", config={"execution": "book"})
+    rel["artifact_path"] = f"data/results/{book_id}"  # as written under --root "."
+    seed_everything(repo, extra_records=[rel])
+    bench_dir = repo / "data" / "results" / book_id
+    _write_curve(bench_dir, "buy-and-hold-sealed", [100.0 + 0.1 * i for i in range(200)], False)
+    _rewrite_wf_execution(repo, {"alpha": "book", "beta": "book"})
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    result = run_eval(repo, "--benchmark", str(bench_dir), execution="book")
+    assert result.exit_code == 0, result.output
+    out = next((repo / "data" / "results").glob("evaluate-*-book"))
+    assert json.loads((out / "evaluate.json").read_text())["execution"] == "book"

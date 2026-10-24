@@ -571,3 +571,18 @@ def test_horizon_book_run_uses_book_exit(tmp_path: Path) -> None:
     assert open_trip["strategy_return"] == pytest.approx(
         (FINAL_MARK - (FINAL_MARK * 0.1275 + 1.0 + 2.12)) / OPEN_BASIS - 1.0, abs=1e-12
     )
+
+
+@pytest.mark.parametrize("mode", ["book", "formula"])
+def test_horizon_report_states_execution_mode(tmp_path: Path, mode: str) -> None:
+    """Final-review Important 2: horizon stdout and report.md name the mode;
+    book carries the synthetic label."""
+    from pkmn_quant.research.execution import BOOK_LABEL
+
+    seed(tmp_path, execution=mode)
+    result = run_horizon(tmp_path, "--benchmark", BENCH_ID)
+    assert result.exit_code == 0, result.output
+    expected = f"Execution: {BOOK_LABEL}" if mode == "book" else "Execution: formula"
+    assert expected in result.output
+    report = (tmp_path / "data" / "results" / f"horizon-{RUN_ID}" / "report.md").read_text()
+    assert expected in report

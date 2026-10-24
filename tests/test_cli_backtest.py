@@ -9,6 +9,7 @@ from pkmn_quant.cli import app
 from pkmn_quant.config import Paths
 from pkmn_quant.data.transforms import PRICE_SCHEMA
 from pkmn_quant.data.warehouse import Warehouse
+from pkmn_quant.research.execution import BOOK_LABEL
 from tests.helpers import price_row
 
 D1, D2, D3 = date(2025, 6, 1), date(2025, 6, 2), date(2025, 6, 3)
@@ -409,7 +410,7 @@ def test_backtest_golden_numbers_book(tmp_path: Path) -> None:
     seed_tick(tmp_path)
     result = run_cli(tmp_path)
     assert result.exit_code == 0, result.output
-    assert "execution: book (modelled resting orders, synthetic)" in result.output
+    assert f"Execution: {BOOK_LABEL}" in result.output
     assert _equity(tmp_path) == pytest.approx([100.0, 95.94, 116.94], abs=1e-9)
     run_dir = next(iter((tmp_path / "data" / "results").iterdir()))
     fills = pl.read_parquet(run_dir / "fills.parquet")
@@ -426,7 +427,7 @@ def test_backtest_formula_on_tick_fixture(tmp_path: Path) -> None:
     seed_tick(tmp_path)
     result = run_cli(tmp_path, "--execution", "formula")
     assert result.exit_code == 0, result.output
-    assert "execution: formula" in result.output
+    assert "Execution: formula" in result.output
     assert "modelled resting orders" not in result.output
     assert _equity(tmp_path) == pytest.approx([100.0, 95.9375, 116.9375])
 

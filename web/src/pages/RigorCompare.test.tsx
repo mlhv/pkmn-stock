@@ -34,4 +34,10 @@ describe("RigorCompare", () => {
     // sealed-accumulation dsr 0.008 > ml-ranker 0.007: descending puts sealed first
     expect(rows[0]).toHaveTextContent("sealed-accumulation");
   });
+
+  it("states the execution mode with the synthetic label", async () => {
+    mount();
+    await waitFor(() =>
+      expect(screen.getByText("Execution: book (modelled, synthetic)")).toBeInTheDocument());
+  });
 });
