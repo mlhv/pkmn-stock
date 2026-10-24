@@ -172,6 +172,43 @@ def test_ladder_equivalence_counts_and_agrees() -> None:
     )
     assert out["rows"] == 3
     assert out["checks"] == 210 * 2 + 6 * 2 + 1 * 2
+    # Final-review M3: each side's book depth matches the cost model's own
+    # max_daily_qty (ask on buy_base, bid on market), checked independently.
+    assert out["depth_mismatches"] == 0
     assert isinstance(out["max_abs_err"], float)
     assert out["max_abs_err"] <= 1e-6
     assert out["worst_side"] in ("buy", "sell")
+
+
+def test_book_equivalence_gate_fails_on_depth_mismatch(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Final-review M3: scripts/book_equivalence.py part (a) fails when any
+    row's book depth disagrees with the cost model, even at zero pricing error
+    (the comparison runs over the depth the book reports, so a short ladder
+    would otherwise pass)."""
+    import numpy as np
+
+    from pkmn_quant.engine.costs import CostModel
+    from scripts import book_equivalence
+
+    class Prepared:
+        row_market = np.array([1.0])
+        row_mid = np.array([1.5])
+        row_low = np.array([0.8])
+        row_asset = np.array([0], dtype=np.int32)
+        row_day = np.array([0], dtype=np.int32)
+        asset_list = ("a",)
+
+    real = book_equivalence._engine.ladder_equivalence
+    cm = CostModel(impact_enabled=True)
+    ok = book_equivalence.part_a(Prepared(), cm)  # type: ignore[arg-type]
+    assert ok["depth_mismatches"] == 0 and ok["pass"]
+
+    def short(**kw: object) -> dict[str, object]:
+        out = dict(real(**kw))  # type: ignore[arg-type]
+        out["depth_mismatches"] = 1
+        return out
+
+    monkeypatch.setattr(book_equivalence._engine, "ladder_equivalence", short)
+    bad = book_equivalence.part_a(Prepared(), cm)  # type: ignore[arg-type]
+    assert bad["max_abs_err"] <= 1e-6
+    assert not bad["pass"]

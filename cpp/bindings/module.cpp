@@ -310,6 +310,11 @@ OutArr<std::uint64_t> ladder_digests_py(Arr<std::int32_t> row_day, Arr<std::int3
 // (used, qty) pair with used + qty <= depth against CostModel::buy_impact /
 // sell_impact. The book value is NOT clamped at 0 here (stronger than the
 // fill path, which clamps). Impact on, like the ladder builder requires.
+// The depth the comparison runs over is read off the book itself, so it is
+// also checked independently: a row counts in `depth_mismatches` when the
+// ask depth != cm.max_daily_qty(cm.buy_base(market, low)) or the bid depth
+// != cm.max_daily_qty(market). Without that a ladder built one level short
+// on both sides would still compare equal over the levels it does have.
 nb::dict ladder_equivalence_py(Arr<double> row_market, Arr<double> row_mid, Arr<double> row_low,
                                Arr<double> tier_thresholds, Arr<std::int64_t> tier_qtys,
                                std::int64_t fallback_max_qty) {
@@ -318,7 +323,7 @@ nb::dict ladder_equivalence_py(Arr<double> row_market, Arr<double> row_mid, Arr<
         throw std::invalid_argument("row arrays differ in length");
     const CostModel cm = ladder_cost_model(tier_thresholds, tier_qtys, fallback_max_qty);
     const double tpd = static_cast<double>(ticks_per_dollar(LadderPricing::ExactTest));
-    std::uint64_t rows = 0, checks = 0;
+    std::uint64_t rows = 0, checks = 0, depth_mismatches = 0;
     double max_err = 0.0;
     std::int64_t worst_row = -1, worst_used = -1, worst_qty = -1;
     const char* worst_side = "";
@@ -333,6 +338,7 @@ nb::dict ladder_equivalence_py(Arr<double> row_market, Arr<double> row_mid, Arr<
             ++rows;
             const double mid = row_mid(i), low = row_low(i);
             build_day_ladder(DayQuote{m, mid, low}, cm, LadderPricing::ExactTest, b);
+            bool depth_ok = true;
             for (int side = 0; side < 2; ++side) {
                 const bool buy = side == 0;
                 // A buy takes the asks; a sell hits the bids.
@@ -347,6 +353,9 @@ nb::dict ladder_equivalence_py(Arr<double> row_market, Arr<double> row_mid, Arr<
                     pre.push_back(pre.back() + execs.front().price * execs.front().qty);
                 }
                 const auto depth = static_cast<std::int64_t>(pre.size()) - 1;
+                const std::int64_t want =
+                    buy ? cm.max_daily_qty(cm.buy_base(m, low)) : cm.max_daily_qty(m);
+                if (depth != want) depth_ok = false;
                 for (std::int64_t used = 0; used < depth; ++used) {
                     for (std::int64_t qty = 1; used + qty <= depth; ++qty) {
                         const double notional =
@@ -369,11 +378,13 @@ nb::dict ladder_equivalence_py(Arr<double> row_market, Arr<double> row_mid, Arr<
                     }
                 }
             }
+            if (!depth_ok) ++depth_mismatches;
         }
     }
     nb::dict out;
     out["rows"] = rows;
     out["checks"] = checks;
+    out["depth_mismatches"] = depth_mismatches;
     out["max_abs_err"] = max_err;
     out["worst_row"] = worst_row;
     out["worst_side"] = std::string(worst_side);

@@ -72,6 +72,10 @@ def ladder_digests(
     tier_qtys: NDArray[np.int64],
     fallback_max_qty: int,
 ) -> NDArray[np.uint64]: ...
+
+# Keys: rows, checks, depth_mismatches (rows whose ask or bid depth differs
+# from the cost model's max_daily_qty), max_abs_err, worst_row, worst_side,
+# worst_used, worst_qty.
 def ladder_equivalence(
     row_market: NDArray[np.float64],
     row_mid: NDArray[np.float64],

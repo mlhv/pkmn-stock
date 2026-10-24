@@ -10,7 +10,11 @@ pytest; its output goes in docs/benchmarks/pokemon-book.md.
     window: the test-only exact ladder (1e9 ticks per dollar) taken out one
     unit at a time through the OrderBook, against CostModel.buy_impact /
     sell_impact, for every (used, qty) with used + qty <= depth. Gate:
-    max_abs_err <= 1e-6 (exit 1 otherwise; never loosened).
+    max_abs_err <= 1e-6 and depth_mismatches == 0 (exit 1 otherwise; never
+    loosened). depth_mismatches counts rows whose book depth differs from
+    the cost model's (ask: max_daily_qty(buy_base(market, low)); bid:
+    max_daily_qty(market)), since the comparison itself runs over the depth
+    the book reports.
 (b) End to end. The five native strategies (default params, $10,000, impact
     on, warmup 0 as ``pkmn backtest``) under execution="formula" and the
     test-only "book-exact-test", through NativeBacktest. On asset-days where
@@ -100,7 +104,7 @@ def part_a(p: PreparedMarket, cm: CostModel) -> dict[str, Any]:
             "mid": float(p.row_mid[w]),
             "low": float(p.row_low[w]),
         }
-    res["pass"] = float(res["max_abs_err"]) <= TOL
+    res["pass"] = float(res["max_abs_err"]) <= TOL and int(res["depth_mismatches"]) == 0
     return res
 
 
@@ -186,7 +190,10 @@ def main() -> int:
     result["a"] = a
     print(json.dumps(a, indent=2))
     if not a["pass"]:
-        print(f"FAIL (a): max_abs_err {a['max_abs_err']!r} > {TOL}")
+        print(
+            f"FAIL (a): max_abs_err {a['max_abs_err']!r} (gate {TOL}), "
+            f"depth_mismatches {a['depth_mismatches']} (gate 0)"
+        )
         print(json.dumps(result))
         return 1
     print("PASS (a)")
