@@ -72,3 +72,11 @@ def ladder_digests(
     tier_qtys: NDArray[np.int64],
     fallback_max_qty: int,
 ) -> NDArray[np.uint64]: ...
+def ladder_equivalence(
+    row_market: NDArray[np.float64],
+    row_mid: NDArray[np.float64],
+    row_low: NDArray[np.float64],
+    tier_thresholds: NDArray[np.float64],
+    tier_qtys: NDArray[np.int64],
+    fallback_max_qty: int,
+) -> dict[str, int | float | str]: ...

@@ -150,3 +150,28 @@ def test_bindings_reject_mismatched_tier_arrays(
     monkeypatch.setattr(native._engine, "run_backtest", truncated)
     with pytest.raises(ValueError, match="tier_thresholds and tier_qtys differ"):
         _run(tmp_path)
+
+
+def test_ladder_equivalence_counts_and_agrees() -> None:
+    """The Task 7 gate's binding on hand-built rows: a $1 card (depth 20 each
+    side, 210 (used, qty) pairs per side), an inverted $60 box whose $65 floor
+    lands in the 3-unit tier on the buy side and $60 in it on the sell side,
+    a NaN market (skipped) and a $300 fallback-tier row with no mid (1 pair a
+    side). Exact ladder vs formula agree far inside 1e-6."""
+    import numpy as np
+
+    from pkmn_quant import _engine
+
+    out = _engine.ladder_equivalence(
+        row_market=np.array([1.0, 60.0, np.nan, 300.0]),
+        row_mid=np.array([1.5, 70.0, 1.0, np.nan]),
+        row_low=np.array([0.8, 65.0, 1.0, 250.0]),
+        tier_thresholds=np.array([5.0, 50.0, 200.0]),
+        tier_qtys=np.array([20, 8, 3], dtype=np.int64),
+        fallback_max_qty=1,
+    )
+    assert out["rows"] == 3
+    assert out["checks"] == 210 * 2 + 6 * 2 + 1 * 2
+    assert isinstance(out["max_abs_err"], float)
+    assert out["max_abs_err"] <= 1e-6
+    assert out["worst_side"] in ("buy", "sell")

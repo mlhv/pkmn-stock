@@ -301,6 +301,87 @@ OutArr<std::uint64_t> ladder_digests_py(Arr<std::int32_t> row_day, Arr<std::int3
     return to_numpy(std::move(out));
 }
 
+// Real-data equivalence gate (Plan B Task 7, scripts/book_equivalence.py).
+// For every row with a printed market (> 0, as execute_book), builds the
+// test-only ExactTest ladder (1e9 ticks per dollar) of modelled resting orders
+// (synthetic, built from the day's tcgcsv quote) into an OrderBook, takes the
+// units out one at a time with match(..., 1, ...) so the book's own priority
+// ordering decides the unit order, forms prefix sums, and compares every
+// (used, qty) pair with used + qty <= depth against CostModel::buy_impact /
+// sell_impact. The book value is NOT clamped at 0 here (stronger than the
+// fill path, which clamps). Impact on, like the ladder builder requires.
+nb::dict ladder_equivalence_py(Arr<double> row_market, Arr<double> row_mid, Arr<double> row_low,
+                               Arr<double> tier_thresholds, Arr<std::int64_t> tier_qtys,
+                               std::int64_t fallback_max_qty) {
+    const std::size_t n = row_market.size();
+    if (row_mid.size() != n || row_low.size() != n)
+        throw std::invalid_argument("row arrays differ in length");
+    const CostModel cm = ladder_cost_model(tier_thresholds, tier_qtys, fallback_max_qty);
+    const double tpd = static_cast<double>(ticks_per_dollar(LadderPricing::ExactTest));
+    std::uint64_t rows = 0, checks = 0;
+    double max_err = 0.0;
+    std::int64_t worst_row = -1, worst_used = -1, worst_qty = -1;
+    const char* worst_side = "";
+    {
+        nb::gil_scoped_release release;
+        book::OrderBook b;
+        std::vector<book::Execution> execs;
+        std::vector<std::int64_t> pre;
+        for (std::size_t i = 0; i < n; ++i) {
+            const double m = row_market(i);
+            if (std::isnan(m) || m <= 0.0) continue;
+            ++rows;
+            const double mid = row_mid(i), low = row_low(i);
+            build_day_ladder(DayQuote{m, mid, low}, cm, LadderPricing::ExactTest, b);
+            for (int side = 0; side < 2; ++side) {
+                const bool buy = side == 0;
+                // A buy takes the asks; a sell hits the bids.
+                pre.assign(1, 0);
+                for (;;) {
+                    execs.clear();
+                    book::Qty got =
+                        buy ? b.match(book::Side::Buy, 1,
+                                      std::numeric_limits<book::Price>::max(), execs)
+                            : b.match(book::Side::Sell, 1, 0, execs);
+                    if (got == 0) break;
+                    pre.push_back(pre.back() + execs.front().price * execs.front().qty);
+                }
+                const auto depth = static_cast<std::int64_t>(pre.size()) - 1;
+                for (std::int64_t used = 0; used < depth; ++used) {
+                    for (std::int64_t qty = 1; used + qty <= depth; ++qty) {
+                        const double notional =
+                            static_cast<double>(pre[static_cast<std::size_t>(used + qty)] -
+                                                pre[static_cast<std::size_t>(used)]) /
+                            tpd;
+                        const double mq = static_cast<double>(qty) * m;
+                        const double book_imp = buy ? notional - mq : mq - notional;
+                        const double formula = buy ? cm.buy_impact(m, mid, low, qty, used)
+                                                   : cm.sell_impact(m, low, qty, used);
+                        const double err = std::fabs(book_imp - formula);
+                        ++checks;
+                        if (err > max_err || worst_row < 0) {
+                            if (err > max_err) max_err = err;
+                            worst_row = static_cast<std::int64_t>(i);
+                            worst_side = buy ? "buy" : "sell";
+                            worst_used = used;
+                            worst_qty = qty;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    nb::dict out;
+    out["rows"] = rows;
+    out["checks"] = checks;
+    out["max_abs_err"] = max_err;
+    out["worst_row"] = worst_row;
+    out["worst_side"] = std::string(worst_side);
+    out["worst_used"] = worst_used;
+    out["worst_qty"] = worst_qty;
+    return out;
+}
+
 }  // namespace
 
 NB_MODULE(_engine, m) {
@@ -327,4 +408,7 @@ NB_MODULE(_engine, m) {
     m.def("ladder_digests", &ladder_digests_py, nb::arg("row_day"), nb::arg("row_asset"),
           nb::arg("row_market"), nb::arg("row_mid"), nb::arg("row_low"),
           nb::arg("tier_thresholds"), nb::arg("tier_qtys"), nb::arg("fallback_max_qty"));
+    m.def("ladder_equivalence", &ladder_equivalence_py, nb::arg("row_market"),
+          nb::arg("row_mid"), nb::arg("row_low"), nb::arg("tier_thresholds"),
+          nb::arg("tier_qtys"), nb::arg("fallback_max_qty"));
 }
