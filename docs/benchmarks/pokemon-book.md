@@ -50,6 +50,23 @@ price-time priority picks the order), forms prefix sums, and compares every `(us
 The worst row is a quote with an absurd `mid` (a $3.73 card whose mid is $182,906), so its ramp is enormous and
 the residual is the 1e-9-tick rounding of 20 units at that size. It is still 2,000x inside the tolerance.
 
+**Depth check, added in the final-review fix wave (2026-10-24).** The comparison above runs over the depth the
+book itself reports, so on its own it would pass a ladder built one level short. `ladder_equivalence` now also
+returns `depth_mismatches`: the rows where the ask depth differs from `max_daily_qty(buy_base(market, low))` or
+the bid depth from `max_daily_qty(market)`, and the gate fails part (a) when it is nonzero. Re-run of part (a)
+alone over the same window (`PreparedMarket.prepare` + `scripts/book_equivalence.part_a`, macOS host, git
+`055142f`, dirty only by an untracked `.vscode/`):
+
+| | value |
+|---|---:|
+| rows checked | 34,092,324 |
+| `(used, qty)` checks | 11,165,181,052 |
+| `depth_mismatches` | **0** |
+| max abs error | 4.656612873077393e-10 (unchanged) |
+| wall-clock of the check | 78.0 s (plus 22.8 s to prepare the window) |
+
+Parts (b) and (c) were not re-run; nothing they read changed.
+
 ## 2. End to end, formula vs exact ladder (gate (b)) — PASS
 
 Same command. Each of the five native strategies runs through `NativeBacktest` directly, default params,
@@ -154,12 +171,28 @@ Same script: `caffeinate -dimsu uv run pkmn walkforward --strategy sealed-accumu
 book / formula = 0.9997. The two walk-forwards picked results that agree to within 1e-4 on every stitched
 metric (Sharpe −0.9804 vs −0.9803). This is a timing run; its returns are not a research result.
 
-Both ran with `--root /var/folders/d5/vdyll6vs51j0943drp37077r0000gn/T/pkmn-bench-wf-cmiayxt2`, a scratch
+Both ran with `--root <scratch>`, a scratch
 directory whose `data/warehouse` is a symlink to the real warehouse, so their artifacts
 (`wf-sealed-accumulation-2024-03-01-2026-06-30` and `...-book`) and their two registry records live there
 and **not** in the real `data/results` or `data/runs`; a later `pkmn evaluate` cannot see them. The scratch
 registry records carry no git SHA (`git_info` runs in that root, which is not a repository); the SHA above is
 the one the bench script recorded. The directory is under the system temp folder and may be cleaned by macOS.
+
+## 7b. Identical books (wire vs backtester)
+
+The replay path decodes a `.pkw` wire file and rebuilds each asset-day's ladder of modelled resting orders
+(synthetic, built from the day's tcgcsv quote); the check asserts those books are identical, level for level,
+to the ones the backtester builds from the warehouse for the same rows. Recorded 2026-10-24, macOS host, git
+`055142f` (dirty only by an untracked `.vscode/`), file `data/wire/2026-06.pkw` (32,404,198 bytes):
+
+```
+$ uv run python -c "from tests.test_wire import check_real_window; check_real_window('data/wire/2026-06.pkw','2026-06-01','2026-06-30')"
+rows: 1315694
+decode stats: {'packets': 23231, 'messages': 1360029, 'unknown': 0, 'short_messages': 0, 'short_packets': 0, 'gaps': 0, 'gap_messages': 0, 'duplicates': 0, 'bad_magic': 0}
+0 mismatches
+```
+
+1,315,694 asset-days, 0 mismatches, 0 gaps, 0 duplicates. Wall-clock about 7 s.
 
 ## 8. Replay throughput (VM)
 

@@ -597,10 +597,11 @@ tcgcsv.com). Design spec: `docs/superpowers/specs/2026-06-09-pkmn-quant-design.m
   Historical Data, you agree to the IEX Historical Data Terms of Use
   (`docs/iex-hist-terms.md`).
 
-- **Plan B (Pokemon order book) complete on feat/pokemon-book (657 passed
-  pytest via `uv sync --group api --group dashboard && uv run pytest`; 26
+- **Plan B (Pokemon order book) complete on feat/pokemon-book (668 passed
+  pytest via `uv sync --group api --group dashboard && uv run pytest`; 29
   vitest via `cd web && npm run check`; 163 Catch2 tests via ctest, on macOS
-  and in the OrbStack VM).** Plan B of 4 in the market-data / CLOB track. **Cut
+  and in the OrbStack VM; counts after the final-review fix wave).** Plan B
+  of 4 in the market-data / CLOB track. **Cut
   from `feat/instrument-repair-horizon`, not main (same owner ruling as Plan
   A); Plans C-D are NOT STARTED.** `pkmn backtest`, `pkmn walkforward` and
   `POST /api/backtest` now default to `--execution book`: fills run against
@@ -624,7 +625,11 @@ tcgcsv.com). Design spec: `docs/superpowers/specs/2026-06-09-pkmn-quant-design.m
   ladder moves per-run impact by cents to about $1.38 and leaves every fill
   count unchanged. **Identical books:** encoding the window to the wire and
   replaying it builds the same ladders as the backtester's in-memory path, 0
-  mismatches over 1,315,694 asset-days (June 2026). **Costs:** encode of 949
+  mismatches over 1,315,694 asset-days (June 2026; the command, output, date
+  and SHA are recorded in `docs/benchmarks/pokemon-book.md` section 7b).
+  The pricing gate now also checks that each side's book depth equals the
+  cost model's `max_daily_qty` (`depth_mismatches`, 0 on the same 34,092,324
+  rows). **Costs:** encode of 949
   days, 38,250,316 messages, 890,723,220 bytes in 10.8 s (n=1); replay in
   the VM 1,472,031 msgs/s median with ladders built for every quote (decode
   only is far faster but its spread is 70.6%, page-cache dominated); backtest
@@ -636,7 +641,16 @@ tcgcsv.com). Design spec: `docs/superpowers/specs/2026-06-09-pkmn-quant-design.m
   is Plan D.** Every pre-Plan-B registry record reads as formula (a missing
   `config["execution"]` is formula). The benchmark and horizon figures from
   the instrument-repair final-review fix wave above are **still pending the
-  owner's re-run**; nothing here supplies them.
+  owner's re-run**; nothing here supplies them. **That re-run is a formula
+  baseline, and the user-facing defaults are now book, so it must say so
+  explicitly:** `pkmn backtest ... --execution formula`, `pkmn walkforward
+  ... --execution formula`, then `pkmn evaluate --execution formula`
+  (`pkmn horizon` follows the backtest's recorded mode). Run without the
+  flag, it silently produces book numbers that are not comparable to
+  anything in the instrument-repair bullets. Every report, the evaluate and
+  horizon stdout, the dashboard caption and the web explorer now state the
+  mode, book with the synthetic label. Book evaluates write
+  `data/results/evaluate-<date>-book/`; formula keeps `evaluate-<date>/`.
 
 ## Commands
 
@@ -650,7 +664,11 @@ uv run pkmn ingest --start 2026-07-01 --end 2026-07-31   # extend price history
 uv run pkmn refresh-products                             # repair the catalog from all 217 groups, no price ingest
 uv run python scripts/rebuild_warehouse.py --root .      # rebuild the warehouse into data/warehouse-full/ from cached archives (~17 min, resumable; leave --start at its default)
 uv run python scripts/verify_rebuild.py --root .         # gate the swap: every pre-existing product must reproduce exactly, prices + quarantine + catalog (exit 0 = safe)
-uv run pkmn backtest --start 2024-03-01 --end 2026-06-30 # buy-and-hold benchmark (default strategy)
+uv run pkmn backtest --start 2024-03-01 --end 2026-06-30 # buy-and-hold benchmark (default strategy; default --execution book)
+# The pending instrument-repair baseline re-run is FORMULA: add --execution formula
+# to its backtest and walkforward commands, and run `pkmn evaluate --execution formula`.
+# Without the flag every one of them now defaults to book (see the Plan B bullet).
+uv run pkmn backtest --start 2024-03-01 --end 2026-06-30 --execution formula   # formula baseline benchmark
 uv run pkmn backtest --strategy sealed-accumulation --start 2024-03-01 \
     --end 2026-06-30 --param take_profit=2.0 --holdings holdings.csv   # any strategy + cash/holdings
 uv run pkmn walkforward --strategy sealed-accumulation \
@@ -666,16 +684,16 @@ uv run pkmn daily --skip-ingest                          # the loop, offline
 uv run pkmn daily --skip-ingest --paper                  # paper mode dry-run
 uv run pkmn runs list                                     # experiment registry: recorded runs
 uv run pkmn runs show <run-id>                             # full record for one run
-uv run pkmn evaluate                                     # cross-strategy rigor: CIs, DSR, Reality Check
+uv run pkmn evaluate                                     # cross-strategy rigor: CIs, DSR, Reality Check (default book)
 uv run pkmn horizon <backtest-run-id>                     # per-trade edge vs holding sealed over each trip's OWN dates
 uv run pkmn horizon <backtest-run-id> --benchmark <run-id> # pin the index run explicitly (registry ids, never a directory)
 uv run pkmn backtest --start ... --end ... --no-impact    # flat-cost, skip market-impact model
 uv run pkmn walkforward --strategy sealed-accumulation --start ... --end ... \
     --trials 15 --engine python --execution formula      # reference (slow) Python engine, walkforward only (python + book is rejected)
 uv run pkmn walkforward ... --execution book|formula     # default book: modelled resting orders (synthetic, built from the day's tcgcsv quote)
-uv run pkmn evaluate --execution formula                 # score formula walk-forwards (default book; one mode per run)
+uv run pkmn evaluate --execution formula                 # score formula walk-forwards (default book; one mode per run); REQUIRED for the formula baseline re-run
 uv run pkmn wire encode --start 2024-02-08 --end 2026-09-13 --out data/wire/full.pkw  # warehouse -> ITCH-style quote file
-cpp/build-linux-release/pokemon_replay data/wire/full.pkw [--no-ladders] [--repeat N]   # replay a wire file, rebuild each day's ladders
+cpp/build-linux-release/pokemon_replay data/wire/full.pkw [--no-ladders] [--repeat N]   # (in the VM) replay a wire file, rebuild each day's ladders
 uv run python scripts/book_equivalence.py --start 2024-03-01 --end 2026-06-30   # book vs formula pricing, real data
 uv run python scripts/bench_pokemon_book.py              # encode, backtest and walk-forward cost, book vs formula
 scripts/bench_pokemon_replay.sh                          # replay throughput in the VM
@@ -844,7 +862,7 @@ scripts/bench_iex.sh [--profile] [--no-record]            # re-execs in the VM, 
   polling), walk-forward detail (`/walkforward/:runId`), backtest detail
   (`/backtest/:runId`, benchmark overlaid on the equity chart, seeded-exit
   markers, paginated fills table), and cross-strategy rigor compare
-  (`/evaluate/:runId`). `npm run check` (tsc --noEmit + vitest, 25 tests)
+  (`/evaluate/:runId`). `npm run check` (tsc --noEmit + vitest, 29 tests)
   and `npm run build` (production build) gate it; CI runs both in a
   dedicated `web` job alongside the Python `checks` job.
 - `cpp/src/pkmn_book/` — `OrderBook`: price-time order book (per-book
@@ -1099,4 +1117,9 @@ scripts/bench_iex.sh [--profile] [--no-record]            # re-execs in the VM, 
   Crossed or missing quotes build flat books at the base price. The wire
   encoder raises `ValueError` on a price that is not a whole number of
   cents or is at or above the u32 null sentinel. Wire files live in
-  gitignored `data/wire/`.
+  gitignored `data/wire/`. `pkmn evaluate` writes book runs to
+  `evaluate-<date>-book/` and formula to `evaluate-<date>/`, so one of each
+  per day coexist (two of the same mode on one day still overwrite).
+- Formula records now carry `"execution": "formula"` in their config, so the
+  config hash of an otherwise identical formula run differs before vs after
+  Plan B (the hash is display-only today; compare configs, not hashes).

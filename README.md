@@ -6,7 +6,7 @@
 ![Python 3.12](https://img.shields.io/badge/python-3.12-3776ab)
 ![C++20 / nanobind](https://img.shields.io/badge/C%2B%2B20-nanobind-00599c)
 ![mypy strict](https://img.shields.io/badge/mypy-strict-2a6db2)
-![tests](https://img.shields.io/badge/tests-657%20pytest%20%2B%2026%20vitest%20%2B%20163%20Catch2-2ea44f)
+![tests](https://img.shields.io/badge/tests-668%20pytest%20%2B%2029%20vitest%20%2B%20163%20Catch2-2ea44f)
 
 <p align="center">
   <img src="docs/assets/oos_equity.png" alt="Out-of-sample equity: buy-and-hold sealed rises about 151 percent while five active strategies end flat to negative" width="850">

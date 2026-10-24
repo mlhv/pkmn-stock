@@ -67,6 +67,12 @@ class Decoder {
         } else {
             avail = payload_len;
         }
+        // Known limitation, deliberately unchanged (for Plan C; see
+        // docs/pokemon-wire-protocol.md "Known limitation"): this marks the
+        // whole [first_seq, first_seq + msg_count) range seen BEFORE we know
+        // the messages fit, so a truncated packet's undelivered tail is
+        // treated as seen; a retransmission of it would count as duplicates
+        // and be dropped, with only short_packets/short_messages as a signal.
         seq_.observe(first_seq, msg_count);
         sync_seq_stats();
         const std::uint16_t skip = seq_.skip();

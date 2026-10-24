@@ -64,6 +64,19 @@ the largest representable price is $42,949,672.94.
 - Sequencing uses `pkmn::md::SequenceTracker`: `gaps`, `gap_messages` and
   `duplicates` are exposed; duplicate messages are not redelivered.
 
+### Known limitation (for Plan C)
+
+The decoder calls `SequenceTracker::observe(first_seq, msg_count)` before it
+knows the packet's messages fit. A truncated packet (a short payload, or a
+message cut off by the end of the packet) therefore marks its whole sequence
+range as seen, including the tail it never delivered. If the same range is
+retransmitted, those undelivered messages count as `duplicates` and are
+dropped, and no gap is reported for them. The `short_packets` /
+`short_messages` counter is the only signal. This is unchanged on purpose in
+Plan B (files are written by our own encoder, read back whole, and no real
+file checked so far, `data/wire/2026-06.pkw`, has shown a short packet); Plan C, which adds recovery from a real
+stream, should advance the tracker only past the messages actually decoded.
+
 ## Annotated packet
 
 One packet holding a D (instrument 0, product 12345, sub_type "Normal"), an S
