@@ -44,7 +44,13 @@ def optimizer(fold: object, evaluate: object) -> Params:
     return dict(FIXED)
 
 
-def run_wf(root: Path, workers: int, strategy_name: str, engine: str = "cpp") -> WalkForwardResult:
+def run_wf(
+    root: Path,
+    workers: int,
+    strategy_name: str,
+    engine: str = "cpp",
+    execution: str = "formula",
+) -> WalkForwardResult:
     return run_walkforward(
         warehouse=Warehouse(Paths(root=root)),
         strategy_factory=factory,
@@ -59,6 +65,7 @@ def run_wf(root: Path, workers: int, strategy_name: str, engine: str = "cpp") ->
         engine=engine,
         strategy_name=strategy_name,
         workers=workers,
+        execution=execution,
     )
 
 
@@ -82,6 +89,23 @@ def test_parallel_matches_serial_native(tmp_path: Path) -> None:
     assert len(serial.folds) == 4
     assert serial.stitched_curve.height > 0
     assert_wf_equal(serial, parallel)
+
+
+@pytest.mark.parametrize("strategy_name", ["dip-buyer", "bridge-test"])
+def test_parallel_matches_serial_book_execution(tmp_path: Path, strategy_name: str) -> None:
+    """Final-review M8: book execution (modelled resting orders, synthetic,
+    built from the day's tcgcsv quote) keeps the Plan 11 property. Each fold
+    builds its own books, so workers=1 and workers=2 must be bit-identical, on
+    the native strategy and through the callback bridge. Also checks book
+    really differs from formula here, so the test is not vacuous."""
+    seed_rich(tmp_path, n_days=60)
+    serial = run_wf(tmp_path, workers=1, strategy_name=strategy_name, execution="book")
+    parallel = run_wf(tmp_path, workers=2, strategy_name=strategy_name, execution="book")
+    assert len(serial.folds) == 4
+    assert serial.stitched_curve.height > 0
+    assert_wf_equal(serial, parallel)
+    formula = run_wf(tmp_path, workers=1, strategy_name=strategy_name)
+    assert serial.stitched_curve["equity"].to_list() != formula.stitched_curve["equity"].to_list()
 
 
 def test_parallel_matches_serial_python_engine(tmp_path: Path) -> None:
