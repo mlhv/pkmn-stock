@@ -739,6 +739,7 @@ def _live_json(report: LiveIngestReport) -> dict[str, Any]:
         "written": [s.day.isoformat() for s in report.written],
         "partial": {d.isoformat(): list(g) for d, g in sorted(report.partial.items())},
         "collision": report.collision,
+        "abandoned": [d.isoformat() for d in report.abandoned],
         "new_day": bool(report.written),
     }
 
@@ -775,6 +776,12 @@ def live_ingest(
         typer.echo("no day written")
     for d, missing in sorted(report.partial.items()):
         typer.echo(f"warning: {d} written without group(s) {_gids(missing)}", err=True)
+    for d in report.abandoned:
+        typer.echo(
+            f"warning: {d} abandoned (below the completeness floor); raw files kept", err=True
+        )
+    for d, err in sorted(report.finalize_errors.items()):
+        typer.echo(f"error: writing {d} failed: {err}", err=True)
     if report.collision:
         typer.echo("warning: two tcgcsv updates mapped to one UTC day", err=True)
     if report.catalog_failures:
@@ -783,8 +790,24 @@ def live_ingest(
             "fetch; their previously catalogued rows were kept",
             err=True,
         )
-    if c is not None and not c.complete:
+    if (c is not None and not c.complete) or report.finalize_errors:
         raise typer.Exit(1)
+
+
+def _abandoned_body(root: Path, day: dt.date) -> str:
+    """The "day abandoned" alert text, with held/total from the day's manifest."""
+    from pkmn_quant.data.live import load_manifest
+
+    counts = "held count unknown"
+    try:
+        rec = load_manifest(Paths(root=root).raw_live / day.isoformat()).get("abandoned", {})
+        counts = f"{int(rec['held'])}/{int(rec['total'])} groups held"
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        pass
+    return (
+        f"{day} was not written: {counts}, below the completeness floor. "
+        "The raw files are kept for an archive backfill."
+    )
 
 
 @app.command()
@@ -813,10 +836,11 @@ def daily(
     manual run with a different --strategy on the same data also skips signals.
 
     Alerts are rate-limited through data/results/daily-state.json. A capture
-    problem alerts only once the update is at risk (still incomplete at or
-    after 21:00 local) or the warehouse is stale; a transient one is recorded
-    in daily.json and exits 0. Partial days and two updates on one UTC day
-    alert. A non-ingest failure alerts once, then at most daily. Exit 1 when
+    problem (incomplete capture, update's day not stored, or the ingest
+    raised) alerts only once the update is at risk (a run at or after 21:00
+    local) or the warehouse is stale; a transient one is recorded in
+    daily.json and exits 0. Partial days, abandoned days and two updates on
+    one UTC day alert. A non-ingest failure alerts once, then at most daily. Exit 1 when
     an alert-level condition holds this run (even if its push was
     rate-limited) or the run failed. --skip-ingest skips the ingest, the probe
     and every ingest alert.
@@ -931,6 +955,8 @@ def daily(
         newest = days[-1] if days else None
         capture = report.capture if report else None
         capture_failed = capture is not None and not capture.complete
+        unstored = capture is not None and not warehouse.has_day(capture.day)
+        capture_problem = ingest_error is not None or capture_failed or unstored
         problem = False
 
         stale_title = f"{notify_title_base}: no new prices"
@@ -945,18 +971,30 @@ def daily(
             _alert("stale", stale_title, f"newest stored day {newest}; {reason}")
         else:
             _recover("stale", stale_title)
-            if capture is not None and capture_failed and alerts.capture_at_risk(True, now_local):
+            if alerts.capture_at_risk(capture_problem, now_local):
                 problem = True
-                _alert(
-                    "capture",
-                    capture_title,
-                    f"update {capture.day}: {len(capture.failed)} group(s) still failing "
-                    f"({_gids(capture.failed)})",
-                )
-        if ingest_error is None and not capture_failed:
+                if ingest_error is not None:
+                    body = ingest_error
+                elif capture is not None and capture_failed:
+                    body = (
+                        f"update {capture.day}: {len(capture.failed)} group(s) still failing "
+                        f"({_gids(capture.failed)})"
+                    )
+                else:
+                    day = capture.day if capture is not None else newest
+                    body = f"update {day} is captured but not stored yet"
+                _alert("capture", capture_title, body)
+        if not capture_problem:
             _recover("capture", capture_title)
 
         if report is not None:
+            for d in report.abandoned:
+                problem = True
+                _alert(
+                    f"abandoned:{d.isoformat()}",
+                    f"{notify_title_base}: day abandoned",
+                    _abandoned_body(root, d),
+                )
             for d, missing in sorted(report.partial.items()):
                 problem = True
                 notify.send_notification(
@@ -995,8 +1033,10 @@ def daily(
                         for d in warehouse.stored_days()
                         if not (raw_live / d.isoformat() / "manifest.json").exists()
                     ]
-                    if archive_days:
-                        probe_day = archive_days[-1] + dt.timedelta(days=1)
+                    probe_day = archive_days[-1] + dt.timedelta(days=1) if archive_days else None
+                    # A stored next day (a live day, or a finished backfill)
+                    # means there is no gap left to report: no probe.
+                    if probe_day is not None and not warehouse.has_day(probe_day):
                         try:
                             with tcgcsv.make_client() as client:
                                 back = probe_archive(client, probe_day)
@@ -1016,6 +1056,10 @@ def daily(
                     report = run_live_ingest(Paths(root=root))
                     catalog_failures = report.catalog_failures
                     live = _live_json(report)
+                    if report.finalize_errors:
+                        ingest_error = "finalize failed: " + "; ".join(
+                            f"{d}: {e}" for d, e in sorted(report.finalize_errors.items())
+                        )
                 except Exception as exc:  # scheduled run must never die silently
                     ingest_error = f"ingest failed: {exc}"
                 ingest_problem = _ingest_alerts(warehouse, report, ingest_error)

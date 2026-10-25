@@ -78,3 +78,20 @@ def test_live_ingest_command_already_stored_and_error(
     failed = runner.invoke(app, ["live-ingest", "--root", str(tmp_path)])
     assert failed.exit_code == 1
     assert "bad body" in failed.output
+
+
+def test_live_ingest_command_reports_abandoned_and_finalize_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from dataclasses import replace
+
+    report = replace(
+        _report(failed=(), written=(date(2026, 10, 23),)),
+        abandoned=(date(2026, 10, 22),),
+        finalize_errors={date(2026, 10, 24): "OSError('disk full')"},
+    )
+    _patch(monkeypatch, report)
+    result = CliRunner().invoke(app, ["live-ingest", "--root", str(tmp_path)])
+    assert result.exit_code == 1
+    assert "2026-10-22 abandoned" in result.output
+    assert "writing 2026-10-24 failed" in result.output and "disk full" in result.output

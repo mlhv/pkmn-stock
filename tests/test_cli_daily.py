@@ -7,6 +7,7 @@ from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+import httpx
 import polars as pl
 import pytest
 from typer.testing import CliRunner, Result
@@ -140,7 +141,7 @@ def test_daily_failure_writes_error_status_and_notifies(
 # (utc_tz fixture) so cli's local time, _now().astimezone(), equals the UTC
 # value the test scripts: "21:00" below is 21:00 local for capture_at_risk.
 # Seeded newest stored day is 2025-05-01, so the stale threshold is
-# 2025-05-03 20:00 UTC (20:00 on the newest day + 48h).
+# 2025-05-03 00:00 UTC (20:00 on the newest day + 28h).
 # ---------------------------------------------------------------------------
 
 
@@ -211,6 +212,8 @@ def live_report(
     partial: dict[date, tuple[int, ...]] | None = None,
     collision: bool = False,
     catalog_failures: tuple[int, ...] = (),
+    abandoned: tuple[date, ...] = (),
+    finalize_errors: dict[date, str] | None = None,
 ) -> LiveIngestReport:
     return LiveIngestReport(
         capture=capture,
@@ -218,6 +221,8 @@ def live_report(
         partial=partial or {},
         collision=collision,
         catalog_failures=catalog_failures,
+        abandoned=abandoned,
+        finalize_errors=finalize_errors or {},
     )
 
 
@@ -282,6 +287,7 @@ def test_daily_new_day_runs_signals_and_records_live(
         "written": ["2025-05-02"],
         "partial": {},
         "collision": False,
+        "abandoned": [],
         "new_day": True,
     }
     state = json.loads((root / "data" / "results" / "daily-state.json").read_text())
@@ -423,7 +429,7 @@ def test_daily_partial_and_collision_alert(
     assert len(sent) == 2
 
 
-def test_daily_live_ingest_error_records_and_alerts_only_when_stale(
+def test_daily_live_ingest_error_records_and_alerts_when_at_risk(
     root: Path, sent: list[tuple[str, str]], probes: list[date], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     script(
@@ -432,7 +438,7 @@ def test_daily_live_ingest_error_records_and_alerts_only_when_stale(
         LiveIngestError("last-updated.txt: unparseable"),
     )
 
-    at(monkeypatch, utc(2025, 5, 2, 21))  # fresh: recorded, not alerted
+    at(monkeypatch, utc(2025, 5, 2, 13))  # early and fresh: recorded, not alerted
     r1 = daily(root)
     assert r1.exit_code == 0, r1.output
     meta = meta_of(root)
@@ -443,12 +449,15 @@ def test_daily_live_ingest_error_records_and_alerts_only_when_stale(
     # signals still ran despite the ingest error
     assert (root / "data" / "results" / "daily-2025-05-02" / "signals.md").exists()
 
-    at(monkeypatch, utc(2025, 5, 10, 9))  # stale: alerted, naming the error
+    at(monkeypatch, utc(2025, 5, 2, 21))  # at risk: one "capture" alert naming the error
     r2 = daily(root)
     assert r2.exit_code == 1, r2.output
     meta = meta_of(root)
-    assert "unparseable" in meta["error"]
-    assert len(sent) == 1 and "unparseable" in sent[0][1]
+    assert meta["status"] == "error" and "unparseable" in meta["error"]
+    assert len(sent) == 1
+    assert "capture incomplete" in sent[0][0] and "unparseable" in sent[0][1]
+    state = json.loads((root / "data" / "results" / "daily-state.json").read_text())
+    assert "capture" in state["active"] and "stale" not in state["active"]
 
 
 def test_daily_archive_probe_once_per_day_and_alerts_when_back(
@@ -542,11 +551,12 @@ def test_daily_skip_on_a_new_local_day_reports_zero_counts(
     """Counts carry forward only within the same daily-<date> dir: the next
     morning, with no new data, nothing was acted on that day."""
     deposit(root)
-    script(monkeypatch, live_report(), live_report())
-    at(monkeypatch, utc(2025, 5, 2, 9))
+    day = date(2025, 5, 2)
+    script(monkeypatch, live_report(cap(day), written=(day,)), live_report())
+    at(monkeypatch, utc(2025, 5, 2, 21))
     assert daily(root).exit_code == 0
     assert meta_of(root)["n_buys"] >= 1
-    at(monkeypatch, utc(2025, 5, 3, 9))
+    at(monkeypatch, utc(2025, 5, 3, 9))  # newest is 05-02: not stale until 05-04 00:00
     assert daily(root).exit_code == 0
     meta = json.loads((root / "data" / "results" / "daily-2025-05-03" / "daily.json").read_text())
     assert meta["signals_skipped"] is True and meta["n_buys"] == 0
@@ -586,3 +596,153 @@ def test_daily_failure_writing_artifacts_goes_through_run_error(
     state = json.loads((root / "data" / "results" / "daily-state.json").read_text())
     assert "run_error:real" in state["active"]
     assert "real" not in state["signals_as_of"]
+
+
+# --- final-review fix wave -------------------------------------------------
+
+
+def test_daily_complete_capture_not_stored_at_21_is_at_risk(
+    root: Path, sent: list[tuple[str, str]], probes: list[date], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A complete capture whose day was not written (the feed moved on) is
+    still an unstored update at 21:00."""
+    script(monkeypatch, live_report(cap(date(2025, 5, 2))))
+    at(monkeypatch, utc(2025, 5, 2, 21))
+    result = daily(root)
+    assert result.exit_code == 1, result.output
+    assert len(sent) == 1 and "capture incomplete" in sent[0][0]
+    assert "2025-05-02" in sent[0][1]
+
+
+def test_daily_stale_is_judged_after_the_runs_ingest(
+    root: Path, sent: list[tuple[str, str]], probes: list[date], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Morning after a missed update: stale before the ingest, fresh once the
+    run writes the day, so no stale alert."""
+    day = date(2025, 5, 2)
+    script(monkeypatch, live_report(cap(day), written=(day,)))
+    at(monkeypatch, utc(2025, 5, 3, 9))
+    result = daily(root)
+    assert result.exit_code == 0, result.output
+    assert [t for t, _ in sent if "no new prices" in t] == []
+
+
+def test_daily_morning_after_a_missed_update_is_stale(
+    root: Path, sent: list[tuple[str, str]], probes: list[date], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    script(monkeypatch, live_report())
+    at(monkeypatch, utc(2025, 5, 3, 9))  # newest 05-01; 05-02's update was missed
+    result = daily(root)
+    assert result.exit_code == 1, result.output
+    assert [t for t, _ in sent] == ["pkmn daily: no new prices"]
+
+
+def test_daily_abandoned_day_alerts_once_and_is_recorded(
+    root: Path, sent: list[tuple[str, str]], probes: list[date], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lost, new = date(2025, 5, 2), date(2025, 5, 3)
+    mdir = Paths(root=root).raw_live / lost.isoformat()
+    mdir.mkdir(parents=True)
+    abandoned = {
+        "reason": "below floor",
+        "at": "2025-05-03T21:00:00+00:00",
+        "held": 3,
+        "total": 220,
+    }
+    (mdir / "manifest.json").write_text(json.dumps({"groups": {}, "abandoned": abandoned}))
+    script(
+        monkeypatch,
+        live_report(cap(new), written=(new,), abandoned=(lost,)),
+        live_report(),
+    )
+    at(monkeypatch, utc(2025, 5, 4, 9))
+    result = daily(root)
+    assert result.exit_code == 1, result.output
+    alerts_sent = [(t, b) for t, b in sent if "abandoned" in t]
+    assert len(alerts_sent) == 1
+    title, msg = alerts_sent[0]
+    assert title == "pkmn daily: day abandoned"
+    assert "2025-05-02" in msg and "3/220" in msg and "raw files" in msg
+    assert meta_of(root)["live"]["abandoned"] == ["2025-05-02"]
+    state = json.loads((root / "data" / "results" / "daily-state.json").read_text())
+    assert "abandoned:2025-05-02" in state["active"]
+
+    at(monkeypatch, utc(2025, 5, 4, 13))
+    assert daily(root).exit_code == 0
+    assert len([t for t, _ in sent if "abandoned" in t]) == 1
+
+
+def test_daily_finalize_error_is_an_ingest_error(
+    root: Path, sent: list[tuple[str, str]], probes: list[date], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    d1, d2 = date(2025, 5, 2), date(2025, 5, 3)
+    errs = {d2: "OSError('disk full')"}
+    script(
+        monkeypatch,
+        live_report(cap(d2), written=(d1,), partial={d1: (7,)}, finalize_errors=errs),
+        live_report(cap(d2), finalize_errors=errs),
+    )
+    at(monkeypatch, utc(2025, 5, 3, 13))
+    r1 = daily(root)
+    assert r1.exit_code == 1, r1.output  # the partial day alerts
+    meta = meta_of(root)
+    assert meta["status"] == "error" and "disk full" in meta["error"]
+    assert "2025-05-03" in meta["error"]
+    assert meta["live"]["written"] == ["2025-05-02"]
+    assert [t for t, _ in sent] == ["pkmn daily: partial day"]
+
+    at(monkeypatch, utc(2025, 5, 3, 21))
+    r2 = daily(root)
+    assert r2.exit_code == 1, r2.output
+    capture = [b for t, b in sent if "capture incomplete" in t]
+    assert len(capture) == 1 and "disk full" in capture[0]
+
+
+def test_daily_archive_probe_skipped_when_the_next_day_is_stored(
+    root: Path, sent: list[tuple[str, str]], probes: list[date], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Archive days through 2025-05-01 plus live 2025-05-02: no gap, no probe."""
+    live_day = date(2025, 5, 2)
+    Warehouse(Paths(root=root)).write_prices(
+        live_day, pl.DataFrame([price_row(live_day, 1, 100.0)], schema=PRICE_SCHEMA)
+    )
+    manifest = Paths(root=root).raw_live / live_day.isoformat() / "manifest.json"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text("{}")
+    script(monkeypatch, live_report())
+    at(monkeypatch, utc(2025, 5, 2, 21))
+    assert daily(root).exit_code == 0
+    assert probes == []
+
+
+def test_daily_push_goes_through_real_ntfy_wiring(
+    root: Path, probes: list[date], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No send_notification patch: notify.toml under the root, the real
+    configure/send_notification/send_ntfy chain, and only the HTTP faked."""
+    monkeypatch.setattr(notify, "_ntfy", None)  # restored to None afterwards
+    monkeypatch.setattr(notify.sys, "platform", "linux")  # no osascript banner
+    cfg = root / "data" / "config"
+    cfg.mkdir(parents=True)
+    (cfg / "notify.toml").write_text('[ntfy]\ntopic = "tp-test"\nserver = "https://ntfy.test"\n')
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200)
+
+    def fake_post(url: str, **kw: Any) -> httpx.Response:
+        with httpx.Client(transport=httpx.MockTransport(handler)) as c:
+            return c.post(url, **kw)
+
+    monkeypatch.setattr(notify.httpx, "post", fake_post)
+    script(monkeypatch, live_report())
+    at(monkeypatch, utc(2025, 5, 10, 9))  # stale: one alert
+    result = daily(root)
+    assert result.exit_code == 1, result.output
+    (req,) = seen
+    assert str(req.url) == "https://ntfy.test"
+    payload = json.loads(req.content.decode("utf-8"))
+    assert payload["topic"] == "tp-test"
+    assert payload["title"] == "pkmn daily: no new prices"
+    assert "2025-05-01" in payload["message"]

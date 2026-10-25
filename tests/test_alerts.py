@@ -42,9 +42,11 @@ def test_resolve_reports_recovery_once() -> None:
 
 
 def test_is_stale_boundary() -> None:
+    # 20:00 UTC on the newest day + 28h = 00:00 UTC two days later, so a
+    # morning run alerts while the missed update can still be captured.
     newest = date(2026, 10, 24)
-    assert not is_stale(newest, datetime(2026, 10, 26, 19, 59, tzinfo=UTC))
-    assert is_stale(newest, datetime(2026, 10, 26, 20, 1, tzinfo=UTC))
+    assert not is_stale(newest, datetime(2026, 10, 25, 23, 59, tzinfo=UTC))
+    assert is_stale(newest, datetime(2026, 10, 26, 0, 1, tzinfo=UTC))
     assert is_stale(None, datetime(2026, 10, 26, 0, 0, tzinfo=UTC))
 
 
@@ -120,4 +122,4 @@ def test_wrong_typed_field_falls_back_alone(tmp_path: Path) -> None:
 
 
 def test_is_stale_false_at_exact_boundary() -> None:
-    assert not is_stale(date(2026, 10, 24), datetime(2026, 10, 26, 20, 0, tzinfo=UTC))
+    assert not is_stale(date(2026, 10, 24), datetime(2026, 10, 26, 0, 0, tzinfo=UTC))

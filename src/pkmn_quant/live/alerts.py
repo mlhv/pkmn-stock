@@ -15,10 +15,12 @@ from pathlib import Path
 
 STATE_FILE = "daily-state.json"
 REPEAT_EVERY = timedelta(hours=24)
-# Measured from 20:00 UTC on the newest stored day: the next update has been
-# out about 24 hours and still isn't stored.
-STALE_AFTER = timedelta(hours=48)
-# A capture still incomplete on a run at or after 21:00 local is at risk.
+# Measured from 20:00 UTC on the newest stored day, so it fires at 00:00 UTC
+# two days later: the next update has been out about 4 hours and still isn't
+# stored, and a morning run alerts while that update can still be captured.
+STALE_AFTER = timedelta(hours=28)
+# An update still not stored on a run at or after 21:00 local (capture
+# incomplete, day not written, or the ingest raised) is at risk.
 AT_RISK_LOCAL_HOUR = 21
 
 
@@ -133,5 +135,5 @@ def is_stale(newest_stored: date | None, now: datetime) -> bool:
     return now > datetime.combine(newest_stored, time(20, 0), UTC) + STALE_AFTER
 
 
-def capture_at_risk(capture_failed: bool, now_local: datetime) -> bool:
-    return capture_failed and now_local.hour >= AT_RISK_LOCAL_HOUR
+def capture_at_risk(capture_problem: bool, now_local: datetime) -> bool:
+    return capture_problem and now_local.hour >= AT_RISK_LOCAL_HOUR
