@@ -63,7 +63,7 @@ def send_ntfy(config: NtfyConfig, title: str, body: str) -> bool:
             timeout=10.0,
         )
         response.raise_for_status()
-    except httpx.HTTPError as exc:
+    except (httpx.HTTPError, httpx.InvalidURL) as exc:
         sys.stderr.write(f"warning: ntfy push failed: {exc}\n")
         return False
     return True

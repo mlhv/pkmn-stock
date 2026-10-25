@@ -61,14 +61,11 @@ def test_send_ntfy_posts_json_with_unicode(monkeypatch: pytest.MonkeyPatch) -> N
         seen.append(request)
         return httpx.Response(200)
 
-    real_post = httpx.post
-
     def fake_post(url: str, **kw: Any) -> httpx.Response:
         with httpx.Client(transport=httpx.MockTransport(handler)) as c:
             return c.post(url, **kw)
 
     monkeypatch.setattr(notify.httpx, "post", fake_post)
-    assert real_post is not fake_post
     title, body = "pkmn daily: ingest problem", "stalled — no new days"
     assert notify.send_ntfy(NtfyConfig("tp"), title, body) is True
     (req,) = seen
@@ -141,3 +138,12 @@ def test_notify_test_command_exits_1_on_send_failure(
     monkeypatch.setattr(notify, "send_ntfy", lambda cfg, t, b: False)
     result = CliRunner().invoke(app, ["notify-test", "--root", str(tmp_path)])
     assert result.exit_code == 1
+
+
+@pytest.mark.parametrize("server", ["http://[bad", "notaurl", "ftp://x"])
+def test_send_ntfy_bad_server_url_returns_false(
+    capsys: pytest.CaptureFixture[str], server: str
+) -> None:
+    # Real httpx.post: these fail at URL validation, before any network use.
+    assert notify.send_ntfy(NtfyConfig("tp", server), "t", "b") is False
+    assert capsys.readouterr().err != ""
