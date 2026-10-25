@@ -652,7 +652,7 @@ tcgcsv.com). Design spec: `docs/superpowers/specs/2026-06-09-pkmn-quant-design.m
   mode, book with the synthetic label. Book evaluates write
   `data/results/evaluate-<date>-book/`; formula keeps `evaluate-<date>/`.
 
-- **Live ingest and phone alerts on feat/live-ingest (2026-10-25; 733
+- **Live ingest and phone alerts on feat/live-ingest (2026-10-25; 753
   passed pytest via `uv sync --group api --group dashboard && uv run
   pytest`).** Cut from `feat/instrument-repair-horizon` (owner ruling: the
   launchd job runs that checkout). Spec:
@@ -670,21 +670,39 @@ tcgcsv.com). Design spec: `docs/superpowers/specs/2026-06-09-pkmn-quant-design.m
   last one they ran on for that mode (so four runs a day never re-notify or
   re-record fills), and applies a rate-limited alert policy
   (`live/alerts.py`, state in `data/results/daily-state.json`): a capture
-  problem alerts only when still incomplete at or after 21:00 local or when
-  the warehouse is stale (no new day 48h after 20:00 UTC on the newest day);
-  partial days and two updates on one UTC day alert; non-ingest failures
-  alert once, then at most daily; each cleared condition sends one
-  "recovered". Alerts go to a macOS banner plus an ntfy phone push
+  problem (capture incomplete, the update's day not stored, or the ingest
+  or a day's write raised) alerts only on a run at or after 21:00 local or
+  when the warehouse is stale (`STALE_AFTER` = 28h after 20:00 UTC on the
+  newest stored day, i.e. 00:00 UTC two days later, judged after the run's
+  ingest, so a morning run alerts while the missed update can still be
+  captured); partial days, abandoned days and two updates on one UTC day
+  alert; non-ingest failures alert once, then at most daily; each cleared
+  condition sends one "recovered". A superseded day (an older captured day,
+  or a day holding an earlier update of the same UTC date) is written only
+  if it holds at least `LIVE_FLOOR` (90%) of its groups, counted as held /
+  (held + failed + never attempted) from that day's own manifest, and at
+  least one row. Otherwise it is **abandoned**: nothing is written, the raw
+  files stay, the manifest gets an `abandoned` record, it is never retried,
+  and `pkmn daily` alerts once (key `abandoned:<date>`). A capture run stops
+  fetching after `MAX_CONSECUTIVE_FAILURES` (10) failed groups in a row; the
+  untried groups have no manifest entry, count as failed, and are fetched on
+  the next run. Days are written one at a time; the first write that raises
+  stops the run and lands in the report's `finalize_errors`, which `pkmn
+  daily` treats as an ingest error. The archive probe asks for the day after
+  the newest archive-stored day and is skipped when that day is already
+  stored (no gap left). Alerts go to a macOS banner plus an ntfy phone push
   (`live/notify.py`). `daily.json` gains `live` (null under
-  `--skip-ingest`) and `signals_skipped`. The launchd template runs at
+  `--skip-ingest`; it lists `abandoned` days) and `signals_skipped`. The launchd template runs at
   09:00, 13:00, 17:00 and 21:00. **The days 2026-09-14 to 2026-10-23 are
   lost**: the live endpoints serve only the current update, so nothing can
-  recover them unless tcgcsv republishes the archive. **2026-10-24** was
-  captured by an owner-approved throwaway stopgap script outside the repo
-  (`capture_raw.py`, 2026-10-25 16:33 UTC: 220 of 220 groups held, 45,400
-  price rows, 5 held-empty) into `data/raw/live/2026-10-24/`, in the same
-  layout `data/live.py` reads, so the first real run finalizes it as an
-  ordinary day. No real-data run and no launchd change has happened on this
+  recover them unless tcgcsv republishes the archive. **2026-10-24 and
+  2026-10-25** were captured by an owner-approved throwaway stopgap script
+  outside the repo (`capture_raw.py`) into `data/raw/live/<day>/`, in the
+  same layout `data/live.py` reads, so the first real run finalizes them as
+  ordinary days (2026-10-24's capture, 2026-10-25 16:33 UTC: 220 of 220
+  groups held, 45,400 price rows, 5 held-empty). Stopgap manifests carry no
+  `tracked` list, so their missing set is read from their own entries
+  only. No real-data run and no launchd change has happened on this
   branch: both wait for the owner to confirm the formula baseline batch has
   finished.
 
@@ -952,6 +970,13 @@ scripts/bench_iex.sh [--profile] [--no-record]            # re-execs in the VM, 
   published on UTC day D. **That equivalence is a convention, not a verified
   fact**: no day exists in both sources to check it against. If it is ever
   shown to be off by one, change `live.update_day` and nothing else.
+- **An abandoned live day is not in the warehouse on purpose.** A
+  superseded day under `LIVE_FLOOR` (or with zero rows) gets an `abandoned`
+  record in its `data/raw/live/<day>/manifest.json` and is skipped by
+  `pending_days` from then on. Because it is not stored, `ingest_range`
+  would fill it from a restored archive. Deleting the record makes the next
+  run write the partial day, and after that no archive backfill can replace
+  it, because a live day, once written, is final.
 - ntfy phone alerts read `[ntfy] topic` (and optional `server`) from
   gitignored `data/config/notify.toml`. Absent or unreadable config means
   banners only. Never commit the topic: anyone who knows a public ntfy topic
@@ -1188,4 +1213,4 @@ scripts/bench_iex.sh [--profile] [--no-record]            # re-execs in the VM, 
 - Formula records now carry `"execution": "formula"` in their config, so the
   config hash of an otherwise identical formula run differs before vs after
   Plan B (the hash is display-only today; compare configs, not hashes).
-- **The catalog is unversioned and mutates daily.** `products.parquet` is rewritten by every `pkmn daily` run, and it is an input a price-only fingerprint cannot see. Compare `catalog_sha256` in two runs' `data_fingerprint` before calling two ML runs comparable. Records written before the key existed lack it.
+- **The catalog is unversioned and mutates daily.** `products.parquet` is rewritten by every `pkmn daily` or `pkmn live-ingest` run that writes a day (runs that write nothing leave it alone), and it is an input a price-only fingerprint cannot see. Compare `catalog_sha256` in two runs' `data_fingerprint` before calling two ML runs comparable. Records written before the key existed lack it.
