@@ -311,6 +311,24 @@ def wire_encode(
     typer.echo(f"seconds: {seconds:.3f}")
 
 
+@app.command("notify-test")
+def notify_test(
+    root: Path = typer.Option(Path("."), help="Project root holding the data/ directory."),
+) -> None:
+    """Send a test push through ntfy (config: data/config/notify.toml)."""
+    from pkmn_quant.live import notify
+
+    notify.configure(root)
+    config = notify.load_ntfy_config(root)
+    if config is None:
+        typer.echo(f"no ntfy config found: expected [ntfy] topic in {root}/data/config/notify.toml")
+        raise typer.Exit(1)
+    if not notify.send_ntfy(config, "pkmn test", "If you can read this on your phone, ntfy works."):
+        typer.echo("ntfy push failed (see warning above)")
+        raise typer.Exit(1)
+    typer.echo("sent")
+
+
 @app.command("refresh-products")
 def refresh_products_cmd(
     root: Path = typer.Option(Path("."), help="Project root holding the data/ directory."),
