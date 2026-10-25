@@ -652,7 +652,7 @@ tcgcsv.com). Design spec: `docs/superpowers/specs/2026-06-09-pkmn-quant-design.m
   mode, book with the synthetic label. Book evaluates write
   `data/results/evaluate-<date>-book/`; formula keeps `evaluate-<date>/`.
 
-- **Live ingest and phone alerts on feat/live-ingest (2026-10-25; 730
+- **Live ingest and phone alerts on feat/live-ingest (2026-10-25; 733
   passed pytest via `uv sync --group api --group dashboard && uv run
   pytest`).** Cut from `feat/instrument-repair-horizon` (owner ruling: the
   launchd job runs that checkout). Spec:

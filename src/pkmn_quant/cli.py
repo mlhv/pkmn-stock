@@ -809,7 +809,8 @@ def daily(
     plus at most one archive probe per local day. Signals and paper fills run
     only when the newest stored day differs from the day they last ran on for
     this mode (real/paper), so repeated runs on the same data never re-notify
-    or re-record fills.
+    or re-record fills. The record is keyed by mode only, not strategy: a
+    manual run with a different --strategy on the same data also skips signals.
 
     Alerts are rate-limited through data/results/daily-state.json. A capture
     problem alerts only once the update is at risk (still incomplete at or
@@ -984,9 +985,18 @@ def daily(
 
             if not skip_ingest:
                 if state.archive_probe_on != today.isoformat():
-                    days = warehouse.stored_days()
-                    if days:
-                        probe_day = days[-1] + dt.timedelta(days=1)
+                    # Probe the day after the newest ARCHIVE-stored day (the
+                    # first lost day): a live day has a raw manifest, and the
+                    # day after a live day is one a restored archive would not
+                    # hold yet. All-live or empty warehouse: no probe.
+                    raw_live = Paths(root=root).raw_live
+                    archive_days = [
+                        d
+                        for d in warehouse.stored_days()
+                        if not (raw_live / d.isoformat() / "manifest.json").exists()
+                    ]
+                    if archive_days:
+                        probe_day = archive_days[-1] + dt.timedelta(days=1)
                         try:
                             with tcgcsv.make_client() as client:
                                 back = probe_archive(client, probe_day)
@@ -1027,8 +1037,26 @@ def daily(
             if newest is not None and state.signals_as_of.get(mode) == newest:
                 # Signals already ran on this data for this mode: no repeat
                 # buy/sell push and, in paper mode, no repeat fills.
+                # A same-day daily.json for this as_of already holds what the
+                # run that did act recorded; keep its counts so later runs of
+                # the day don't turn "3 buys" into "nothing to do". out_dir is
+                # per mode, so this never mixes real and paper counts.
                 signals_skipped = True
-                finish("error" if ingest_error else "ok", ingest_error, 0, 0, newest)
+                kept_buys = kept_sells = 0
+                try:
+                    prev = _json.loads((out_dir / "daily.json").read_text())
+                    if prev.get("as_of") == newest and prev.get("paper") == paper:
+                        kept_buys = int(prev.get("n_buys") or 0)
+                        kept_sells = int(prev.get("n_sells") or 0)
+                except (OSError, ValueError, TypeError, AttributeError):
+                    pass
+                finish(
+                    "error" if ingest_error else "ok",
+                    ingest_error,
+                    kept_buys,
+                    kept_sells,
+                    newest,
+                )
                 _recover(run_error_key, run_failed_title, "pkmn daily is running again")
                 typer.echo(f"signals already ran on {newest} ({mode}); skipped")
                 if ingest_problem:
@@ -1043,6 +1071,34 @@ def daily(
                 portfolio=pf,
                 paper=paper,
             )
+            (out_dir / "signals.md").write_text(render_signals_markdown(signals_report))
+            (out_dir / "signals.json").write_text(signals_to_json(signals_report))
+            n_buys = sum(1 for r in signals_report.recommendations if r.action == "BUY")
+            n_sells = sum(1 for r in signals_report.recommendations if r.action == "SELL")
+
+            # Paper mode: auto-record recommended fills through the pure planner
+            # (live/paper.py) and one atomic append_events write. A mid-batch
+            # validation failure leaves the ledger completely unchanged. In paper
+            # mode n_buys/n_sells are re-counted from the recorded batch: the
+            # planner clips to liquidity and affordability (sometimes to zero),
+            # and daily.json must report what actually happened, not what the
+            # strategy wished for.
+            if paper and signals_report.recommendations:
+                from pkmn_quant.engine.costs import CostModel
+                from pkmn_quant.live.ledger import append_events
+                from pkmn_quant.live.paper import plan_paper_fills
+
+                batch = plan_paper_fills(
+                    signals_report.recommendations, pf.cash, today, CostModel(impact_enabled=impact)
+                )
+                if batch:
+                    try:
+                        append_events(lpath, batch, products)
+                    except LedgerError as exc:
+                        _fail(f"paper auto-record failed: {exc}", keep_artifacts=True)
+                        return  # unreachable
+                n_buys = sum(1 for e in batch if e["kind"] == "buy")
+                n_sells = sum(1 for e in batch if e["kind"] == "sell")
         except (SignalsError, LedgerError, typer.BadParameter) as exc:
             # Combine ingest error with signals/deps error when both occurred.
             error = f"{exc}; {ingest_error}" if ingest_error else str(exc)
@@ -1057,43 +1113,11 @@ def daily(
             _fail(error)
             return  # unreachable
 
-        (out_dir / "signals.md").write_text(render_signals_markdown(signals_report))
-        (out_dir / "signals.json").write_text(signals_to_json(signals_report))
-        n_buys = sum(1 for r in signals_report.recommendations if r.action == "BUY")
-        n_sells = sum(1 for r in signals_report.recommendations if r.action == "SELL")
-
-        # Paper mode: auto-record recommended fills through the pure planner
-        # (live/paper.py) and one atomic append_events write. A mid-batch
-        # validation failure leaves the ledger completely unchanged. In paper
-        # mode n_buys/n_sells are re-counted from the recorded batch: the
-        # planner clips to liquidity and affordability (sometimes to zero),
-        # and daily.json must report what actually happened, not what the
-        # strategy wished for.
-        if paper and signals_report.recommendations:
-            from pkmn_quant.engine.costs import CostModel
-            from pkmn_quant.live.ledger import append_events
-            from pkmn_quant.live.paper import plan_paper_fills
-
-            batch = plan_paper_fills(
-                signals_report.recommendations, pf.cash, today, CostModel(impact_enabled=impact)
-            )
-            if batch:
-                try:
-                    append_events(lpath, batch, products)
-                except LedgerError as exc:
-                    _fail(f"paper auto-record failed: {exc}", keep_artifacts=True)
-                    return  # unreachable
-            n_buys = sum(1 for e in batch if e["kind"] == "buy")
-            n_sells = sum(1 for e in batch if e["kind"] == "sell")
-
         as_of = signals_report.as_of.isoformat()
         # Recorded only now, after signals and any paper fills completed.
         state.signals_as_of[mode] = as_of
         finish("error" if ingest_error else "ok", ingest_error, n_buys, n_sells, as_of)
-        if alerts.resolve(state, run_error_key):
-            notify.send_notification(
-                f"{run_failed_title}: recovered", "pkmn daily is running again"
-            )
+        _recover(run_error_key, run_failed_title, "pkmn daily is running again")
 
         if n_buys + n_sells > 0:
             notify.send_notification(

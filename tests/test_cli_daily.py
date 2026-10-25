@@ -300,7 +300,8 @@ def test_daily_same_as_of_twice_does_not_renotify(
     assert first.exit_code == 0, first.output
     buys = [b for t, b in sent if "buys" in b]
     assert len(buys) == 1
-    assert meta_of(root)["n_buys"] >= 1
+    first_meta = meta_of(root)
+    assert first_meta["n_buys"] >= 1
 
     at(monkeypatch, utc(2025, 5, 2, 13))
     second = daily(root)
@@ -309,7 +310,9 @@ def test_daily_same_as_of_twice_does_not_renotify(
     meta = meta_of(root)
     assert meta["status"] == "ok"
     assert meta["signals_skipped"] is True
-    assert meta["n_buys"] == 0 and meta["n_sells"] == 0
+    # Same day, same as_of: the acting run's counts survive the skip run.
+    assert meta["n_buys"] == first_meta["n_buys"]
+    assert meta["n_sells"] == first_meta["n_sells"]
     assert meta["as_of"] == "2025-05-01"
     assert meta["live"]["new_day"] is False
     assert meta["live"]["update_day"] is None  # day already stored, nothing fetched
@@ -531,3 +534,55 @@ def test_daily_run_failure_alerts_once_per_day_and_recovers(
     r3 = daily(root, "--skip-ingest")
     assert r3.exit_code == 0, r3.output
     assert sent[-1][0] == f"{sent[0][0]}: recovered"
+
+
+def test_daily_skip_on_a_new_local_day_reports_zero_counts(
+    root: Path, sent: list[tuple[str, str]], probes: list[date], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Counts carry forward only within the same daily-<date> dir: the next
+    morning, with no new data, nothing was acted on that day."""
+    deposit(root)
+    script(monkeypatch, live_report(), live_report())
+    at(monkeypatch, utc(2025, 5, 2, 9))
+    assert daily(root).exit_code == 0
+    assert meta_of(root)["n_buys"] >= 1
+    at(monkeypatch, utc(2025, 5, 3, 9))
+    assert daily(root).exit_code == 0
+    meta = json.loads((root / "data" / "results" / "daily-2025-05-03" / "daily.json").read_text())
+    assert meta["signals_skipped"] is True and meta["n_buys"] == 0
+
+
+def test_daily_archive_probe_skips_live_days(
+    root: Path, sent: list[tuple[str, str]], probes: list[date], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The probe asks for the day after the newest ARCHIVE day (the first lost
+    day), not the day after a live-stored day."""
+    live_day = date(2025, 5, 8)
+    Warehouse(Paths(root=root)).write_prices(
+        live_day, pl.DataFrame([price_row(live_day, 1, 100.0)], schema=PRICE_SCHEMA)
+    )
+    manifest = Paths(root=root).raw_live / live_day.isoformat() / "manifest.json"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text("{}")
+    script(monkeypatch, live_report())
+    at(monkeypatch, utc(2025, 5, 9, 9))
+    assert daily(root).exit_code == 0
+    assert probes == [date(2025, 5, 2)]  # archive day 2025-05-01 + 1
+
+
+def test_daily_failure_writing_artifacts_goes_through_run_error(
+    root: Path, sent: list[tuple[str, str]], probes: list[date], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def boom(report: Any) -> str:
+        raise OSError("disk full")
+
+    monkeypatch.setattr("pkmn_quant.live.report.render_signals_markdown", boom)
+    at(monkeypatch, utc(2025, 5, 2, 9))
+    result = daily(root, "--skip-ingest")
+    assert result.exit_code == 1
+    meta = meta_of(root)
+    assert meta["status"] == "error" and "disk full" in meta["error"]
+    assert len(sent) == 1 and "run failed" in sent[0][0]
+    state = json.loads((root / "data" / "results" / "daily-state.json").read_text())
+    assert "run_error:real" in state["active"]
+    assert "real" not in state["signals_as_of"]
