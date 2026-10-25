@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import gzip
 import json
-from collections.abc import Callable
 from datetime import UTC, date, datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -19,49 +18,15 @@ from pkmn_quant.data.live import (
     fetch_last_updated,
     update_day,
 )
-
-UPDATE = "2026-10-24T20:05:44+0000"
-OK_BODY = b'{"success": true, "errors": [], "results": [{"productId": 1}]}'
-EMPTY_BODY = b'{"success": true, "results": []}'
-OLD_LM = "Thu, 31 Oct 2024 12:00:00 GMT"
-
-Reply = Callable[[], httpx.Response]
-
-
-def ok(body: bytes = OK_BODY, lm: str = OLD_LM) -> Reply:
-    return lambda: httpx.Response(200, content=body, headers={"Last-Modified": lm, "ETag": '"e1"'})
-
-
-def status(code: int) -> Reply:
-    return lambda: httpx.Response(code)
-
-
-class Server:
-    """Scripted tcgcsv: per-gid reply lists (last one repeats) and counters."""
-
-    def __init__(self, updates: list[str] | None = None) -> None:
-        self.updates = list(updates or [UPDATE])
-        self.replies: dict[int, list[Reply]] = {}
-        self.counts: dict[int, int] = {}
-        self.lu_reads = 0
-
-    def script(self, gid: int, *replies: Reply) -> None:
-        self.replies[gid] = list(replies)
-
-    def handler(self, request: httpx.Request) -> httpx.Response:
-        path = request.url.path
-        if path == "/last-updated.txt":
-            text = self.updates[min(self.lu_reads, len(self.updates) - 1)]
-            self.lu_reads += 1
-            return httpx.Response(200, text=text + "\n")
-        gid = int(path.split("/")[-2])
-        n = self.counts.get(gid, 0)
-        self.counts[gid] = n + 1
-        queue = self.replies[gid]
-        return queue[min(n, len(queue) - 1)]()
-
-    def client(self) -> httpx.Client:
-        return httpx.Client(transport=httpx.MockTransport(self.handler))
+from tests.live_helpers import (
+    EMPTY_BODY,
+    OK_BODY,
+    OLD_LM,
+    UPDATE,
+    Server,
+    ok,
+    status,
+)
 
 
 def run(server: Server, tmp_path: Path, gids: list[int], sleeps: list[float] | None = None):

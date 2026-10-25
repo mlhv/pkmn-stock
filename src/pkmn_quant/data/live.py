@@ -5,8 +5,9 @@ raw to `data/raw/live/<UTC date of update>/<groupId>.json.gz` plus a
 `manifest.json`. The layout and manifest fields are shared with the earlier
 throwaway stopgap script, so its directories are read as already held.
 
-Capture only: turning a captured day into warehouse rows is a separate step.
 Raw responses are kept byte-for-byte so a later parser change can be replayed.
+`finalize_day` then turns a captured day into warehouse rows, once and for all:
+a day written from live data is final and nothing ever rewrites a partition.
 """
 
 from __future__ import annotations
@@ -22,8 +23,19 @@ from pathlib import Path
 from typing import Any, Literal
 
 import httpx
+import polars as pl
 
 from pkmn_quant.config import POKEMON_CATEGORY_ID, TCGCSV_BASE_URL, Paths
+from pkmn_quant.data import tcgcsv
+from pkmn_quant.data.ingest import (
+    GAP_RESET_DAYS,
+    IngestStats,
+    refresh_products,
+    tracked_groups,
+)
+from pkmn_quant.data.quality import apply_quality_gates
+from pkmn_quant.data.transforms import prices_frame
+from pkmn_quant.data.warehouse import Warehouse
 
 GroupStatus = Literal["held", "absent", "failed"]
 
@@ -194,3 +206,128 @@ def capture_update(
     save_manifest(day_dir, manifest)
     held, absent, failed = split()
     return Capture(day, update_ts, held, absent, failed, after != update_ts, False)
+
+
+def pending_days(paths: Paths) -> list[date]:
+    """Captured days (a manifest on disk) not yet in the warehouse, ascending."""
+    root = paths.raw_live
+    if not root.exists():
+        return []
+    warehouse = Warehouse(paths)
+    days: list[date] = []
+    for d in root.iterdir():
+        if not (d.is_dir() and (d / _MANIFEST).exists()):
+            continue
+        try:
+            day = date.fromisoformat(d.name)
+        except ValueError:
+            continue
+        if not warehouse.has_day(day):
+            days.append(day)
+    return sorted(days)
+
+
+def finalize_day(paths: Paths, day: date) -> IngestStats:
+    """Write one captured day's held files into the warehouse.
+
+    Mirrors the archive path (`ingest_day`): same transform, same quality
+    gates, same baseline rule. The baseline is the latest stored day before
+    `day`, dropped when the gap exceeds GAP_RESET_DAYS. Never overwrites.
+    """
+    warehouse = Warehouse(paths)
+    if warehouse.has_day(day):
+        raise ValueError(f"{day} is already in the warehouse; a stored day is never rewritten")
+    day_dir = paths.raw_live / day.isoformat()
+    groups: dict[str, dict[str, Any]] = load_manifest(day_dir)["groups"]
+    rows_by_group: dict[int, list[dict[str, Any]]] = {}
+    for gid_s, rec in sorted(groups.items(), key=lambda kv: int(kv[0])):
+        f = day_dir / f"{gid_s}.json.gz"
+        if rec.get("status") == "held" and f.exists():
+            rows_by_group[int(gid_s)] = json.loads(gzip.decompress(f.read_bytes()))["results"]
+    prices = prices_frame(day, rows_by_group)
+    previous: pl.DataFrame | None = None
+    prior = [d for d in warehouse.stored_days() if d < day]
+    if prior and (day - prior[-1]).days <= GAP_RESET_DAYS:
+        previous = warehouse.load_day(prior[-1])
+    clean, quarantined = apply_quality_gates(prices, previous)
+    warehouse.write_prices(day, clean)
+    warehouse.write_quarantine(day, quarantined)
+    return IngestStats(day=day, rows_clean=clean.height, rows_quarantined=quarantined.height)
+
+
+@dataclass(frozen=True)
+class LiveIngestReport:
+    """Outcome of one `run_live_ingest`.
+
+    `capture` is None when the update's day was already stored (nothing was
+    fetched). `partial` maps each written day that lacks some groups to those
+    group ids. `collision`: the update's day holds a different update.
+    """
+
+    capture: Capture | None
+    written: tuple[IngestStats, ...]
+    partial: dict[date, tuple[int, ...]]
+    collision: bool
+    catalog_failures: tuple[int, ...]
+
+
+def _missing(paths: Paths, day: date, group_ids: Sequence[int]) -> tuple[int, ...]:
+    groups = load_manifest(paths.raw_live / day.isoformat())["groups"]
+    return tuple(
+        gid for gid in group_ids if groups.get(str(gid), {}).get("status") not in ("held", "absent")
+    )
+
+
+def run_live_ingest(
+    paths: Paths,
+    client: httpx.Client | None = None,
+    *,
+    sleep: Callable[[float], None] = time.sleep,
+) -> LiveIngestReport:
+    """Capture the current tcgcsv update and finalize every day that is ready.
+
+    Ready: any older captured day (written even if partial, with the missing
+    groups reported), plus the update's own day once it is complete and the
+    feed has not moved on. The catalog is refreshed only when a day is written.
+    """
+    owns_client = client is None
+    if client is None:
+        client = tcgcsv.make_client()
+    try:
+        warehouse = Warehouse(paths)
+        ts = fetch_last_updated(client)
+        today = update_day(ts)
+        if warehouse.has_day(today):
+            named = load_manifest(paths.raw_live / today.isoformat()).get("last_updated")
+            differs = named is not None and datetime.strptime(named, _TS_FORMAT) != ts
+            return LiveIngestReport(None, (), {}, differs, ())
+        groups = tcgcsv.fetch_groups(client)
+        group_ids = [g.group_id for g in tracked_groups(groups)]
+        capture = capture_update(client, paths, group_ids, sleep=sleep)
+        to_write = [d for d in pending_days(paths) if d < capture.day]
+        if capture.collision or (capture.complete and not capture.moved_on):
+            to_write.append(capture.day)
+        partial: dict[date, tuple[int, ...]] = {}
+        for d in to_write:
+            if missing := _missing(paths, d, group_ids):
+                partial[d] = missing
+        written: list[IngestStats] = []
+        catalog_failures: tuple[int, ...] = ()
+        if to_write:
+            catalog_failures = refresh_products(client, warehouse, groups).failed_groups
+            written = [finalize_day(paths, d) for d in sorted(to_write)]
+        return LiveIngestReport(
+            capture, tuple(written), partial, capture.collision, catalog_failures
+        )
+    finally:
+        if owns_client:
+            client.close()
+
+
+def probe_archive(client: httpx.Client, day: date) -> bool:
+    """True if tcgcsv serves the day's archive again. The body is never read."""
+    try:
+        with client.stream("GET", tcgcsv.archive_url(day)) as r:
+            return r.status_code == 200
+    except httpx.HTTPError:
+        return False
