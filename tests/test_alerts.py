@@ -77,3 +77,47 @@ def test_state_round_trip_and_corrupt_file(
     path.write_text('["wrong shape"]')
     assert load_state(tmp_path) == AlertState()
     assert capsys.readouterr().err != ""
+
+
+def _write(tmp_path: Path, text: str) -> None:
+    path = tmp_path / "data" / "results" / "daily-state.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(text)
+
+
+def test_bad_last_sent_is_dropped_and_realerts(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _write(
+        tmp_path,
+        '{"active": {"garbage": "nope", "naive": "2026-10-25T09:00:00",'
+        ' "ok": "2026-10-25T09:00:00+00:00"},'
+        ' "signals_as_of": {"real": "2026-10-24", "paper": "xx"}}',
+    )
+    state = load_state(tmp_path)
+    assert set(state.active) == {"ok"}
+    assert state.signals_as_of == {"real": "2026-10-24"}
+    assert capsys.readouterr().err.count("warning") == 1
+    now = datetime(2026, 10, 25, 10, 0, tzinfo=UTC)
+    assert should_alert(state, "garbage", now)
+    assert should_alert(state, "naive", now)
+    assert not should_alert(state, "ok", now)
+
+
+def test_missing_fields_use_defaults(tmp_path: Path) -> None:
+    _write(tmp_path, '{"active": {"capture": "2026-10-25T09:00:00+00:00"}, "extra": 1}')
+    state = load_state(tmp_path)
+    assert state.active == {"capture": "2026-10-25T09:00:00+00:00"}
+    assert state.signals_as_of == {}
+    assert state.archive_probe_on is None
+
+
+def test_wrong_typed_field_falls_back_alone(tmp_path: Path) -> None:
+    _write(tmp_path, '{"active": [1], "signals_as_of": {"real": "2026-10-24"}}')
+    state = load_state(tmp_path)
+    assert state.active == {}
+    assert state.signals_as_of == {"real": "2026-10-24"}
+
+
+def test_is_stale_false_at_exact_boundary() -> None:
+    assert not is_stale(date(2026, 10, 24), datetime(2026, 10, 26, 20, 0, tzinfo=UTC))

@@ -35,27 +35,74 @@ def _path(root: Path) -> Path:
     return root / "data" / "results" / STATE_FILE
 
 
+def _warn(path: Path, msg: str) -> None:
+    print(f"warning: {path}: {msg}", file=sys.stderr)
+
+
+def _aware_iso(value: object) -> bool:
+    if not isinstance(value, str):
+        return False
+    try:
+        return datetime.fromisoformat(value).tzinfo is not None
+    except ValueError:
+        return False
+
+
+def _iso_date(value: object) -> bool:
+    if not isinstance(value, str):
+        return False
+    try:
+        date.fromisoformat(value)
+    except ValueError:
+        return False
+    return True
+
+
 def load_state(root: Path) -> AlertState:
+    """Total: never raises. Bad entries or fields are dropped, the rest kept.
+
+    A dropped alert entry just re-fires once, the safe direction.
+    """
     path = _path(root)
     if not path.exists():
         return AlertState()
     try:
         raw = json.loads(path.read_text())
-        active = raw["active"]
-        signals = raw["signals_as_of"]
-        probe = raw["archive_probe_on"]
-        if not (
-            isinstance(active, dict)
-            and isinstance(signals, dict)
-            and (probe is None or isinstance(probe, str))
-            and all(isinstance(k, str) and isinstance(v, str) for k, v in active.items())
-            and all(isinstance(k, str) and isinstance(v, str) for k, v in signals.items())
-        ):
-            raise ValueError("wrong shape")
-        return AlertState(active=dict(active), signals_as_of=dict(signals), archive_probe_on=probe)
-    except (OSError, ValueError, KeyError, TypeError) as exc:
-        print(f"warning: ignoring unreadable {path}: {exc}", file=sys.stderr)
+    except (OSError, ValueError) as exc:
+        _warn(path, f"ignoring unreadable state: {exc}")
         return AlertState()
+    if not isinstance(raw, dict):
+        _warn(path, "ignoring state of wrong shape")
+        return AlertState()
+
+    state = AlertState()
+    dropped: list[str] = []
+    active = raw.get("active", {})
+    if isinstance(active, dict):
+        for k, v in active.items():
+            if _aware_iso(v):
+                state.active[str(k)] = v
+            else:
+                dropped.append(f"active[{k}]")
+    else:
+        dropped.append("active")
+    signals = raw.get("signals_as_of", {})
+    if isinstance(signals, dict):
+        for k, v in signals.items():
+            if _iso_date(v):
+                state.signals_as_of[str(k)] = v
+            else:
+                dropped.append(f"signals_as_of[{k}]")
+    else:
+        dropped.append("signals_as_of")
+    probe = raw.get("archive_probe_on")
+    if probe is None or _iso_date(probe):
+        state.archive_probe_on = probe
+    else:
+        dropped.append("archive_probe_on")
+    if dropped:
+        _warn(path, "dropped invalid fields: " + ", ".join(dropped))
+    return state
 
 
 def save_state(root: Path, state: AlertState) -> None:
