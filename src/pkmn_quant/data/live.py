@@ -108,6 +108,11 @@ def save_manifest(day_dir: Path, manifest: dict[str, Any]) -> None:
     _atomic_write(day_dir / _MANIFEST, text.encode())
 
 
+def _is_held(day_dir: Path, gid: int | str, rec: dict[str, Any]) -> bool:
+    """A group counts as held only if its manifest says so AND its file exists."""
+    return rec.get("status") == "held" and (day_dir / f"{gid}.json.gz").exists()
+
+
 def _fetch_group(
     client: httpx.Client, gid: int, day_dir: Path, update_ts: datetime
 ) -> dict[str, Any]:
@@ -186,7 +191,7 @@ def capture_update(
         prev = groups.get(str(gid), {})
         if prev.get("status") == "absent":
             continue
-        if prev.get("status") == "held" and (day_dir / f"{gid}.json.gz").exists():
+        if _is_held(day_dir, gid, prev):
             continue
         if fetched_any:
             sleep(pause_s)
@@ -241,8 +246,8 @@ def finalize_day(paths: Paths, day: date) -> IngestStats:
     groups: dict[str, dict[str, Any]] = load_manifest(day_dir)["groups"]
     rows_by_group: dict[int, list[dict[str, Any]]] = {}
     for gid_s, rec in sorted(groups.items(), key=lambda kv: int(kv[0])):
-        f = day_dir / f"{gid_s}.json.gz"
-        if rec.get("status") == "held" and f.exists():
+        if _is_held(day_dir, gid_s, rec):
+            f = day_dir / f"{gid_s}.json.gz"
             rows_by_group[int(gid_s)] = json.loads(gzip.decompress(f.read_bytes()))["results"]
     prices = prices_frame(day, rows_by_group)
     previous: pl.DataFrame | None = None
@@ -272,9 +277,13 @@ class LiveIngestReport:
 
 
 def _missing(paths: Paths, day: date, group_ids: Sequence[int]) -> tuple[int, ...]:
-    groups = load_manifest(paths.raw_live / day.isoformat())["groups"]
+    day_dir = paths.raw_live / day.isoformat()
+    groups = load_manifest(day_dir)["groups"]
     return tuple(
-        gid for gid in group_ids if groups.get(str(gid), {}).get("status") not in ("held", "absent")
+        gid
+        for gid in group_ids
+        if not _is_held(day_dir, gid, groups.get(str(gid), {}))
+        and groups.get(str(gid), {}).get("status") != "absent"
     )
 
 
@@ -305,7 +314,11 @@ def run_live_ingest(
         group_ids = [g.group_id for g in tracked_groups(groups)]
         capture = capture_update(client, paths, group_ids, sleep=sleep)
         to_write = [d for d in pending_days(paths) if d < capture.day]
-        if capture.collision or (capture.complete and not capture.moved_on):
+        # capture_update re-reads last-updated.txt; if that second read names a
+        # day that is already stored, never queue it (finalize would raise).
+        if not warehouse.has_day(capture.day) and (
+            capture.collision or (capture.complete and not capture.moved_on)
+        ):
             to_write.append(capture.day)
         partial: dict[date, tuple[int, ...]] = {}
         for d in to_write:

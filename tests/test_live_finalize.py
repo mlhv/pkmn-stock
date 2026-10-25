@@ -171,3 +171,27 @@ def test_probe_archive() -> None:
         raise httpx.ConnectError("down")
 
     assert probe_archive(httpx.Client(transport=httpx.MockTransport(down)), day) is False
+
+
+def test_second_read_naming_stored_day_does_not_fail_the_run(tmp_path: Path) -> None:
+    go(tmp_path, server())  # writes 10-24
+    part = tmp_path / "data/warehouse/prices/date=2026-10-24/data.parquet"
+    before = part.read_bytes()
+    # read 1: new day (unstored); reads 2+: the stored day, same timestamp.
+    s = server()
+    s.updates = [UPDATE_25, UPDATE]
+    report = go(tmp_path, s)
+    assert report.written == ()
+    assert part.read_bytes() == before
+    assert stored(tmp_path) == [date(2026, 10, 24)]
+
+
+def test_held_record_with_missing_file_is_reported_partial(tmp_path: Path) -> None:
+    paths = Paths(tmp_path)
+    capture_update(server(bad=(2,)).client(), paths, [1, 2], sleep=lambda _: None)
+    d = tmp_path / "data/raw/live/2026-10-24"
+    m = json.loads((d / "manifest.json").read_text())
+    m["groups"]["2"] = {"status": "held", "http": 200, "rows": 1}
+    (d / "manifest.json").write_text(json.dumps(m))
+    report = go(tmp_path, server(UPDATE_25))
+    assert report.partial == {date(2026, 10, 24): (2,)}
