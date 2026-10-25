@@ -652,6 +652,42 @@ tcgcsv.com). Design spec: `docs/superpowers/specs/2026-06-09-pkmn-quant-design.m
   mode, book with the synthetic label. Book evaluates write
   `data/results/evaluate-<date>-book/`; formula keeps `evaluate-<date>/`.
 
+- **Live ingest and phone alerts on feat/live-ingest (2026-10-25; 730
+  passed pytest via `uv sync --group api --group dashboard && uv run
+  pytest`).** Cut from `feat/instrument-repair-horizon` (owner ruling: the
+  launchd job runs that checkout). Spec:
+  `docs/superpowers/specs/2026-10-25-live-ingest-design.md`. tcgcsv took its
+  price archive offline: every `/archive/...ppmd.7z` URL 403s, and `pkmn
+  daily`'s archive ingest failed every day from 2026-09-14 on. The warehouse
+  stops at 2026-09-13. `data/live.py` now captures each tcgcsv update from
+  the live per-group `/prices` endpoints (raw responses kept under
+  `data/raw/live/<day>/`, resumable, each group fetched at most once per
+  update, only failed groups re-fetched) and finalizes it through the same
+  `prices_frame` + `apply_quality_gates` path as an archive day. `pkmn daily`
+  calls `run_live_ingest` instead of `ingest_range`, probes the archive at
+  most once a local day (an "archive is back" alert if it returns 200), runs
+  signals and paper fills only when the newest stored day differs from the
+  last one they ran on for that mode (so four runs a day never re-notify or
+  re-record fills), and applies a rate-limited alert policy
+  (`live/alerts.py`, state in `data/results/daily-state.json`): a capture
+  problem alerts only when still incomplete at or after 21:00 local or when
+  the warehouse is stale (no new day 48h after 20:00 UTC on the newest day);
+  partial days and two updates on one UTC day alert; non-ingest failures
+  alert once, then at most daily; each cleared condition sends one
+  "recovered". Alerts go to a macOS banner plus an ntfy phone push
+  (`live/notify.py`). `daily.json` gains `live` (null under
+  `--skip-ingest`) and `signals_skipped`. The launchd template runs at
+  09:00, 13:00, 17:00 and 21:00. **The days 2026-09-14 to 2026-10-23 are
+  lost**: the live endpoints serve only the current update, so nothing can
+  recover them unless tcgcsv republishes the archive. **2026-10-24** was
+  captured by an owner-approved throwaway stopgap script outside the repo
+  (`capture_raw.py`, 2026-10-25 16:33 UTC: 220 of 220 groups held, 45,400
+  price rows, 5 held-empty) into `data/raw/live/2026-10-24/`, in the same
+  layout `data/live.py` reads, so the first real run finalizes it as an
+  ordinary day. No real-data run and no launchd change has happened on this
+  branch: both wait for the owner to confirm the formula baseline batch has
+  finished.
+
 ## Commands
 
 ```bash
@@ -660,7 +696,9 @@ uv run pytest                # test suite
 uv run ruff check . && uv run ruff format --check . && uv run mypy
                              # lint + format + strict typecheck (src/ plus the two
                              # operator scripts: rebuild_warehouse, verify_rebuild)
-uv run pkmn ingest --start 2026-07-01 --end 2026-07-31   # extend price history
+uv run pkmn ingest --start 2026-07-01 --end 2026-07-31   # archive backfill/rebuild path (archive offline since 2026-09-14: 403s)
+uv run pkmn live-ingest                                  # capture the current tcgcsv update from the live endpoints once; exit 1 if incomplete
+uv run pkmn notify-test                                  # send a test ntfy push (needs data/config/notify.toml)
 uv run pkmn refresh-products                             # repair the catalog from all 217 groups, no price ingest
 uv run python scripts/rebuild_warehouse.py --root .      # rebuild the warehouse into data/warehouse-full/ from cached archives (~17 min, resumable; leave --start at its default)
 uv run python scripts/verify_rebuild.py --root .         # gate the swap: every pre-existing product must reproduce exactly, prices + quarantine + catalog (exit 0 = safe)
@@ -901,6 +939,33 @@ scripts/bench_iex.sh [--profile] [--no-record]            # re-execs in the VM, 
   numbers — if a deliberate change shifts results, update the goldens in the
   same commit with a hand-derivation in the docstring.
 - tcgcsv.com 401s httpx's default User-Agent — always use `tcgcsv.make_client()`.
+- **The tcgcsv price archive is offline (403 since 2026-09-14).** New days
+  come only from the live per-group endpoints, which serve only the current
+  update: a day not captured while it is current is lost for good. `pkmn
+  ingest`/`ingest_range` remain for rebuilds and a backfill if the archive
+  returns; `pkmn daily` no longer calls them. A day written from live data is
+  final, and a restored archive must never overwrite it.
+- **Live snapshots are dated by the UTC calendar date of tcgcsv's update
+  timestamp** (`last-updated.txt`), never by the local date or the fetch
+  time: a 2026-10-24T20:05Z update is day 2026-10-24 even if fetched the next
+  morning. This assumes the old archive file `prices-D` held the update
+  published on UTC day D. **That equivalence is a convention, not a verified
+  fact**: no day exists in both sources to check it against. If it is ever
+  shown to be off by one, change `live.update_day` and nothing else.
+- ntfy phone alerts read `[ntfy] topic` (and optional `server`) from
+  gitignored `data/config/notify.toml`. Absent or unreadable config means
+  banners only. Never commit the topic: anyone who knows a public ntfy topic
+  can read and post to it. A notification failure never fails a run.
+- The launchd job only changes when it is reinstalled: editing
+  `scripts/com.pkmn-quant.daily.plist` does nothing to the installed
+  `~/Library/LaunchAgents/com.pkmn-quant.daily.plist`. Reinstall it (sed
+  REPO_PATH, unload, load) after merge to get the four daily runs.
+- The stopgap `capture_raw.py` (outside the repo) is superseded by `pkmn
+  live-ingest`/`pkmn daily`; stop it once the live path is installed. Its
+  `data/raw/live/` directories are read as already held, not re-fetched.
+- `data/results/daily-state.json` (alert state) sits next to the
+  `daily-<date>/` directories, so a bare `glob("daily-*")` matches it too;
+  glob `daily-*/daily.json` (as the dashboard does) or `daily-2*`.
 - `refresh_products` merges into `products.parquet` and never replaces it: it
   runs on every ingest, including the unattended `pkmn daily` job that
   swallows ingest errors, so a replace lets one transient connection reset

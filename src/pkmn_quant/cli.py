@@ -13,6 +13,7 @@ import typer
 from pkmn_quant.config import Paths
 from pkmn_quant.data import tcgcsv
 from pkmn_quant.data.ingest import ingest_range, refresh_products
+from pkmn_quant.data.live import LiveIngestError, LiveIngestReport, probe_archive, run_live_ingest
 from pkmn_quant.research.execution import execution_line
 
 if TYPE_CHECKING:
@@ -721,6 +722,71 @@ def signals(
     typer.echo(f"artifacts written to {out_dir}", err=True)
 
 
+def _now() -> dt.datetime:
+    """Aware UTC now: `pkmn daily`'s alert clock. Tests monkeypatch it."""
+    return dt.datetime.now(dt.UTC)
+
+
+def _live_json(report: LiveIngestReport) -> dict[str, Any]:
+    """daily.json's `live` block. The counts are None when nothing was fetched
+    (the update's day was already stored)."""
+    c = report.capture
+    return {
+        "update_day": c.day.isoformat() if c else None,
+        "held": len(c.held) if c else None,
+        "absent": len(c.absent) if c else None,
+        "failed": len(c.failed) if c else None,
+        "written": [s.day.isoformat() for s in report.written],
+        "partial": {d.isoformat(): list(g) for d, g in sorted(report.partial.items())},
+        "collision": report.collision,
+        "new_day": bool(report.written),
+    }
+
+
+def _gids(gids: tuple[int, ...]) -> str:
+    return ", ".join(str(g) for g in gids)
+
+
+@app.command("live-ingest")
+def live_ingest(
+    root: Path = typer.Option(Path("."), help="Project root holding the data/ directory."),
+) -> None:
+    """Capture the current tcgcsv update from the live per-group endpoints, once.
+
+    Exits 1 if the capture is incomplete (the next run re-fetches only the
+    failed groups) or last-updated.txt could not be read.
+    """
+    try:
+        report = run_live_ingest(Paths(root=root))
+    except LiveIngestError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(1) from exc
+    c = report.capture
+    if c is None:
+        typer.echo("update already stored; nothing fetched")
+    else:
+        typer.echo(f"update day: {c.day.isoformat()} (tcgcsv update {c.update_ts.isoformat()})")
+        typer.echo(f"groups: held {len(c.held)}, absent {len(c.absent)}, failed {len(c.failed)}")
+        if c.failed:
+            typer.echo(f"failed groups: {_gids(c.failed)}")
+    for s in report.written:
+        typer.echo(f"{s.day}: {s.rows_clean} clean rows, {s.rows_quarantined} quarantined")
+    if not report.written:
+        typer.echo("no day written")
+    for d, missing in sorted(report.partial.items()):
+        typer.echo(f"warning: {d} written without group(s) {_gids(missing)}", err=True)
+    if report.collision:
+        typer.echo("warning: two tcgcsv updates mapped to one UTC day", err=True)
+    if report.catalog_failures:
+        typer.echo(
+            f"warning: catalog refresh: {len(report.catalog_failures)} group(s) failed to "
+            "fetch; their previously catalogued rows were kept",
+            err=True,
+        )
+    if c is not None and not c.complete:
+        raise typer.Exit(1)
+
+
 @app.command()
 def daily(
     strategy: str = typer.Option("sealed-accumulation", help="Strategy to run against the ledger."),
@@ -735,8 +801,24 @@ def daily(
     ),
     root: Path = typer.Option(Path("."), help="Project root holding the data/ directory."),
 ) -> None:
-    """The morning loop: ingest missing days, run signals against the ledger,
-    write artifacts, notify when actionable. Designed for launchd/cron.
+    """The scheduled loop: capture tcgcsv's live update, run signals against the
+    ledger when a new day landed, write artifacts, notify. Designed for launchd,
+    several runs a day.
+
+    Ingest is one `run_live_ingest` per run (the price archive is offline),
+    plus at most one archive probe per local day. Signals and paper fills run
+    only when the newest stored day differs from the day they last ran on for
+    this mode (real/paper), so repeated runs on the same data never re-notify
+    or re-record fills.
+
+    Alerts are rate-limited through data/results/daily-state.json. A capture
+    problem alerts only once the update is at risk (still incomplete at or
+    after 21:00 local) or the warehouse is stale; a transient one is recorded
+    in daily.json and exits 0. Partial days and two updates on one UTC day
+    alert. A non-ingest failure alerts once, then at most daily. Exit 1 when
+    an alert-level condition holds this run (even if its push was
+    rate-limited) or the run failed. --skip-ingest skips the ingest, the probe
+    and every ingest alert.
 
     Paper mode (--paper): routes all ledger reads/writes to data/portfolio/paper.jsonl
     and auto-records the day's recommended fills using the engine CostModel so the
@@ -756,18 +838,32 @@ def daily(
     """
     import json as _json
 
-    from pkmn_quant.live import notify
+    from pkmn_quant.live import alerts, notify
     from pkmn_quant.live.ledger import LedgerError, load_portfolio
     from pkmn_quant.live.report import render_signals_markdown, signals_to_json
     from pkmn_quant.live.signals import SignalsError, generate_signals
 
-    today = dt.date.today()
+    notify.configure(root)
+    now = _now()
+    # Local wall-clock time drives the at-risk rule, the artifact date and the
+    # once-a-day archive probe.
+    now_local = now.astimezone()
+    today = now_local.date()
+    mode = "paper" if paper else "real"
+    state = alerts.load_state(root)
+
     dir_suffix = "-paper" if paper else ""
     out_dir = root / "data" / "results" / f"daily-{today.isoformat()}{dir_suffix}"
     out_dir.mkdir(parents=True, exist_ok=True)
 
     notify_title_base = "pkmn daily (paper)" if paper else "pkmn daily"
+    run_failed_title = f"{notify_title_base}: run failed"
+    run_error_key = f"run_error:{mode}"
     catalog_failures: tuple[int, ...] = ()
+    live: dict[str, Any] | None = None
+    signals_skipped = False
+    # An alert-level ingest condition held this run (sets the exit code).
+    ingest_problem = False
 
     def finish(
         status: str, error: str | None, n_buys: int, n_sells: int, as_of: str | None
@@ -787,6 +883,12 @@ def daily(
                     # rows were kept (ingest.refresh_products merges), but an
                     # unattended run must leave a durable trace of the degradation.
                     "catalog_failures": len(catalog_failures),
+                    # Live capture outcome; null under --skip-ingest or when
+                    # the ingest raised (see "error").
+                    "live": live,
+                    # True when signals did not run because they already ran
+                    # on this as_of for this mode.
+                    "signals_skipped": signals_skipped,
                 },
                 indent=2,
             )
@@ -799,105 +901,210 @@ def daily(
         Pass keep_artifacts=True when the signals.md/signals.json are still
         valid (e.g. all-or-nothing ledger write failed after artifacts were
         written — no fills were recorded so the artifacts are consistent).
+        The notification is rate-limited (once, then at most daily); the
+        caller's finally saves the alert state.
         """
         finish("error", error, 0, 0, None)
         if not keep_artifacts:
             for stale in ("signals.md", "signals.json"):
                 (out_dir / stale).unlink(missing_ok=True)
-        notify.send_notification(f"{notify_title_base} FAILED", error)
+        if alerts.should_alert(state, run_error_key, now):
+            notify.send_notification(run_failed_title, error)
         typer.echo(f"error: {error}", err=True)
         raise typer.Exit(1)
 
-    ingest_error: str | None = None
-    try:
-        # _portfolio_deps raises BadParameter when no warehouse exists; keep it
-        # inside the protected block so that case produces error daily.json.
-        warehouse, products, lpath = _portfolio_deps(root, paper=paper)
+    def _alert(key: str, title: str, body: str) -> None:
+        if alerts.should_alert(state, key, now):
+            notify.send_notification(title, body)
+        typer.echo(f"warning: {title}: {body}", err=True)
 
-        if not skip_ingest:
-            yesterday = today - dt.timedelta(days=1)
-            days = warehouse.stored_days()
-            if days and days[-1] < yesterday:
+    def _recover(key: str, title: str, body: str = "new price data is landing again") -> None:
+        if alerts.resolve(state, key):
+            notify.send_notification(f"{title}: recovered", body)
+
+    def _ingest_alerts(
+        warehouse: Warehouse, report: LiveIngestReport | None, ingest_error: str | None
+    ) -> bool:
+        """Apply the ingest alert policy; True if an alert-level condition holds."""
+        days = warehouse.stored_days()
+        newest = days[-1] if days else None
+        capture = report.capture if report else None
+        capture_failed = capture is not None and not capture.complete
+        problem = False
+
+        stale_title = f"{notify_title_base}: no new prices"
+        capture_title = f"{notify_title_base}: capture incomplete"
+        if alerts.is_stale(newest, now):
+            problem = True
+            reason = ingest_error or (
+                f"update {capture.day} has {len(capture.failed)} failed group(s)"
+                if capture is not None and capture_failed
+                else "tcgcsv has published nothing newer"
+            )
+            _alert("stale", stale_title, f"newest stored day {newest}; {reason}")
+        else:
+            _recover("stale", stale_title)
+            if capture is not None and capture_failed and alerts.capture_at_risk(True, now_local):
+                problem = True
+                _alert(
+                    "capture",
+                    capture_title,
+                    f"update {capture.day}: {len(capture.failed)} group(s) still failing "
+                    f"({_gids(capture.failed)})",
+                )
+        if ingest_error is None and not capture_failed:
+            _recover("capture", capture_title)
+
+        if report is not None:
+            for d, missing in sorted(report.partial.items()):
+                problem = True
+                notify.send_notification(
+                    f"{notify_title_base}: partial day",
+                    f"{d} written without {len(missing)} group(s): {_gids(missing)}",
+                )
+            if report.collision:
+                problem = True
+                day = capture.day if capture is not None else newest
+                _alert(
+                    "collision",
+                    f"{notify_title_base}: two updates on one day",
+                    f"two tcgcsv updates mapped to {day}; the second was not stored",
+                )
+            elif ingest_error is None:
+                # Cleared silently: "two updates on one day: recovered" says nothing.
+                state.active.pop("collision", None)
+        return problem
+
+    try:
+        ingest_error: str | None = None
+        try:
+            # _portfolio_deps raises BadParameter when no warehouse exists; keep it
+            # inside the protected block so that case produces error daily.json.
+            warehouse, products, lpath = _portfolio_deps(root, paper=paper)
+
+            if not skip_ingest:
+                if state.archive_probe_on != today.isoformat():
+                    days = warehouse.stored_days()
+                    if days:
+                        probe_day = days[-1] + dt.timedelta(days=1)
+                        try:
+                            with tcgcsv.make_client() as client:
+                                back = probe_archive(client, probe_day)
+                        except Exception as exc:  # a probe must never fail the run
+                            typer.echo(f"warning: archive probe failed: {exc}", err=True)
+                            back = False
+                        if back:
+                            notify.send_notification(
+                                f"{notify_title_base}: archive is back",
+                                f"tcgcsv serves the {probe_day} archive again; the gap "
+                                "can be backfilled with pkmn ingest",
+                            )
+                    state.archive_probe_on = today.isoformat()
+
+                report: LiveIngestReport | None = None
                 try:
-                    ingested = ingest_range(
-                        Paths(root=root), days[-1] + dt.timedelta(days=1), yesterday
-                    )
-                    catalog_failures = ingested.catalog_failures
+                    report = run_live_ingest(Paths(root=root))
+                    catalog_failures = report.catalog_failures
+                    live = _live_json(report)
                 except Exception as exc:  # scheduled run must never die silently
                     ingest_error = f"ingest failed: {exc}"
+                ingest_problem = _ingest_alerts(warehouse, report, ingest_error)
+                if ingest_error:
+                    typer.echo(ingest_error, err=True)
+                if catalog_failures:
+                    # Not fatal — refresh_products merges, so the failed groups
+                    # kept their previous rows — but an unattended degradation
+                    # must not be silent.
+                    msg = (
+                        f"catalog refresh: {len(catalog_failures)} group(s) failed to fetch "
+                        f"({_gids(catalog_failures)}); previous rows kept"
+                    )
+                    notify.send_notification(f"{notify_title_base}: catalog degraded", msg)
+                    typer.echo(f"warning: {msg}", err=True)
 
-        pf = load_portfolio(lpath, products)
-        report = generate_signals(
-            warehouse=warehouse,
-            strategy_name=strategy,
-            results_dir=root / "data" / "results",
-            portfolio=pf,
-            paper=paper,
-        )
-    except (SignalsError, LedgerError, typer.BadParameter) as exc:
-        # Combine ingest error with signals/deps error when both occurred.
-        error = f"{exc}; {ingest_error}" if ingest_error else str(exc)
-        _fail(error)
-        return  # unreachable; satisfies type checker after _fail raises Exit
-    except Exception as exc:
-        # Unexpected errors (polars ComputeError, OSError, strategy bugs, …)
-        # must not die silently — wrap same finish/notify/exit path.
-        error = f"{exc}; {ingest_error}" if ingest_error else str(exc)
-        _fail(error)
-        return  # unreachable
+            stored = warehouse.stored_days()
+            newest = stored[-1].isoformat() if stored else None
+            if newest is not None and state.signals_as_of.get(mode) == newest:
+                # Signals already ran on this data for this mode: no repeat
+                # buy/sell push and, in paper mode, no repeat fills.
+                signals_skipped = True
+                finish("error" if ingest_error else "ok", ingest_error, 0, 0, newest)
+                _recover(run_error_key, run_failed_title, "pkmn daily is running again")
+                typer.echo(f"signals already ran on {newest} ({mode}); skipped")
+                if ingest_problem:
+                    raise typer.Exit(1)
+                return
 
-    (out_dir / "signals.md").write_text(render_signals_markdown(report))
-    (out_dir / "signals.json").write_text(signals_to_json(report))
-    n_buys = sum(1 for r in report.recommendations if r.action == "BUY")
-    n_sells = sum(1 for r in report.recommendations if r.action == "SELL")
+            pf = load_portfolio(lpath, products)
+            signals_report = generate_signals(
+                warehouse=warehouse,
+                strategy_name=strategy,
+                results_dir=root / "data" / "results",
+                portfolio=pf,
+                paper=paper,
+            )
+        except (SignalsError, LedgerError, typer.BadParameter) as exc:
+            # Combine ingest error with signals/deps error when both occurred.
+            error = f"{exc}; {ingest_error}" if ingest_error else str(exc)
+            _fail(error)
+            return  # unreachable; satisfies type checker after _fail raises Exit
+        except typer.Exit:
+            raise
+        except Exception as exc:
+            # Unexpected errors (polars ComputeError, OSError, strategy bugs, …)
+            # must not die silently — wrap same finish/notify/exit path.
+            error = f"{exc}; {ingest_error}" if ingest_error else str(exc)
+            _fail(error)
+            return  # unreachable
 
-    # Paper mode: auto-record recommended fills through the pure planner
-    # (live/paper.py) and one atomic append_events write. A mid-batch
-    # validation failure leaves the ledger completely unchanged. In paper
-    # mode n_buys/n_sells are re-counted from the recorded batch: the
-    # planner clips to liquidity and affordability (sometimes to zero),
-    # and daily.json must report what actually happened, not what the
-    # strategy wished for.
-    if paper and report.recommendations:
-        from pkmn_quant.engine.costs import CostModel
-        from pkmn_quant.live.ledger import append_events
-        from pkmn_quant.live.paper import plan_paper_fills
+        (out_dir / "signals.md").write_text(render_signals_markdown(signals_report))
+        (out_dir / "signals.json").write_text(signals_to_json(signals_report))
+        n_buys = sum(1 for r in signals_report.recommendations if r.action == "BUY")
+        n_sells = sum(1 for r in signals_report.recommendations if r.action == "SELL")
 
-        batch = plan_paper_fills(
-            report.recommendations, pf.cash, today, CostModel(impact_enabled=impact)
-        )
-        if batch:
-            try:
-                append_events(lpath, batch, products)
-            except LedgerError as exc:
-                _fail(f"paper auto-record failed: {exc}", keep_artifacts=True)
-                return  # unreachable
-        n_buys = sum(1 for e in batch if e["kind"] == "buy")
-        n_sells = sum(1 for e in batch if e["kind"] == "sell")
+        # Paper mode: auto-record recommended fills through the pure planner
+        # (live/paper.py) and one atomic append_events write. A mid-batch
+        # validation failure leaves the ledger completely unchanged. In paper
+        # mode n_buys/n_sells are re-counted from the recorded batch: the
+        # planner clips to liquidity and affordability (sometimes to zero),
+        # and daily.json must report what actually happened, not what the
+        # strategy wished for.
+        if paper and signals_report.recommendations:
+            from pkmn_quant.engine.costs import CostModel
+            from pkmn_quant.live.ledger import append_events
+            from pkmn_quant.live.paper import plan_paper_fills
 
-    finish(
-        "error" if ingest_error else "ok", ingest_error, n_buys, n_sells, report.as_of.isoformat()
-    )
+            batch = plan_paper_fills(
+                signals_report.recommendations, pf.cash, today, CostModel(impact_enabled=impact)
+            )
+            if batch:
+                try:
+                    append_events(lpath, batch, products)
+                except LedgerError as exc:
+                    _fail(f"paper auto-record failed: {exc}", keep_artifacts=True)
+                    return  # unreachable
+            n_buys = sum(1 for e in batch if e["kind"] == "buy")
+            n_sells = sum(1 for e in batch if e["kind"] == "sell")
 
-    if n_buys + n_sells > 0:
-        notify.send_notification(
-            notify_title_base,
-            f"{strategy}: {n_buys} buys, {n_sells} sells — see dashboard",
-        )
-    if catalog_failures:
-        # Not fatal — refresh_products merges, so the failed groups kept their
-        # previous rows — but an unattended degradation must not be silent.
-        msg = (
-            f"catalog refresh: {len(catalog_failures)} group(s) failed to fetch "
-            f"({', '.join(str(g) for g in catalog_failures)}); previous rows kept"
-        )
-        notify.send_notification(f"{notify_title_base}: catalog degraded", msg)
-        typer.echo(f"warning: {msg}", err=True)
-    if ingest_error:
-        notify.send_notification(f"{notify_title_base}: ingest problem", ingest_error)
-        typer.echo(ingest_error, err=True)
-        raise typer.Exit(1)
-    typer.echo(f"daily run written to {out_dir}")
+        as_of = signals_report.as_of.isoformat()
+        # Recorded only now, after signals and any paper fills completed.
+        state.signals_as_of[mode] = as_of
+        finish("error" if ingest_error else "ok", ingest_error, n_buys, n_sells, as_of)
+        if alerts.resolve(state, run_error_key):
+            notify.send_notification(
+                f"{run_failed_title}: recovered", "pkmn daily is running again"
+            )
+
+        if n_buys + n_sells > 0:
+            notify.send_notification(
+                notify_title_base,
+                f"{strategy}: {n_buys} buys, {n_sells} sells — see dashboard",
+            )
+        if ingest_problem:
+            raise typer.Exit(1)
+        typer.echo(f"daily run written to {out_dir}")
+    finally:
+        alerts.save_state(root, state)
 
 
 @app.command()

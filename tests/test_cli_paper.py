@@ -44,7 +44,7 @@ def test_paper_daily_auto_records_fills(tmp_path: Path, monkeypatch: pytest.Monk
     assert not (tmp_path / "data" / "portfolio" / "ledger.jsonl").exists()  # real untouched
 
     # Output goes to the -paper suffixed directory (Fix 5)
-    daily_dirs = list((tmp_path / "data" / "results").glob("daily-*"))
+    daily_dirs = list((tmp_path / "data" / "results").glob("daily-2*"))
     assert len(daily_dirs) == 1
     assert daily_dirs[0].name.endswith("-paper")
 

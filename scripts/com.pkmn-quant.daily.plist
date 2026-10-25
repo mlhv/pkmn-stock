@@ -11,12 +11,36 @@
         <string>-lc</string>
         <string>export PATH="$HOME/.local/bin:$PATH"; cd REPO_PATH &amp;&amp; mkdir -p data/results &amp;&amp; uv run pkmn daily >> data/results/daily.log 2>&amp;1</string>
     </array>
+    <!-- Four runs a day (local time). Each run captures only an update not
+         yet stored, so a missed morning is caught later; 17:00 and 21:00 can
+         catch the same-day ~20:00 UTC tcgcsv update. launchd runs a missed
+         calendar job on wake. Reinstall the job for a change here to apply. -->
     <key>StartCalendarInterval</key>
-    <dict>
-        <key>Hour</key>
-        <integer>9</integer>
-        <key>Minute</key>
-        <integer>0</integer>
-    </dict>
+    <array>
+        <dict>
+            <key>Hour</key>
+            <integer>9</integer>
+            <key>Minute</key>
+            <integer>0</integer>
+        </dict>
+        <dict>
+            <key>Hour</key>
+            <integer>13</integer>
+            <key>Minute</key>
+            <integer>0</integer>
+        </dict>
+        <dict>
+            <key>Hour</key>
+            <integer>17</integer>
+            <key>Minute</key>
+            <integer>0</integer>
+        </dict>
+        <dict>
+            <key>Hour</key>
+            <integer>21</integer>
+            <key>Minute</key>
+            <integer>0</integer>
+        </dict>
+    </array>
 </dict>
 </plist>
