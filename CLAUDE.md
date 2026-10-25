@@ -1188,3 +1188,4 @@ scripts/bench_iex.sh [--profile] [--no-record]            # re-execs in the VM, 
 - Formula records now carry `"execution": "formula"` in their config, so the
   config hash of an otherwise identical formula run differs before vs after
   Plan B (the hash is display-only today; compare configs, not hashes).
+- **The catalog is unversioned and mutates daily.** `products.parquet` is rewritten by every `pkmn daily` run, and it is an input a price-only fingerprint cannot see. Compare `catalog_sha256` in two runs' `data_fingerprint` before calling two ML runs comparable. Records written before the key existed lack it.
