@@ -220,3 +220,30 @@ def test_fetch_last_updated_http_error() -> None:
     client = httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(500)))
     with pytest.raises(LiveIngestError):
         fetch_last_updated(client)
+
+
+def test_circuit_breaker_stops_after_ten_consecutive_failed_groups(tmp_path: Path) -> None:
+    s = Server()
+    gids = list(range(1, 31))
+    for gid in gids:
+        s.script(gid, status(503))
+    cap = run(s, tmp_path, gids)
+    assert sorted(s.counts) == list(range(1, 11))
+    assert sum(s.counts.values()) == 30
+    assert cap.failed == tuple(gids)
+    assert not cap.complete
+    m = json.loads((day_dir(tmp_path) / "manifest.json").read_text())
+    assert sorted(int(g) for g in m["groups"]) == list(range(1, 11))
+    assert m["tracked"] == gids
+
+
+def test_a_success_resets_the_breaker(tmp_path: Path) -> None:
+    s = Server()
+    gids = list(range(1, 22))
+    for gid in gids:
+        s.script(gid, ok() if gid == 10 else status(503))
+    cap = run(s, tmp_path, gids)
+    # 1..9 fail, 10 held, 11..20 fail: the tenth consecutive failure is 20.
+    assert sorted(s.counts) == list(range(1, 21))
+    assert cap.held == (10,)
+    assert 21 in cap.failed

@@ -16,9 +16,10 @@ import gzip
 import json
 import time
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from email.utils import parsedate_to_datetime
+from fractions import Fraction
 from pathlib import Path
 from typing import Any, Literal
 
@@ -40,6 +41,15 @@ from pkmn_quant.data.warehouse import Warehouse
 GroupStatus = Literal["held", "absent", "failed"]
 
 MAX_RETRIES = 3
+# After this many failed groups in a row, stop fetching for this run: the
+# host is down or throttling us. Untried groups get no manifest entry and are
+# fetched next run.
+MAX_CONSECUTIVE_FAILURES = 10
+# A superseded day is written only if it holds at least this share of its
+# groups (held / (held + failed + never attempted)) and at least one row.
+# Otherwise it is abandoned: raw files kept, nothing written, so a restored
+# archive can still backfill it.
+LIVE_FLOOR = 0.90
 _TS_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 _MANIFEST = "manifest.json"
 
@@ -163,7 +173,9 @@ def capture_update(
 
     Held groups (with their file on disk) and absent groups are skipped, so a
     rerun resumes. Failed groups retry with `sleep(backoff_s * attempt)` and
-    are otherwise left for the next run. The manifest is saved after every
+    are otherwise left for the next run. After MAX_CONSECUTIVE_FAILURES
+    failed groups in a row the run stops fetching; the untried groups have no
+    manifest entry and are reported failed. The manifest is saved after every
     group, so a crash loses at most the group in flight.
     """
     update_ts = fetch_last_updated(client)
@@ -172,22 +184,36 @@ def capture_update(
     manifest = load_manifest(day_dir)
     groups: dict[str, dict[str, Any]] = manifest["groups"]
 
-    def split() -> tuple[tuple[int, ...], tuple[int, ...], tuple[int, ...]]:
+    def split(untried_failed: bool) -> tuple[tuple[int, ...], tuple[int, ...], tuple[int, ...]]:
         out: dict[str, list[int]] = {"held": [], "absent": [], "failed": []}
         for gid in group_ids:
-            st = groups.get(str(gid), {}).get("status")
-            if st in out:
-                out[st].append(gid)
+            rec = groups.get(str(gid))
+            if rec is None:
+                if untried_failed:
+                    out["failed"].append(gid)
+            elif rec.get("status") == "absent":
+                out["absent"].append(gid)
+            elif _is_held(day_dir, gid, rec):
+                out["held"].append(gid)
+            elif untried_failed or rec.get("status") == "failed":
+                out["failed"].append(gid)
         return tuple(out["held"]), tuple(out["absent"]), tuple(out["failed"])
 
     named = manifest.get("last_updated")
-    if named is not None and datetime.strptime(named, "%Y-%m-%dT%H:%M:%S%z") != update_ts:
-        held, absent, failed = split()
+    if named is not None and datetime.strptime(named, _TS_FORMAT) != update_ts:
+        held, absent, failed = split(untried_failed=False)
         return Capture(day, update_ts, held, absent, failed, False, True)
 
     manifest["last_updated"] = update_ts.isoformat()
+    # Every group this day was meant to hold, across runs, so a day finalized
+    # later can count the groups that were never attempted.
+    tracked = {int(g) for g in manifest.get("tracked", [])} | set(group_ids)
+    manifest["tracked"] = sorted(tracked)
     fetched_any = False
+    consecutive_failures = 0
     for gid in group_ids:
+        if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
+            break
         prev = groups.get(str(gid), {})
         if prev.get("status") == "absent":
             continue
@@ -205,16 +231,17 @@ def capture_update(
                 sleep(backoff_s * attempt)
         groups[str(gid)] = rec
         save_manifest(day_dir, manifest)
+        consecutive_failures = consecutive_failures + 1 if rec["status"] == "failed" else 0
 
     after = fetch_last_updated(client)
     manifest["last_updated_after"] = after.isoformat()
     save_manifest(day_dir, manifest)
-    held, absent, failed = split()
+    held, absent, failed = split(untried_failed=True)
     return Capture(day, update_ts, held, absent, failed, after != update_ts, False)
 
 
 def pending_days(paths: Paths) -> list[date]:
-    """Captured days (a manifest on disk) not yet in the warehouse, ascending."""
+    """Captured days (a manifest on disk), not stored and not abandoned, ascending."""
     root = paths.raw_live
     if not root.exists():
         return []
@@ -227,7 +254,7 @@ def pending_days(paths: Paths) -> list[date]:
             day = date.fromisoformat(d.name)
         except ValueError:
             continue
-        if not warehouse.has_day(day):
+        if not warehouse.has_day(day) and "abandoned" not in load_manifest(d):
             days.append(day)
     return sorted(days)
 
@@ -267,6 +294,9 @@ class LiveIngestReport:
     `capture` is None when the update's day was already stored (nothing was
     fetched). `partial` maps each written day that lacks some groups to those
     group ids. `collision`: the update's day holds a different update.
+    `abandoned`: superseded days below LIVE_FLOOR, marked in their manifest
+    and never written. `finalize_errors`: the day whose write raised; the run
+    stops there and later days wait for the next run.
     """
 
     capture: Capture | None
@@ -274,17 +304,62 @@ class LiveIngestReport:
     partial: dict[date, tuple[int, ...]]
     collision: bool
     catalog_failures: tuple[int, ...]
+    abandoned: tuple[date, ...] = ()
+    finalize_errors: dict[date, str] = field(default_factory=dict)
 
 
-def _missing(paths: Paths, day: date, group_ids: Sequence[int]) -> tuple[int, ...]:
+def _missing(paths: Paths, day: date, current_ids: Sequence[int] = ()) -> tuple[int, ...]:
+    """Groups the day should hold but does not, absent ones excluded.
+
+    The candidates come from the day's own manifest (its entries and its
+    `tracked` list), so a group tcgcsv added after the day was captured is
+    not reported missing. `current_ids` adds the current tracked groups; pass
+    it only for the current update's own day.
+    """
     day_dir = paths.raw_live / day.isoformat()
-    groups = load_manifest(day_dir)["groups"]
+    manifest = load_manifest(day_dir)
+    groups: dict[str, dict[str, Any]] = manifest["groups"]
+    ids = {int(g) for g in groups} | {int(g) for g in manifest.get("tracked", [])}
+    ids |= set(current_ids)
     return tuple(
         gid
-        for gid in group_ids
+        for gid in sorted(ids)
         if not _is_held(day_dir, gid, groups.get(str(gid), {}))
         and groups.get(str(gid), {}).get("status") != "absent"
     )
+
+
+def _held_and_rows(paths: Paths, day: date) -> tuple[int, int]:
+    day_dir = paths.raw_live / day.isoformat()
+    held = rows = 0
+    for gid, rec in load_manifest(day_dir)["groups"].items():
+        if _is_held(day_dir, gid, rec):
+            held += 1
+            f = day_dir / f"{gid}.json.gz"
+            rows += len(json.loads(gzip.decompress(f.read_bytes()))["results"])
+    return held, rows
+
+
+def _abandon_if_below_floor(paths: Paths, day: date) -> bool:
+    """Mark a superseded day abandoned when it is below LIVE_FLOOR or empty."""
+    held, rows = _held_and_rows(paths, day)
+    total = held + len(_missing(paths, day))
+    if total > 0 and rows > 0 and Fraction(held, total) >= Fraction(str(LIVE_FLOOR)):
+        return False
+    day_dir = paths.raw_live / day.isoformat()
+    manifest = load_manifest(day_dir)
+    manifest["abandoned"] = {
+        "reason": (
+            f"held {held} of {total} groups ({rows} rows), below the {LIVE_FLOOR:.0%} "
+            "floor or empty; raw files kept for an archive backfill"
+        ),
+        "at": datetime.now(UTC).isoformat(),
+        "held": held,
+        "total": total,
+        "rows": rows,
+    }
+    save_manifest(day_dir, manifest)
+    return True
 
 
 def run_live_ingest(
@@ -295,9 +370,12 @@ def run_live_ingest(
 ) -> LiveIngestReport:
     """Capture the current tcgcsv update and finalize every day that is ready.
 
-    Ready: any older captured day (written even if partial, with the missing
-    groups reported), plus the update's own day once it is complete and the
-    feed has not moved on. The catalog is refreshed only when a day is written.
+    Ready: any older captured day that holds at least LIVE_FLOOR of its
+    groups and some rows (written even if partial, with the missing groups
+    reported; otherwise abandoned), plus the update's own day once it is
+    complete and the feed has not moved on. The catalog is refreshed only when
+    a day is written. Days are written in date order and the run stops at the
+    first one that raises, keeping the report of the days before it.
     """
     owns_client = client is None
     if client is None:
@@ -313,24 +391,44 @@ def run_live_ingest(
         groups = tcgcsv.fetch_groups(client)
         group_ids = [g.group_id for g in tracked_groups(groups)]
         capture = capture_update(client, paths, group_ids, sleep=sleep)
-        to_write = [d for d in pending_days(paths) if d < capture.day]
+        superseded = [d for d in pending_days(paths) if d < capture.day]
         # capture_update re-reads last-updated.txt; if that second read names a
         # day that is already stored, never queue it (finalize would raise).
-        if not warehouse.has_day(capture.day) and (
+        current_ready = not warehouse.has_day(capture.day) and (
             capture.collision or (capture.complete and not capture.moved_on)
-        ):
+        )
+        # A collision day holds an earlier update that can no longer be
+        # completed, so it is judged like an older, superseded day.
+        if current_ready and capture.collision:
+            superseded.append(capture.day)
+        abandoned = tuple(d for d in superseded if _abandon_if_below_floor(paths, d))
+        to_write = [d for d in superseded if d not in abandoned]
+        if current_ready and not capture.collision:
             to_write.append(capture.day)
-        partial: dict[date, tuple[int, ...]] = {}
-        for d in to_write:
-            if missing := _missing(paths, d, group_ids):
-                partial[d] = missing
         written: list[IngestStats] = []
+        partial: dict[date, tuple[int, ...]] = {}
+        finalize_errors: dict[date, str] = {}
         catalog_failures: tuple[int, ...] = ()
         if to_write:
             catalog_failures = refresh_products(client, warehouse, groups).failed_groups
-            written = [finalize_day(paths, d) for d in sorted(to_write)]
+            for d in sorted(to_write):
+                current = group_ids if d == capture.day and not capture.collision else ()
+                missing = _missing(paths, d, current)
+                try:
+                    written.append(finalize_day(paths, d))
+                except Exception as exc:  # keep the report of the days already written
+                    finalize_errors[d] = repr(exc)[:200]
+                    break
+                if missing:
+                    partial[d] = missing
         return LiveIngestReport(
-            capture, tuple(written), partial, capture.collision, catalog_failures
+            capture,
+            tuple(written),
+            partial,
+            capture.collision,
+            catalog_failures,
+            abandoned,
+            finalize_errors,
         )
     finally:
         if owns_client:
