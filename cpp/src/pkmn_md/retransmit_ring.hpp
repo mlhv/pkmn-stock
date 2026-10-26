@@ -21,14 +21,15 @@ public:
     explicit RetransmitRing(std::size_t capacity_bytes) : cap_(capacity_bytes) {}
 
     // Copies the payload. count == 0 (heartbeat) is ignored; a key already
-    // stored is left as is.
+    // stored keeps whichever packet has the larger count. A payload larger
+    // than the whole capacity is not stored and counts as evicted.
     void store(std::uint32_t epoch, std::int64_t first_seq, std::uint16_t count,
                std::span<const std::uint8_t> payload);
 
     // Appends every stored packet of `epoch` overlapping [from, to), ascending
     // by first_seq. Returns false, leaving out unchanged, unless the union of
     // those packets' [first_seq, first_seq + count) covers [from, to) with no
-    // hole. An empty range is trivially covered. Spans stay valid until the
+    // hole; overlapping stored packets are all returned. An empty range is trivially covered. Spans stay valid until the
     // next store().
     bool collect(std::uint32_t epoch, std::int64_t from, std::int64_t to,
                  std::vector<std::span<const std::uint8_t>>& out) const;

@@ -237,3 +237,48 @@ TEST_CASE("drop: parse rejects p>1, len 0, garbage") {
     CHECK(b->burst_len == 4);
     CHECK(b->seed == 9);
 }
+
+TEST_CASE("ring: enclosing packet found past a small inner packet") {
+    RetransmitRing r(1000);
+    r.store(0, 1, 10, payload(1));  // A [1,11)
+    r.store(0, 3, 1, payload(2));   // B [3,4)
+    r.store(0, 11, 2, payload(3));  // C [11,13)
+    std::vector<std::span<const std::uint8_t>> out;
+    REQUIRE(r.collect(0, 5, 12, out));
+    REQUIRE(out.size() == 2);
+    CHECK(out[0][0] == 1);
+    CHECK(out[1][0] == 3);
+    out.clear();
+    REQUIRE(r.collect(0, 1, 13, out));  // ascending first_seq, overlapping included
+    REQUIRE(out.size() == 3);
+    CHECK(out[0][0] == 1);
+    CHECK(out[1][0] == 2);
+    CHECK(out[2][0] == 3);
+}
+
+TEST_CASE("ring: duplicate stores keep the longer packet, bytes stay consistent") {
+    RetransmitRing r(1000);
+    r.store(0, 1, 2, payload(1, 10));
+    r.store(0, 1, 2, payload(9, 10));  // identical key and count: ignored
+    CHECK(r.bytes() == 10);
+    std::vector<std::span<const std::uint8_t>> out;
+    REQUIRE(r.collect(0, 1, 3, out));
+    CHECK(out[0][0] == 1);
+    CHECK_FALSE(r.collect(0, 1, 5, out));
+    r.store(0, 1, 4, payload(7, 20));  // longer: replaces
+    CHECK(r.bytes() == 20);
+    out.clear();
+    REQUIRE(r.collect(0, 1, 5, out));
+    REQUIRE(out.size() == 1);
+    CHECK(out[0][0] == 7);
+    r.store(0, 1, 1, payload(5, 5));  // shorter: ignored
+    CHECK(r.bytes() == 20);
+}
+
+TEST_CASE("ring: oversize payload is not stored") {
+    RetransmitRing r(10);
+    r.store(0, 1, 1, payload(1, 10));
+    r.store(0, 2, 1, payload(2, 11));
+    CHECK(r.bytes() == 10);
+    CHECK(r.evicted() == 1);
+}
