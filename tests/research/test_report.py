@@ -31,6 +31,19 @@ def test_render_markdown_contains_fold_table_and_summary() -> None:
     assert "2024-06-29" in md  # fold OOS start appears in table
     assert "overfitting_gap" in md
     assert "0.4" in md
+    assert "Execution: formula" in md  # library default
+
+
+def test_render_markdown_book_carries_synthetic_label() -> None:
+    from pkmn_quant.research.execution import BOOK_LABEL
+
+    wf = WalkForwardResult(
+        folds=[],
+        stitched_curve=pl.DataFrame({"date": [date(2024, 6, 29)], "equity": [1000.0]}),
+        summary={},
+    )
+    md = render_markdown(wf, strategy_name="x", execution="book")
+    assert f"Execution: {BOOK_LABEL}" in md
 
 
 def test_params_formatted_compactly() -> None:

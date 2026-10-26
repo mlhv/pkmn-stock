@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict
 
@@ -31,6 +31,9 @@ class RunSummary(ApiModel):
     git_sha: str | None
     git_dirty: bool
     results: dict[str, float]
+    # "book" (modelled resting orders, synthetic, built from the day's tcgcsv
+    # quote) or "formula"; a record without the key predates Plan B = formula.
+    execution: str = "formula"
 
 
 class RunDetail(RunSummary):
@@ -72,6 +75,7 @@ class WalkForwardResponse(ApiModel):
     folds: list[FoldRow]
     rigor: RigorCI | None
     equity_curve: list[EquityPoint]
+    execution: str = "formula"  # missing in walkforward.json = formula
 
 
 class ConfidenceInterval(ApiModel):
@@ -98,6 +102,7 @@ class EvaluateResponse(ApiModel):
     end: str
     params: dict[str, Any]
     strategies: list[StrategyStat]
+    execution: str = "formula"  # missing in evaluate.json = formula
 
 
 class ParamSpecInfo(ApiModel):
@@ -138,6 +143,7 @@ class BacktestRequest(ApiModel):
     params: dict[str, float | int | str] = {}
     cash: float = 10_000.0
     impact: bool = True
+    execution: Literal["book", "formula"] = "book"
     kind: str = "sealed"
     holdings: list[HoldingInput] = []
 

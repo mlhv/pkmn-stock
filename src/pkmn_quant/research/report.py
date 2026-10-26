@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pkmn_quant.research.execution import execution_line
 from pkmn_quant.research.stats import BootstrapCI
 from pkmn_quant.research.walkforward import WalkForwardResult
 
@@ -15,10 +16,15 @@ def format_params(params: dict[str, float | int]) -> str:
 
 
 def render_markdown(
-    result: WalkForwardResult, strategy_name: str, ci: BootstrapCI | None = None
+    result: WalkForwardResult,
+    strategy_name: str,
+    ci: BootstrapCI | None = None,
+    execution: str = "formula",
 ) -> str:
     lines = [
         f"# Walk-forward report: {strategy_name}",
+        "",
+        execution_line(execution),
         "",
         "Out-of-sample segments only; the stitched curve is the honest track record.",
         "Note: Sharpe/Sortino are inflated by mark smoothing (thin markets,",

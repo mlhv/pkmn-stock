@@ -264,3 +264,90 @@ def test_walkforward_report_carries_bootstrap_ci(tmp_path: Path) -> None:
     ci = rigor["stitched_total_return_ci"]
     assert ci["lo"] <= ci["point"] <= ci["hi"]
     assert ci["seed"] == 42
+
+
+_WF_ARGS = [
+    "walkforward",
+    "--strategy",
+    "sealed-accumulation",
+    "--start",
+    "2025-01-01",
+    "--end",
+    "2025-02-09",
+    "--is-days",
+    "10",
+    "--oos-days",
+    "10",
+    "--trials",
+    "2",
+    "--cash",
+    "1000",
+]
+
+
+def test_walkforward_python_engine_rejects_book(tmp_path: Path) -> None:
+    seed_forty_days(tmp_path)
+    result = CliRunner().invoke(
+        app,
+        [*_WF_ARGS, "--engine", "python", "--execution", "book", "--root", str(tmp_path)],
+    )
+    assert result.exit_code != 0
+    assert "Traceback" not in result.output
+    # rich wraps the error in a box; flatten before matching.
+    flat = " ".join(result.output.replace("│", " ").split())
+    assert (
+        "--execution book needs the cpp engine; the Python engine is the frozen formula reference"
+        in flat
+    )
+
+
+def test_walkforward_records_execution(tmp_path: Path) -> None:
+    import json
+
+    from pkmn_quant.research.runs import load_runs
+
+    seed_forty_days(tmp_path)
+    result = CliRunner().invoke(app, [*_WF_ARGS, "--root", str(tmp_path)])
+    assert result.exit_code == 0, result.output
+    run_dir = next(iter((tmp_path / "data" / "results").iterdir()))
+    assert json.loads((run_dir / "walkforward.json").read_text())["execution"] == "book"
+    (record,) = load_runs(tmp_path)
+    assert record.config["execution"] == "book"
+
+
+def test_walkforward_book_and_formula_artifacts_sit_side_by_side(tmp_path: Path) -> None:
+    """Same strategy, same window, both modes: book writes wf-...-book, formula
+    keeps the legacy wf-... name, so neither overwrites the other."""
+    import json
+
+    seed_forty_days(tmp_path)
+    for extra in ([], ["--execution", "formula"]):
+        result = CliRunner().invoke(app, [*_WF_ARGS, *extra, "--root", str(tmp_path)])
+        assert result.exit_code == 0, result.output
+    out = tmp_path / "data" / "results"
+    book_dir = out / "wf-sealed-accumulation-2025-01-01-2025-02-09-book"
+    formula_dir = out / "wf-sealed-accumulation-2025-01-01-2025-02-09"
+    assert sorted(p.name for p in out.iterdir()) == sorted([book_dir.name, formula_dir.name])
+    assert json.loads((book_dir / "walkforward.json").read_text())["execution"] == "book"
+    assert json.loads((formula_dir / "walkforward.json").read_text())["execution"] == "formula"
+
+
+def test_walkforward_report_states_execution_mode(tmp_path: Path) -> None:
+    """Final-review Important 2: report.md and stdout name the mode, and a book
+    run carries the synthetic label."""
+    from pkmn_quant.research.execution import BOOK_LABEL
+
+    seed_forty_days(tmp_path)
+    out = tmp_path / "data" / "results"
+    book = CliRunner().invoke(app, [*_WF_ARGS, "--root", str(tmp_path)])
+    assert book.exit_code == 0, book.output
+    assert f"Execution: {BOOK_LABEL}" in book.output
+    book_report = out / "wf-sealed-accumulation-2025-01-01-2025-02-09-book" / "report.md"
+    assert f"Execution: {BOOK_LABEL}" in book_report.read_text()
+    formula = CliRunner().invoke(
+        app, [*_WF_ARGS, "--execution", "formula", "--root", str(tmp_path)]
+    )
+    assert formula.exit_code == 0, formula.output
+    text = (out / "wf-sealed-accumulation-2025-01-01-2025-02-09" / "report.md").read_text()
+    assert "Execution: formula" in text
+    assert "synthetic" not in text

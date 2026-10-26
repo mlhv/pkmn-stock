@@ -15,3 +15,7 @@ build/
 
 web/node_modules
 web/dist
+cpp/build-linux/
+cpp/build-linux-release/
+cpp/build-linux-prof/
+cpp/build-asan/

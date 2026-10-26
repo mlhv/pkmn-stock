@@ -9,6 +9,7 @@ from pkmn_quant.cli import app
 from pkmn_quant.config import Paths
 from pkmn_quant.data.transforms import PRICE_SCHEMA
 from pkmn_quant.data.warehouse import Warehouse
+from pkmn_quant.research.execution import BOOK_LABEL
 from tests.helpers import price_row
 
 D1, D2, D3 = date(2025, 6, 1), date(2025, 6, 2), date(2025, 6, 3)
@@ -45,6 +46,55 @@ def seed_impact(root: Path) -> None:
     for day, market, mid in ((D1, 10.0, 13.0), (D2, 12.0, 16.0), (D3, 15.0, 18.0)):
         r = row(day, 1, market)
         r["mid"] = mid
+        w.write_prices(day, pl.DataFrame([r], schema=PRICE_SCHEMA))
+    w.write_products(
+        pl.DataFrame(
+            {
+                "product_id": [1],
+                "group_id": [1],
+                "name": ["Box"],
+                "rarity": [None],
+                "kind": ["sealed"],
+                "released_on": [D1],
+            }
+        )
+    )
+
+
+def seed_tick(root: Path) -> None:
+    """market/mid D1 10/11, D2 12/13, D3 15/16, low 1.0 (uncrossed, no floor)."""
+    w = Warehouse(Paths(root=root))
+    for day, market, mid in ((D1, 10.0, 11.0), (D2, 12.0, 13.0), (D3, 15.0, 16.0)):
+        r = row(day, 1, market)
+        r["mid"] = mid
+        r["low"] = 1.0
+        w.write_prices(day, pl.DataFrame([r], schema=PRICE_SCHEMA))
+    w.write_products(
+        pl.DataFrame(
+            {
+                "product_id": [1],
+                "group_id": [1],
+                "name": ["Box"],
+                "rarity": [None],
+                "kind": ["sealed"],
+                "released_on": [D1],
+            }
+        )
+    )
+
+
+def seed_floor(root: Path) -> None:
+    """Like seed_impact(), but the LISTINGS sit above the sales print.
+
+    tcgcsv's `market` comes from recent completed sales while low/mid/high
+    describe current listings, so market < low is ordinary. price_row
+    hardcodes low=1.0, which is below every market in this module — no
+    fixture here would otherwise reach the executable-price floor.
+    """
+    w = Warehouse(Paths(root=root))
+    for day, market in ((D1, 10.0), (D2, 12.0), (D3, 15.0)):
+        r = row(day, 1, market)
+        r["low"], r["mid"], r["high"] = 20.0, 24.0, 30.0
         w.write_prices(day, pl.DataFrame([r], schema=PRICE_SCHEMA))
     w.write_products(
         pl.DataFrame(
@@ -97,8 +147,10 @@ def test_backtest_golden_numbers(tmp_path: Path) -> None:
 
     Hand-verified arithmetic (CostModel defaults: fee 12.75%, shipping $1,
     liquidity tier for $12 price -> cap 8):
-      D1: no fills; BuyAndHold sees mark 10.0, budget 100 -> orders 10 units.
-          Equity = 100 (all cash).
+      D1: no fills; BuyAndHold screens a one-asset universe (n_assets=100 is
+          not binding), target 100/1 = 100 -> floor(100/10) = 10 units, $100
+          spent, $0 left, so the deficit sweep buys nothing and these numbers
+          are unchanged by it. Equity = 100 (all cash).
       D2: fill at print 12.0. Clips: liquidity cap 8; cash floor((100-1)/12)=8.
           -> buy 8 @ 12, fees $1. Cash = 100 - 96 - 1 = 3. Equity = 3 + 8*12 = 99.
       D3: no orders. Equity = 3 + 8*15 = 123.
@@ -124,8 +176,8 @@ def test_backtest_golden_numbers_with_impact(tmp_path: Path) -> None:
 
     Hand-verified arithmetic (CostModel defaults + impact_enabled; $12 price
     -> liquidity cap Q=8):
-      D1: no fills; BuyAndHold sees mark 10.0, budget 100 -> orders 10 units.
-          Equity = 100 (all cash).
+      D1: no fills; one-asset universe, target 100 -> 10 units, $0 left, so
+          the deficit sweep is a no-op here. Equity = 100 (all cash).
       D2: print 12.0, mid 16.0 -> spread 4. Flat clip: min(10, cap 8,
           floor((100-1)/12)=8) = 8. Impact(8) = 4*8*8/(2*8) = 16;
           8*12+1+16 = 113 > 100 -> shrink. Impact(7) = 4*7*7/16 = 12.25;
@@ -134,7 +186,7 @@ def test_backtest_golden_numbers_with_impact(tmp_path: Path) -> None:
       D3: holding -> no orders. Equity = 2.75 + 7*15 = 107.75.
     """
     seed_impact(tmp_path)
-    result = run_cli(tmp_path)
+    result = run_cli(tmp_path, "--execution", "formula")
     assert result.exit_code == 0, result.output
     out_dir = tmp_path / "data" / "results"
     run_dir = next(iter(out_dir.iterdir()))
@@ -147,6 +199,56 @@ def test_backtest_golden_numbers_with_impact(tmp_path: Path) -> None:
     assert f["price"] == pytest.approx(12.0)
     assert f["fees"] == pytest.approx(1.0)
     assert f["impact"] == pytest.approx(12.25)
+
+
+def test_backtest_golden_numbers_with_price_floor(tmp_path: Path) -> None:
+    """Golden regression for the executable-price floor (2026-08).
+
+    `market` is derived from recent completed SALES, low/mid/high from
+    current LISTINGS, so market < low is ordinary rather than corrupt. A buy
+    cannot lift an offer that does not exist, so it prices at
+    max(market, low) and walks to mid from there; the shortfall is charged
+    as impact, leaving Fill.price on the observable print.
+
+    Hand-verified arithmetic (CostModel defaults + impact_enabled; fixture
+    low 20.0, mid 24.0 on every day):
+      D1: BuyAndHold's one-asset universe (the $10 print is under the whole
+          $100 balance, so `_affordable` keeps it), target 100/1 = 100 ->
+          floor(100/10) = 10 units ordered, $0 left so the deficit sweep is a
+          no-op. T+1, so no fill yet. Equity = 100 (all cash).
+      D2: print 12.0, low 20.0 -> base = max(12, 20) = 20.
+          Liquidity tier comes off the BASE, not the print: $20 -> Q=8. (The
+          $12 print is also Q=8, so this fixture cannot tell the two apart --
+          tests/engine/test_execution.py
+          test_buy_depth_cap_is_tiered_on_the_floored_base_not_the_print
+          exercises a fixture that can.)
+          Clips: order 10, cap 8, cash floor((100-1)/20) = 4 -> qty 4.
+          Premium = (20 - 12) * 4 = 32. Walk spread = mid 24 - base 20 = 4
+          -> 4 * 4 * (0 + 4) / (2 * 8) = 4.0. Impact = 36.0.
+          Cost = 4*12 + 1 + 36 = 85 <= 100 -> fill 4 @ print 12, fees 1.
+          Cash = 15. Equity = 15 + 4*12 = 63.
+          (Sanity: cash out is $84 for 4 units = $21/unit, which is the $20
+          lowest listing plus $1 of walk toward the $24 mid -- the floor is
+          the ~$8 of it that the sales print was hiding. Shipping is a
+          further $1 on the line, not per unit. Without the floor this same
+          day fills 7 @ 12 for impact 4*7*7/16 = 12.25 -- 7 units bought
+          below any offer that actually existed.)
+      D3: BuyAndHold has already entered -> no orders. Equity = 15 + 4*15 = 75.
+    """
+    seed_floor(tmp_path)
+    result = run_cli(tmp_path, "--execution", "formula")
+    assert result.exit_code == 0, result.output
+    out_dir = tmp_path / "data" / "results"
+    run_dir = next(iter(out_dir.iterdir()))
+    equity = pl.read_parquet(run_dir / "equity.parquet")["equity"].to_list()
+    assert equity == pytest.approx([100.0, 63.0, 75.0])
+    fills = pl.read_parquet(run_dir / "fills.parquet")
+    assert fills.height == 1
+    f = fills.row(0, named=True)
+    assert f["quantity"] == 4
+    assert f["price"] == pytest.approx(12.0)  # the print, never the floor
+    assert f["fees"] == pytest.approx(1.0)
+    assert f["impact"] == pytest.approx(36.0)
 
 
 def test_backtest_bad_dates_clean_error(tmp_path: Path) -> None:
@@ -287,3 +389,65 @@ def test_backtest_engine_flag_removed(tmp_path: Path) -> None:
     result = run_cli(tmp_path, "--engine", "python")
     assert result.exit_code != 0  # unknown option
     assert "No such option" in result.output
+
+
+def _equity(root: Path) -> list[float]:
+    run_dir = next(iter((root / "data" / "results").iterdir()))
+    return pl.read_parquet(run_dir / "equity.parquet")["equity"].to_list()
+
+
+def test_backtest_golden_numbers_book(tmp_path: Path) -> None:
+    """Golden for the default (book) execution on the tick fixture.
+
+    D2: market 12, mid 13, low 1 (no floor) -> base 12. Modelled resting
+    orders (synthetic) ladder in whole cents from 12.06 to 12.94; the first
+    7 levels cumsum to 87.06 <= 99 while the 8th would reach 100.00 > 99, so
+    qty 7 fills (cash floor of $99 after the $1 shipping/fee line). Impact is
+    the walk above the print: 87.06 - 7*12 = 3.06; fees 1.0. Cash = 100 - 84
+    - 1 - 3.06 = 11.94; equity D2 = 11.94 + 84 = 95.94, D3 = 11.94 + 105 =
+    116.94.
+    """
+    seed_tick(tmp_path)
+    result = run_cli(tmp_path)
+    assert result.exit_code == 0, result.output
+    assert f"Execution: {BOOK_LABEL}" in result.output
+    assert _equity(tmp_path) == pytest.approx([100.0, 95.94, 116.94], abs=1e-9)
+    run_dir = next(iter((tmp_path / "data" / "results").iterdir()))
+    fills = pl.read_parquet(run_dir / "fills.parquet")
+    assert fills.height == 1
+    f = fills.row(0, named=True)
+    assert f["quantity"] == 7
+    assert f["price"] == pytest.approx(12.0)
+    assert f["fees"] == pytest.approx(1.0)
+    assert f["impact"] == pytest.approx(3.06, abs=1e-9)
+
+
+def test_backtest_formula_on_tick_fixture(tmp_path: Path) -> None:
+    """Same fixture, formula: the 0.0025 gap vs book is cent discreteness."""
+    seed_tick(tmp_path)
+    result = run_cli(tmp_path, "--execution", "formula")
+    assert result.exit_code == 0, result.output
+    assert "Execution: formula" in result.output
+    assert "modelled resting orders" not in result.output
+    assert _equity(tmp_path) == pytest.approx([100.0, 95.9375, 116.9375])
+
+
+def test_backtest_records_execution(tmp_path: Path) -> None:
+    from pkmn_quant.research.runs import load_runs
+
+    seed_tick(tmp_path)
+    assert run_cli(tmp_path).exit_code == 0
+    assert run_cli(tmp_path, "--execution", "formula").exit_code == 0
+    assert run_cli(tmp_path, "--no-impact").exit_code == 0
+    modes = sorted(r.config["execution"] for r in load_runs(tmp_path))
+    assert modes == ["book", "formula", "formula"]
+    by_impact = {r.config["impact"]: r.config["execution"] for r in load_runs(tmp_path)}
+    assert by_impact[False] == "formula"
+
+
+def test_backtest_bad_execution_clean_error(tmp_path: Path) -> None:
+    seed_tick(tmp_path)
+    result = run_cli(tmp_path, "--execution", "fast")
+    assert result.exit_code != 0
+    assert "Traceback" not in result.output
+    assert "book" in result.output and "formula" in result.output

@@ -5,7 +5,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, NoReturn
 
 import polars as pl
 import typer
@@ -13,20 +13,46 @@ import typer
 from pkmn_quant.config import Paths
 from pkmn_quant.data import tcgcsv
 from pkmn_quant.data.ingest import ingest_range, refresh_products
+from pkmn_quant.data.live import LiveIngestError, LiveIngestReport, probe_archive, run_live_ingest
+from pkmn_quant.research.execution import execution_line
 
 if TYPE_CHECKING:
     from pkmn_quant.data.warehouse import Warehouse
     from pkmn_quant.engine.native import SeededHolding
+    from pkmn_quant.research.horizon import HorizonReport
+    from pkmn_quant.research.runs import RunRecord
 
 app = typer.Typer(no_args_is_help=True, help="Pokemon card quant toolkit.")
 
 DEFAULT_SIGNALS_CASH = 10_000.0
+
+# Holding-period buckets, in report order. These mirror research/horizon.py's
+# private _BUCKET_ORDER verbatim; listed here so `pkmn horizon` can print
+# EVERY bucket, including ones with no trades (HorizonReport only carries the
+# occupied ones). tests/test_cli_horizon.py pins the two together so they
+# cannot drift.
+HORIZON_BUCKETS = ("<1m", "1-3m", "3-6m", ">6m")
+# The bucket this command exists to produce: the owner wants a strategy that
+# enters and exits within 1-3 months, so that median edge is the headline.
+HORIZON_HEADLINE_BUCKET = "1-3m"
+# Registry-key-safe names for the bucket labels above ("<"/">"/"-" out).
+HORIZON_BUCKET_SLUGS = {"<1m": "lt_1m", "1-3m": "1_3m", "3-6m": "3_6m", ">6m": "gt_6m"}
 
 portfolio_app = typer.Typer(no_args_is_help=True, help="Record and inspect real positions.")
 app.add_typer(portfolio_app, name="portfolio")
 
 runs_app = typer.Typer(no_args_is_help=True, help="Inspect the experiment run registry.")
 app.add_typer(runs_app, name="runs")
+
+wire_app = typer.Typer(
+    no_args_is_help=True,
+    help=(
+        "Pokemon quote wire files (PKW1): daily tcgcsv quotes in whole cents. A "
+        "replay builds modelled resting orders (synthetic, built from the day's "
+        "tcgcsv quote) from them."
+    ),
+)
+app.add_typer(wire_app, name="wire")
 
 
 @runs_app.command("list")
@@ -255,6 +281,55 @@ def ingest(
         )
 
 
+@wire_app.command("encode")
+def wire_encode(
+    start: str = typer.Option(..., help="First day (YYYY-MM-DD)."),
+    end: str = typer.Option(..., help="Last day (YYYY-MM-DD), inclusive."),
+    out: Path = typer.Option(..., help="Output file, e.g. data/wire/<start>_<end>.pkw."),
+    root: Path = typer.Option(Path("."), help="Project root holding the data/ directory."),
+) -> None:
+    """Encode the warehouse's quotes over [start, end] to a wire file."""
+    import time
+
+    from pkmn_quant.data.warehouse import Warehouse
+    from pkmn_quant.wire import encode_window
+
+    try:
+        start_date = dt.date.fromisoformat(start)
+        end_date = dt.date.fromisoformat(end)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    out.parent.mkdir(parents=True, exist_ok=True)
+    t0 = time.perf_counter()
+    try:
+        n = encode_window(Warehouse(Paths(root=root)), start_date, end_date, out)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    seconds = time.perf_counter() - t0
+    typer.echo(f"wrote {out}")
+    typer.echo(f"messages: {n}")
+    typer.echo(f"bytes: {out.stat().st_size}")
+    typer.echo(f"seconds: {seconds:.3f}")
+
+
+@app.command("notify-test")
+def notify_test(
+    root: Path = typer.Option(Path("."), help="Project root holding the data/ directory."),
+) -> None:
+    """Send a test push through ntfy (config: data/config/notify.toml)."""
+    from pkmn_quant.live import notify
+
+    notify.configure(root)
+    config = notify.load_ntfy_config(root)
+    if config is None:
+        typer.echo(f"no ntfy config found: expected [ntfy] topic in {root}/data/config/notify.toml")
+        raise typer.Exit(1)
+    if not notify.send_ntfy(config, "pkmn test", "If you can read this on your phone, ntfy works."):
+        typer.echo("ntfy push failed (see warning above)")
+        raise typer.Exit(1)
+    typer.echo("sent")
+
+
 @app.command("refresh-products")
 def refresh_products_cmd(
     root: Path = typer.Option(Path("."), help="Project root holding the data/ directory."),
@@ -312,6 +387,10 @@ def _read_holdings_csv(path: Path) -> list[SeededHolding]:
     return out
 
 
+def _execution_line(mode: str) -> str:
+    return execution_line(mode)
+
+
 @app.command()
 def backtest(
     start: str = typer.Option(..., help="Backtest start date (YYYY-MM-DD)."),
@@ -332,12 +411,24 @@ def backtest(
     impact: bool = typer.Option(
         True,
         "--impact/--no-impact",
-        help="Walk-the-spread market impact on fills (see Plan 9 spec).",
+        help=(
+            "Market impact on fills (default on), priced per --execution. "
+            "--no-impact is flat cost and overrides --execution: the run is "
+            "recorded as formula."
+        ),
+    ),
+    execution: str = typer.Option(
+        "book",
+        help=(
+            "book (default): fills walk modelled resting orders (synthetic, built "
+            "from the day's tcgcsv quote), whole-cent levels. formula: the "
+            "continuous walk-the-spread charge. --no-impact overrides both."
+        ),
     ),
     root: Path = typer.Option(Path("."), help="Project root holding the data/ directory."),
 ) -> None:
     """Run a single backtest of any registered strategy with cash + holdings."""
-    from pkmn_quant.research.backtest_run import run_single_backtest
+    from pkmn_quant.research.backtest_run import effective_execution, run_single_backtest
 
     try:
         start_date = dt.date.fromisoformat(start)
@@ -368,6 +459,7 @@ def backtest(
             start=start_date,
             end=end_date,
             impact=impact,
+            execution=execution,
             kind=kind,
         )
     except ValueError as exc:
@@ -377,6 +469,7 @@ def backtest(
     if out.run_id is not None:
         typer.echo(f"run recorded: {out.run_id}")
     typer.echo(f"strategy: {result.strategy_name}  ({len(result.fills)} fills)")
+    typer.echo(_execution_line(effective_execution(execution, impact)))
     for key, value in result.summary.items():
         typer.echo(f"{key}: {value:.4f}")
     typer.echo(f"results written to {out.artifact_dir}")
@@ -402,7 +495,11 @@ def walkforward(
     impact: bool = typer.Option(
         True,
         "--impact/--no-impact",
-        help="Walk-the-spread market impact on fills (see Plan 9 spec).",
+        help=(
+            "Market impact on fills (default on), priced per --execution. "
+            "--no-impact is flat cost and overrides --execution: the run is "
+            "recorded as formula."
+        ),
     ),
     engine: str = typer.Option(
         "cpp",
@@ -412,6 +509,14 @@ def walkforward(
         0,
         help="Fold-level parallelism: 0 = auto (min(folds, cores)), 1 = serial, N = N threads.",
     ),
+    execution: str = typer.Option(
+        "book",
+        help=(
+            "book (default): fills walk modelled resting orders (synthetic, built "
+            "from the day's tcgcsv quote), whole-cent levels. formula: the "
+            "continuous walk-the-spread charge. --no-impact overrides both."
+        ),
+    ),
     root: Path = typer.Option(Path("."), help="Project root holding the data/ directory."),
 ) -> None:
     """Walk-forward analysis: optimize in-sample, evaluate out-of-sample."""
@@ -420,6 +525,7 @@ def walkforward(
     from pkmn_quant.data.warehouse import Warehouse
     from pkmn_quant.engine.costs import CostModel
     from pkmn_quant.research.artifacts import write_walkforward_json
+    from pkmn_quant.research.backtest_run import effective_execution
     from pkmn_quant.research.folds import Fold
     from pkmn_quant.research.registry import REGISTRY
     from pkmn_quant.research.report import render_markdown
@@ -442,6 +548,15 @@ def walkforward(
         raise typer.BadParameter(f"unknown engine {engine!r}; choose python or cpp")
     if workers < 0:
         raise typer.BadParameter(f"workers must be >= 0, got {workers}")
+    try:
+        mode = effective_execution(execution, impact)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    if engine == "python" and mode == "book":
+        raise typer.BadParameter(
+            "--execution book needs the cpp engine; "
+            "the Python engine is the frozen formula reference"
+        )
     try:
         start_date = dt.date.fromisoformat(start)
         end_date = dt.date.fromisoformat(end)
@@ -472,6 +587,7 @@ def walkforward(
         engine=engine,
         strategy_name=strategy,
         workers=workers,
+        execution=mode,
     )
 
     from pkmn_quant.research.stats import bootstrap_ci, daily_returns_from_curve
@@ -479,15 +595,19 @@ def walkforward(
     daily = daily_returns_from_curve(result.stitched_curve)
     stitched_ci = bootstrap_ci(daily, "total_return") if daily.size >= 2 else None
 
-    run_dir = root / "data" / "results" / f"wf-{strategy}-{start}-{end}"
+    # Book runs get a "-book" suffix so a book and a formula walk-forward over
+    # the same window sit side by side instead of overwriting each other;
+    # formula keeps the legacy name, so every existing artifact stays valid.
+    suffix = "-book" if mode == "book" else ""
+    run_dir = root / "data" / "results" / f"wf-{strategy}-{start}-{end}{suffix}"
     if run_dir.exists():
         typer.echo(f"warning: overwriting existing results in {run_dir}", err=True)
     run_dir.mkdir(parents=True, exist_ok=True)
     result.stitched_curve.write_parquet(run_dir / "stitched_equity.parquet")
     (run_dir / "report.md").write_text(
-        render_markdown(result, strategy_name=strategy, ci=stitched_ci)
+        render_markdown(result, strategy_name=strategy, ci=stitched_ci, execution=mode)
     )
-    write_walkforward_json(run_dir, result, strategy_name=strategy, ci=stitched_ci)
+    write_walkforward_json(run_dir, result, strategy_name=strategy, ci=stitched_ci, execution=mode)
 
     from pkmn_quant.research.runs import record_run
 
@@ -509,6 +629,7 @@ def walkforward(
             "objective_metric": objective_metric,
             "cost_model": cm.as_dict(),
             "engine": engine,
+            "execution": mode,
         },
         results=result.summary,
         artifact_path=run_dir,
@@ -524,6 +645,7 @@ def walkforward(
         typer.echo(f"run recorded: {run_id}")
 
     typer.echo(f"strategy: {strategy}  folds: {len(result.folds)}")
+    typer.echo(_execution_line(mode))
     for key, value in result.summary.items():
         typer.echo(f"{key}: {value:.4f}")
     typer.echo(f"report written to {run_dir / 'report.md'}")
@@ -544,7 +666,12 @@ def signals(
     ),
     root: Path = typer.Option(Path("."), help="Project root holding the data/ directory."),
 ) -> None:
-    """Run a strategy in live mode against the latest ingested prices."""
+    """Run a strategy in live mode against the latest ingested prices.
+
+    Live and paper pricing use the formula cost model, not book execution;
+    research runs default to book, so a recommendation's quoted outlay can
+    differ from what a book backtest would have charged.
+    """
     from pkmn_quant.data.warehouse import Warehouse
     from pkmn_quant.live.ledger import LedgerError, load_portfolio
     from pkmn_quant.live.report import render_signals_markdown, signals_to_json
@@ -595,6 +722,94 @@ def signals(
     typer.echo(f"artifacts written to {out_dir}", err=True)
 
 
+def _now() -> dt.datetime:
+    """Aware UTC now: `pkmn daily`'s alert clock. Tests monkeypatch it."""
+    return dt.datetime.now(dt.UTC)
+
+
+def _live_json(report: LiveIngestReport) -> dict[str, Any]:
+    """daily.json's `live` block. The counts are None when nothing was fetched
+    (the update's day was already stored)."""
+    c = report.capture
+    return {
+        "update_day": c.day.isoformat() if c else None,
+        "held": len(c.held) if c else None,
+        "absent": len(c.absent) if c else None,
+        "failed": len(c.failed) if c else None,
+        "written": [s.day.isoformat() for s in report.written],
+        "partial": {d.isoformat(): list(g) for d, g in sorted(report.partial.items())},
+        "collision": report.collision,
+        "abandoned": [d.isoformat() for d in report.abandoned],
+        "new_day": bool(report.written),
+    }
+
+
+def _gids(gids: tuple[int, ...]) -> str:
+    return ", ".join(str(g) for g in gids)
+
+
+@app.command("live-ingest")
+def live_ingest(
+    root: Path = typer.Option(Path("."), help="Project root holding the data/ directory."),
+) -> None:
+    """Capture the current tcgcsv update from the live per-group endpoints, once.
+
+    Exits 1 if the capture is incomplete (the next run re-fetches only the
+    failed groups) or last-updated.txt could not be read.
+    """
+    try:
+        report = run_live_ingest(Paths(root=root))
+    except LiveIngestError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(1) from exc
+    c = report.capture
+    if c is None:
+        typer.echo("update already stored; nothing fetched")
+    else:
+        typer.echo(f"update day: {c.day.isoformat()} (tcgcsv update {c.update_ts.isoformat()})")
+        typer.echo(f"groups: held {len(c.held)}, absent {len(c.absent)}, failed {len(c.failed)}")
+        if c.failed:
+            typer.echo(f"failed groups: {_gids(c.failed)}")
+    for s in report.written:
+        typer.echo(f"{s.day}: {s.rows_clean} clean rows, {s.rows_quarantined} quarantined")
+    if not report.written:
+        typer.echo("no day written")
+    for d, missing in sorted(report.partial.items()):
+        typer.echo(f"warning: {d} written without group(s) {_gids(missing)}", err=True)
+    for d in report.abandoned:
+        typer.echo(
+            f"warning: {d} abandoned (below the completeness floor); raw files kept", err=True
+        )
+    for d, err in sorted(report.finalize_errors.items()):
+        typer.echo(f"error: writing {d} failed: {err}", err=True)
+    if report.collision:
+        typer.echo("warning: two tcgcsv updates mapped to one UTC day", err=True)
+    if report.catalog_failures:
+        typer.echo(
+            f"warning: catalog refresh: {len(report.catalog_failures)} group(s) failed to "
+            "fetch; their previously catalogued rows were kept",
+            err=True,
+        )
+    if (c is not None and not c.complete) or report.finalize_errors:
+        raise typer.Exit(1)
+
+
+def _abandoned_body(root: Path, day: dt.date) -> str:
+    """The "day abandoned" alert text, with held/total from the day's manifest."""
+    from pkmn_quant.data.live import load_manifest
+
+    counts = "held count unknown"
+    try:
+        rec = load_manifest(Paths(root=root).raw_live / day.isoformat()).get("abandoned", {})
+        counts = f"{int(rec['held'])}/{int(rec['total'])} groups held"
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        pass
+    return (
+        f"{day} was not written: {counts}, below the completeness floor. "
+        "The raw files are kept for an archive backfill."
+    )
+
+
 @app.command()
 def daily(
     strategy: str = typer.Option("sealed-accumulation", help="Strategy to run against the ledger."),
@@ -609,8 +824,26 @@ def daily(
     ),
     root: Path = typer.Option(Path("."), help="Project root holding the data/ directory."),
 ) -> None:
-    """The morning loop: ingest missing days, run signals against the ledger,
-    write artifacts, notify when actionable. Designed for launchd/cron.
+    """The scheduled loop: capture tcgcsv's live update, run signals against the
+    ledger when a new day landed, write artifacts, notify. Designed for launchd,
+    several runs a day.
+
+    Ingest is one `run_live_ingest` per run (the price archive is offline),
+    plus at most one archive probe per local day. Signals and paper fills run
+    only when the newest stored day differs from the day they last ran on for
+    this mode (real/paper), so repeated runs on the same data never re-notify
+    or re-record fills. The record is keyed by mode only, not strategy: a
+    manual run with a different --strategy on the same data also skips signals.
+
+    Alerts are rate-limited through data/results/daily-state.json. A capture
+    problem (incomplete capture, update's day not stored, or the ingest
+    raised) alerts only once the update is at risk (a run at or after 21:00
+    local) or the warehouse is stale; a transient one is recorded in
+    daily.json and exits 0. Partial days, abandoned days and two updates on
+    one UTC day alert. A non-ingest failure alerts once, then at most daily. Exit 1 when
+    an alert-level condition holds this run (even if its push was
+    rate-limited) or the run failed. --skip-ingest skips the ingest, the probe
+    and every ingest alert.
 
     Paper mode (--paper): routes all ledger reads/writes to data/portfolio/paper.jsonl
     and auto-records the day's recommended fills using the engine CostModel so the
@@ -630,18 +863,32 @@ def daily(
     """
     import json as _json
 
-    from pkmn_quant.live import notify
+    from pkmn_quant.live import alerts, notify
     from pkmn_quant.live.ledger import LedgerError, load_portfolio
     from pkmn_quant.live.report import render_signals_markdown, signals_to_json
     from pkmn_quant.live.signals import SignalsError, generate_signals
 
-    today = dt.date.today()
+    notify.configure(root)
+    now = _now()
+    # Local wall-clock time drives the at-risk rule, the artifact date and the
+    # once-a-day archive probe.
+    now_local = now.astimezone()
+    today = now_local.date()
+    mode = "paper" if paper else "real"
+    state = alerts.load_state(root)
+
     dir_suffix = "-paper" if paper else ""
     out_dir = root / "data" / "results" / f"daily-{today.isoformat()}{dir_suffix}"
     out_dir.mkdir(parents=True, exist_ok=True)
 
     notify_title_base = "pkmn daily (paper)" if paper else "pkmn daily"
+    run_failed_title = f"{notify_title_base}: run failed"
+    run_error_key = f"run_error:{mode}"
     catalog_failures: tuple[int, ...] = ()
+    live: dict[str, Any] | None = None
+    signals_skipped = False
+    # An alert-level ingest condition held this run (sets the exit code).
+    ingest_problem = False
 
     def finish(
         status: str, error: str | None, n_buys: int, n_sells: int, as_of: str | None
@@ -661,6 +908,12 @@ def daily(
                     # rows were kept (ingest.refresh_products merges), but an
                     # unattended run must leave a durable trace of the degradation.
                     "catalog_failures": len(catalog_failures),
+                    # Live capture outcome; null under --skip-ingest or when
+                    # the ingest raised (see "error").
+                    "live": live,
+                    # True when signals did not run because they already ran
+                    # on this as_of for this mode.
+                    "signals_skipped": signals_skipped,
                 },
                 indent=2,
             )
@@ -673,105 +926,253 @@ def daily(
         Pass keep_artifacts=True when the signals.md/signals.json are still
         valid (e.g. all-or-nothing ledger write failed after artifacts were
         written — no fills were recorded so the artifacts are consistent).
+        The notification is rate-limited (once, then at most daily); the
+        caller's finally saves the alert state.
         """
         finish("error", error, 0, 0, None)
         if not keep_artifacts:
             for stale in ("signals.md", "signals.json"):
                 (out_dir / stale).unlink(missing_ok=True)
-        notify.send_notification(f"{notify_title_base} FAILED", error)
+        if alerts.should_alert(state, run_error_key, now):
+            notify.send_notification(run_failed_title, error)
         typer.echo(f"error: {error}", err=True)
         raise typer.Exit(1)
 
-    ingest_error: str | None = None
-    try:
-        # _portfolio_deps raises BadParameter when no warehouse exists; keep it
-        # inside the protected block so that case produces error daily.json.
-        warehouse, products, lpath = _portfolio_deps(root, paper=paper)
+    def _alert(key: str, title: str, body: str) -> None:
+        if alerts.should_alert(state, key, now):
+            notify.send_notification(title, body)
+        typer.echo(f"warning: {title}: {body}", err=True)
 
-        if not skip_ingest:
-            yesterday = today - dt.timedelta(days=1)
-            days = warehouse.stored_days()
-            if days and days[-1] < yesterday:
-                try:
-                    ingested = ingest_range(
-                        Paths(root=root), days[-1] + dt.timedelta(days=1), yesterday
+    def _recover(key: str, title: str, body: str = "new price data is landing again") -> None:
+        if alerts.resolve(state, key):
+            notify.send_notification(f"{title}: recovered", body)
+
+    def _ingest_alerts(
+        warehouse: Warehouse, report: LiveIngestReport | None, ingest_error: str | None
+    ) -> bool:
+        """Apply the ingest alert policy; True if an alert-level condition holds."""
+        days = warehouse.stored_days()
+        newest = days[-1] if days else None
+        capture = report.capture if report else None
+        capture_failed = capture is not None and not capture.complete
+        unstored = capture is not None and not warehouse.has_day(capture.day)
+        capture_problem = ingest_error is not None or capture_failed or unstored
+        problem = False
+
+        stale_title = f"{notify_title_base}: no new prices"
+        capture_title = f"{notify_title_base}: capture incomplete"
+        if alerts.is_stale(newest, now):
+            problem = True
+            reason = ingest_error or (
+                f"update {capture.day} has {len(capture.failed)} failed group(s)"
+                if capture is not None and capture_failed
+                else "tcgcsv has published nothing newer"
+            )
+            _alert("stale", stale_title, f"newest stored day {newest}; {reason}")
+        else:
+            _recover("stale", stale_title)
+            if alerts.capture_at_risk(capture_problem, now_local):
+                problem = True
+                if ingest_error is not None:
+                    body = ingest_error
+                elif capture is not None and capture_failed:
+                    body = (
+                        f"update {capture.day}: {len(capture.failed)} group(s) still failing "
+                        f"({_gids(capture.failed)})"
                     )
-                    catalog_failures = ingested.catalog_failures
+                else:
+                    day = capture.day if capture is not None else newest
+                    body = f"update {day} is captured but not stored yet"
+                _alert("capture", capture_title, body)
+        if not capture_problem:
+            _recover("capture", capture_title)
+
+        if report is not None:
+            for d in report.abandoned:
+                problem = True
+                _alert(
+                    f"abandoned:{d.isoformat()}",
+                    f"{notify_title_base}: day abandoned",
+                    _abandoned_body(root, d),
+                )
+            for d, missing in sorted(report.partial.items()):
+                problem = True
+                notify.send_notification(
+                    f"{notify_title_base}: partial day",
+                    f"{d} written without {len(missing)} group(s): {_gids(missing)}",
+                )
+            if report.collision:
+                problem = True
+                day = capture.day if capture is not None else newest
+                _alert(
+                    "collision",
+                    f"{notify_title_base}: two updates on one day",
+                    f"two tcgcsv updates mapped to {day}; the second was not stored",
+                )
+            elif ingest_error is None:
+                # Cleared silently: "two updates on one day: recovered" says nothing.
+                state.active.pop("collision", None)
+        return problem
+
+    try:
+        ingest_error: str | None = None
+        try:
+            # _portfolio_deps raises BadParameter when no warehouse exists; keep it
+            # inside the protected block so that case produces error daily.json.
+            warehouse, products, lpath = _portfolio_deps(root, paper=paper)
+
+            if not skip_ingest:
+                if state.archive_probe_on != today.isoformat():
+                    # Probe the day after the newest ARCHIVE-stored day (the
+                    # first lost day): a live day has a raw manifest, and the
+                    # day after a live day is one a restored archive would not
+                    # hold yet. All-live or empty warehouse: no probe.
+                    raw_live = Paths(root=root).raw_live
+                    archive_days = [
+                        d
+                        for d in warehouse.stored_days()
+                        if not (raw_live / d.isoformat() / "manifest.json").exists()
+                    ]
+                    probe_day = archive_days[-1] + dt.timedelta(days=1) if archive_days else None
+                    # A stored next day (a live day, or a finished backfill)
+                    # means there is no gap left to report: no probe.
+                    if probe_day is not None and not warehouse.has_day(probe_day):
+                        try:
+                            with tcgcsv.make_client() as client:
+                                back = probe_archive(client, probe_day)
+                        except Exception as exc:  # a probe must never fail the run
+                            typer.echo(f"warning: archive probe failed: {exc}", err=True)
+                            back = False
+                        if back:
+                            notify.send_notification(
+                                f"{notify_title_base}: archive is back",
+                                f"tcgcsv serves the {probe_day} archive again; the gap "
+                                "can be backfilled with pkmn ingest",
+                            )
+                    state.archive_probe_on = today.isoformat()
+
+                report: LiveIngestReport | None = None
+                try:
+                    report = run_live_ingest(Paths(root=root))
+                    catalog_failures = report.catalog_failures
+                    live = _live_json(report)
+                    if report.finalize_errors:
+                        ingest_error = "finalize failed: " + "; ".join(
+                            f"{d}: {e}" for d, e in sorted(report.finalize_errors.items())
+                        )
                 except Exception as exc:  # scheduled run must never die silently
                     ingest_error = f"ingest failed: {exc}"
+                ingest_problem = _ingest_alerts(warehouse, report, ingest_error)
+                if ingest_error:
+                    typer.echo(ingest_error, err=True)
+                if catalog_failures:
+                    # Not fatal — refresh_products merges, so the failed groups
+                    # kept their previous rows — but an unattended degradation
+                    # must not be silent.
+                    msg = (
+                        f"catalog refresh: {len(catalog_failures)} group(s) failed to fetch "
+                        f"({_gids(catalog_failures)}); previous rows kept"
+                    )
+                    notify.send_notification(f"{notify_title_base}: catalog degraded", msg)
+                    typer.echo(f"warning: {msg}", err=True)
 
-        pf = load_portfolio(lpath, products)
-        report = generate_signals(
-            warehouse=warehouse,
-            strategy_name=strategy,
-            results_dir=root / "data" / "results",
-            portfolio=pf,
-            paper=paper,
-        )
-    except (SignalsError, LedgerError, typer.BadParameter) as exc:
-        # Combine ingest error with signals/deps error when both occurred.
-        error = f"{exc}; {ingest_error}" if ingest_error else str(exc)
-        _fail(error)
-        return  # unreachable; satisfies type checker after _fail raises Exit
-    except Exception as exc:
-        # Unexpected errors (polars ComputeError, OSError, strategy bugs, …)
-        # must not die silently — wrap same finish/notify/exit path.
-        error = f"{exc}; {ingest_error}" if ingest_error else str(exc)
-        _fail(error)
-        return  # unreachable
+            stored = warehouse.stored_days()
+            newest = stored[-1].isoformat() if stored else None
+            if newest is not None and state.signals_as_of.get(mode) == newest:
+                # Signals already ran on this data for this mode: no repeat
+                # buy/sell push and, in paper mode, no repeat fills.
+                # A same-day daily.json for this as_of already holds what the
+                # run that did act recorded; keep its counts so later runs of
+                # the day don't turn "3 buys" into "nothing to do". out_dir is
+                # per mode, so this never mixes real and paper counts.
+                signals_skipped = True
+                kept_buys = kept_sells = 0
+                try:
+                    prev = _json.loads((out_dir / "daily.json").read_text())
+                    if prev.get("as_of") == newest and prev.get("paper") == paper:
+                        kept_buys = int(prev.get("n_buys") or 0)
+                        kept_sells = int(prev.get("n_sells") or 0)
+                except (OSError, ValueError, TypeError, AttributeError):
+                    pass
+                finish(
+                    "error" if ingest_error else "ok",
+                    ingest_error,
+                    kept_buys,
+                    kept_sells,
+                    newest,
+                )
+                _recover(run_error_key, run_failed_title, "pkmn daily is running again")
+                typer.echo(f"signals already ran on {newest} ({mode}); skipped")
+                if ingest_problem:
+                    raise typer.Exit(1)
+                return
 
-    (out_dir / "signals.md").write_text(render_signals_markdown(report))
-    (out_dir / "signals.json").write_text(signals_to_json(report))
-    n_buys = sum(1 for r in report.recommendations if r.action == "BUY")
-    n_sells = sum(1 for r in report.recommendations if r.action == "SELL")
+            pf = load_portfolio(lpath, products)
+            signals_report = generate_signals(
+                warehouse=warehouse,
+                strategy_name=strategy,
+                results_dir=root / "data" / "results",
+                portfolio=pf,
+                paper=paper,
+            )
+            (out_dir / "signals.md").write_text(render_signals_markdown(signals_report))
+            (out_dir / "signals.json").write_text(signals_to_json(signals_report))
+            n_buys = sum(1 for r in signals_report.recommendations if r.action == "BUY")
+            n_sells = sum(1 for r in signals_report.recommendations if r.action == "SELL")
 
-    # Paper mode: auto-record recommended fills through the pure planner
-    # (live/paper.py) and one atomic append_events write. A mid-batch
-    # validation failure leaves the ledger completely unchanged. In paper
-    # mode n_buys/n_sells are re-counted from the recorded batch: the
-    # planner clips to liquidity and affordability (sometimes to zero),
-    # and daily.json must report what actually happened, not what the
-    # strategy wished for.
-    if paper and report.recommendations:
-        from pkmn_quant.engine.costs import CostModel
-        from pkmn_quant.live.ledger import append_events
-        from pkmn_quant.live.paper import plan_paper_fills
+            # Paper mode: auto-record recommended fills through the pure planner
+            # (live/paper.py) and one atomic append_events write. A mid-batch
+            # validation failure leaves the ledger completely unchanged. In paper
+            # mode n_buys/n_sells are re-counted from the recorded batch: the
+            # planner clips to liquidity and affordability (sometimes to zero),
+            # and daily.json must report what actually happened, not what the
+            # strategy wished for.
+            if paper and signals_report.recommendations:
+                from pkmn_quant.engine.costs import CostModel
+                from pkmn_quant.live.ledger import append_events
+                from pkmn_quant.live.paper import plan_paper_fills
 
-        batch = plan_paper_fills(
-            report.recommendations, pf.cash, today, CostModel(impact_enabled=impact)
-        )
-        if batch:
-            try:
-                append_events(lpath, batch, products)
-            except LedgerError as exc:
-                _fail(f"paper auto-record failed: {exc}", keep_artifacts=True)
-                return  # unreachable
-        n_buys = sum(1 for e in batch if e["kind"] == "buy")
-        n_sells = sum(1 for e in batch if e["kind"] == "sell")
+                batch = plan_paper_fills(
+                    signals_report.recommendations, pf.cash, today, CostModel(impact_enabled=impact)
+                )
+                if batch:
+                    try:
+                        append_events(lpath, batch, products)
+                    except LedgerError as exc:
+                        _fail(f"paper auto-record failed: {exc}", keep_artifacts=True)
+                        return  # unreachable
+                n_buys = sum(1 for e in batch if e["kind"] == "buy")
+                n_sells = sum(1 for e in batch if e["kind"] == "sell")
+        except (SignalsError, LedgerError, typer.BadParameter) as exc:
+            # Combine ingest error with signals/deps error when both occurred.
+            error = f"{exc}; {ingest_error}" if ingest_error else str(exc)
+            _fail(error)
+            return  # unreachable; satisfies type checker after _fail raises Exit
+        except typer.Exit:
+            raise
+        except Exception as exc:
+            # Unexpected errors (polars ComputeError, OSError, strategy bugs, …)
+            # must not die silently — wrap same finish/notify/exit path.
+            error = f"{exc}; {ingest_error}" if ingest_error else str(exc)
+            _fail(error)
+            return  # unreachable
 
-    finish(
-        "error" if ingest_error else "ok", ingest_error, n_buys, n_sells, report.as_of.isoformat()
-    )
+        as_of = signals_report.as_of.isoformat()
+        # Recorded only now, after signals and any paper fills completed.
+        state.signals_as_of[mode] = as_of
+        finish("error" if ingest_error else "ok", ingest_error, n_buys, n_sells, as_of)
+        _recover(run_error_key, run_failed_title, "pkmn daily is running again")
 
-    if n_buys + n_sells > 0:
-        notify.send_notification(
-            notify_title_base,
-            f"{strategy}: {n_buys} buys, {n_sells} sells — see dashboard",
-        )
-    if catalog_failures:
-        # Not fatal — refresh_products merges, so the failed groups kept their
-        # previous rows — but an unattended degradation must not be silent.
-        msg = (
-            f"catalog refresh: {len(catalog_failures)} group(s) failed to fetch "
-            f"({', '.join(str(g) for g in catalog_failures)}); previous rows kept"
-        )
-        notify.send_notification(f"{notify_title_base}: catalog degraded", msg)
-        typer.echo(f"warning: {msg}", err=True)
-    if ingest_error:
-        notify.send_notification(f"{notify_title_base}: ingest problem", ingest_error)
-        typer.echo(ingest_error, err=True)
-        raise typer.Exit(1)
-    typer.echo(f"daily run written to {out_dir}")
+        if n_buys + n_sells > 0:
+            notify.send_notification(
+                notify_title_base,
+                f"{strategy}: {n_buys} buys, {n_sells} sells — see dashboard",
+            )
+        if ingest_problem:
+            raise typer.Exit(1)
+        typer.echo(f"daily run written to {out_dir}")
+    finally:
+        alerts.save_state(root, state)
 
 
 @app.command()
@@ -779,18 +1180,28 @@ def evaluate(
     root: Path = typer.Option(Path("."), help="Project root containing data/results/."),
     benchmark: Path | None = typer.Option(
         None,
-        help="Benchmark artifact dir containing equity.parquet; "
-        "default: auto-locate data/results/buy-and-hold-sealed-*.",
+        help="Benchmark artifact dir containing equity.parquet; default: the "
+        "newest buy-and-hold backtest in the run registry (never a directory glob).",
     ),
     n_boot: int = typer.Option(10_000, min=1, help="Bootstrap resamples."),
     block: float = typer.Option(10.0, help="Mean bootstrap block length, days."),
     seed: int = typer.Option(42, help="Bootstrap seed (results are deterministic)."),
+    execution: str = typer.Option(
+        "book",
+        help=(
+            "Execution mode to evaluate: book (default; modelled resting orders, "
+            "synthetic, built from the day's tcgcsv quote) or formula. Only wf-* "
+            "artifacts recorded in this mode are read (a missing key is formula), "
+            "and the benchmark must be in it too."
+        ),
+    ),
 ) -> None:
     """Cross-strategy rigor: bootstrap CIs, deflated Sharpe, Reality Check.
 
     Reads every data/results/wf-*/ walk-forward artifact plus the
-    buy-and-hold benchmark curve, aligns them on common dates, and writes
-    an evaluate-<date>/ artifact with report.md + evaluate.json. The
+    buy-and-hold benchmark curve — resolved from the RUN REGISTRY, and
+    required to span the strategies' window — aligns them on common dates,
+    and writes an evaluate-<date>/ artifact with report.md + evaluate.json. The
     Reality Check answers "did ANY strategy beat the benchmark, given how
     many we tried"; deflated Sharpe corrects each Sharpe for that same
     selection. Recorded in the experiment registry like every other run.
@@ -799,6 +1210,7 @@ def evaluate(
 
     from pkmn_quant.data.warehouse import Warehouse
     from pkmn_quant.engine.metrics import TRADING_DAYS_PER_YEAR
+    from pkmn_quant.research.backtest_run import effective_execution
     from pkmn_quant.research.runs import load_runs, record_run
     from pkmn_quant.research.stats import (
         bootstrap_ci,
@@ -813,13 +1225,27 @@ def evaluate(
         typer.echo(f"error: {msg}", err=True)
         raise typer.Exit(1)
 
-    # -- discover strategy artifacts (longest curve wins per strategy) --
+    try:
+        execution = effective_execution(execution, True)
+    except ValueError as exc:
+        fail(str(exc))
+
+    # -- discover strategy artifacts in this mode (longest curve wins per strategy) --
+    # Book and formula curves are priced by different execution models and
+    # never belong in one Reality Check, so only artifacts recorded in the
+    # requested mode are read (missing key = formula, as every artifact before
+    # Plan B was); the others are skipped, never mixed in.
     curves: dict[str, pl.DataFrame] = {}
+    n_other_mode = 0
     for d in sorted(results_dir.glob("wf-*")):
         meta, parquet = d / "walkforward.json", d / "stitched_equity.parquet"
         if not (meta.exists() and parquet.exists()):
             continue
-        name = str(json.loads(meta.read_text())["strategy"])
+        meta_obj = json.loads(meta.read_text())
+        if str(meta_obj.get("execution", "formula")) != execution:
+            n_other_mode += 1
+            continue
+        name = str(meta_obj["strategy"])
         frame = pl.read_parquet(parquet)
         if frame.height < 2:
             typer.echo(f"skipping {d.name}: curve too short", err=True)
@@ -829,41 +1255,92 @@ def evaluate(
             continue
         curves[name] = frame
     if not curves:
-        fail(f"no walk-forward artifacts found under {results_dir}/wf-*")
+        hint = (
+            f" ({n_other_mode} artifact(s) in the other mode skipped; pass --execution "
+            f"{'formula' if execution == 'book' else 'book'} to evaluate those)"
+            if n_other_mode
+            else ""
+        )
+        fail(f"no walk-forward artifacts in {execution} execution under {results_dir}/wf-*{hint}")
     if len(curves) < 2:
         fail(f"Reality Check needs >= 2 strategies, found {len(curves)}")
 
-    # -- benchmark --
+    # -- benchmark: registry only, exactly like `pkmn horizon` --
+    # The directory glob this used to try first is GONE, deliberately. It
+    # sorted `data/results/buy-and-hold-sealed-*` and took the longest curve,
+    # so any hand-made directory outranked the registry; the one it matched
+    # was a stale pre-swap artifact and this command published a Reality Check
+    # p of 1.0000 where the correct value was 0.8038. See
+    # _benchmark_candidates for why a registry record and a directory name are
+    # not interchangeable — that filter also drops the paired sidecar
+    # benchmarks tagged `benchmark_for`, which cover somebody else's window
+    # (one on disk here spans 61 days) and which the old fallback happily
+    # returned.
+    # The bar must be priced under the strategies' execution mode too: auto
+    # picks the newest in-mode candidate; an explicit directory is looked up in
+    # the registry by artifact_path (no record = formula, the pre-Plan-B rule)
+    # and refused on a mismatch.
+    records = load_runs(root)
     if benchmark is None:
-        # First choice: the old `pkmn backtest`-produced directory name
-        # (data/results/buy-and-hold-sealed-{start}-{end}/), kept for
-        # backwards compatibility with artifacts already on disk.
-        candidates = sorted(results_dir.glob("buy-and-hold-sealed-*"))
-        candidates = [c for c in candidates if (c / "equity.parquet").exists()]
-        if candidates:
-            benchmark = max(candidates, key=lambda c: pl.read_parquet(c / "equity.parquet").height)
-        else:
-            # Plan 2b rekeyed `pkmn backtest` artifact dirs to
-            # data/results/<run_id>/, so no current command can produce the
-            # glob pattern above any more. Fall back to the run registry:
-            # newest recorded `backtest` run for buy-and-hold-sealed whose
-            # artifact still exists on disk.
-            records = [
-                r
-                for r in load_runs(root)
-                if r.command == "backtest"
-                and r.strategy == "buy-and-hold-sealed"
-                and (Path(r.artifact_path) / "equity.parquet").exists()
-            ]
-            if not records:
-                fail("no buy-and-hold-sealed-* benchmark artifact; pass --benchmark")
-            benchmark = Path(max(records, key=lambda r: r.recorded_at).artifact_path)
+        candidates = _benchmark_candidates(records, execution)
+        if not candidates:
+            fail(
+                f"no {execution}-execution buy-and-hold benchmark backtest in the run "
+                "registry; run `pkmn backtest` to make one, or pass --benchmark <dir>"
+            )
+        benchmark = Path(candidates[0].artifact_path)
+    else:
+        target = benchmark.resolve()
+
+        def recorded_dirs(r: RunRecord) -> set[Path]:
+            # A relative artifact_path is resolved against --root, not only
+            # cwd: record_run stores root / "data" / ..., and with the default
+            # root "." that is a root-relative path, so `pkmn evaluate --root
+            # /repo` run from elsewhere would otherwise miss the record and
+            # fall back to "formula". The cwd reading is kept as well for a
+            # record written under a non-"." relative root.
+            p = Path(r.artifact_path)
+            if p.is_absolute():
+                return {p.resolve()}
+            return {(root / p).resolve(), p.resolve()}
+
+        matches = sorted(
+            (r for r in records if target in recorded_dirs(r)),
+            key=lambda r: r.recorded_at,
+            reverse=True,
+        )
+        bench_mode = str(matches[0].config.get("execution", "formula")) if matches else "formula"
+        if bench_mode != execution:
+            fail(
+                f"benchmark {benchmark} is a {bench_mode}-execution run but the walk-forward "
+                f"artifacts are {execution}; book and formula curves are not comparable"
+            )
     bench_frame = pl.read_parquet(benchmark / "equity.parquet")
 
+    # -- the benchmark must SPAN the strategies' window --
+    # Same guard as `pkmn horizon`. Without it a short benchmark silently
+    # shrinks the comparison instead of being rejected: the intersection below
+    # is taken over the benchmark too, so a 61-day buy-and-hold run (there is
+    # a real one on disk) clears the >= 60 check and the Reality Check is
+    # computed over 61 days of 660-day strategy curves, with no warning.
+    strat_common: set[dt.date] = set.intersection(
+        *(set(frame["date"].to_list()) for frame in curves.values())
+    )
+    if not strat_common:
+        fail("the walk-forward artifacts share no dates with each other")
+    bench_dates = bench_frame["date"].to_list()
+    s_first, s_last = min(strat_common), max(strat_common)
+    if not bench_dates or min(bench_dates) > s_first or max(bench_dates) < s_last:
+        span = f"{min(bench_dates)} .. {max(bench_dates)}" if bench_dates else "empty"
+        fail(
+            f"benchmark {benchmark.name} covers {span}, which does not span the strategies' "
+            f"window {s_first} .. {s_last}; every day outside it would be dropped from the "
+            "comparison rather than reported. Pass --benchmark <dir> for a buy-and-hold run "
+            "covering the whole window."
+        )
+
     # -- align on common dates --
-    common = set(bench_frame["date"].to_list())
-    for frame in curves.values():
-        common &= set(frame["date"].to_list())
+    common = strat_common & set(bench_dates)
     if len(common) < 60:
         fail(f"date overlap across artifacts is {len(common)} days; need >= 60")
     dates = sorted(common)
@@ -895,7 +1372,13 @@ def evaluate(
     p_value = whites_reality_check(excess, n_boot=n_boot, mean_block=block, seed=seed)
 
     # -- artifact --
-    out_dir = results_dir / f"evaluate-{dt.date.today().isoformat()}"
+    # Book evaluates get a "-book" suffix (the same rule as the wf-...-book
+    # artifacts) so a book and a formula evaluate on one day sit side by side;
+    # sharing one directory let the second overwrite the first, leaving the
+    # first run's registry record pointing at the other mode's numbers.
+    # Formula keeps the legacy name, so existing artifacts stay valid.
+    suffix = "-book" if execution == "book" else ""
+    out_dir = results_dir / f"evaluate-{dt.date.today().isoformat()}{suffix}"
     if out_dir.exists():
         typer.echo(f"warning: overwriting existing results in {out_dir}", err=True)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -903,6 +1386,7 @@ def evaluate(
         "strategies": per_strategy,
         "reality_check_p": p_value,
         "benchmark": str(benchmark),
+        "execution": execution,
         "n_days": len(dates),
         "start": str(dates[0]),
         "end": str(dates[-1]),
@@ -912,6 +1396,8 @@ def evaluate(
 
     lines = [
         "# Cross-strategy rigor report",
+        "",
+        execution_line(execution),
         "",
         f"{len(strat_r)} strategies vs benchmark `{benchmark.name}`, "
         f"{len(dates)} aligned days ({dates[0]} .. {dates[-1]}).",
@@ -954,6 +1440,7 @@ def evaluate(
             "command": "evaluate",
             "strategies": sorted(strat_r),
             "benchmark": str(benchmark),
+            "execution": execution,
             "n_boot": n_boot,
             "mean_block": block,
             "seed": seed,
@@ -966,7 +1453,371 @@ def evaluate(
     )
     if run_id is not None:
         typer.echo(f"run recorded: {run_id}")
+    typer.echo(execution_line(execution))
     typer.echo(f"Reality Check p = {p_value:.4f}")
+    typer.echo(f"results written to {out_dir}")
+
+
+def _benchmark_candidates(records: list[RunRecord], execution: str) -> list[RunRecord]:
+    """Buy-and-hold benchmark runs in ``execution`` mode from the REGISTRY,
+    newest first.
+
+    Never a directory glob, and there is deliberately no glob fallback.
+    `pkmn evaluate` used to auto-discover its benchmark by globbing
+    `data/results/buy-and-hold-sealed-*` and taking the longest curve; the
+    directory it matched was a stale pre-swap artifact, so a post-swap
+    evaluation was scored against a pre-swap bar and a Reality Check p-value
+    of 1.0000 was published where the correct value was 0.8038. A directory
+    name carries no identity; a registry record carries the config, the git
+    SHA and the data fingerprint of the run that produced the curve, which is
+    what makes "is this benchmark comparable to that run?" answerable at all.
+    That matters again right now: this branch changed buy-and-hold's
+    allocation rule, so every buy-and-hold artifact produced before it is
+    measured on a different rule and only the record says which.
+
+    The filter is the same rule /api/runs (`api/data.py`) and the dashboard's
+    `benchmark_runs()` already apply: a `backtest` run of a buy-and-hold
+    strategy, minus the paired sidecar benchmarks tagged `benchmark_for`
+    (those cover somebody else's, often very short, window).
+
+    Plan B adds the mode filter: a record's ``config["execution"]`` (missing
+    = formula, as every record before Plan B was) must equal ``execution``,
+    so a book run is never scored against a formula bar or vice versa.
+    """
+    return sorted(
+        (
+            r
+            for r in records
+            if r.command == "backtest"
+            and r.strategy.startswith("buy-and-hold")
+            and not r.config.get("benchmark_for")
+            and r.config.get("execution", "formula") == execution
+            and (Path(r.artifact_path) / "equity.parquet").is_file()
+        ),
+        key=lambda r: r.recorded_at,
+        reverse=True,
+    )
+
+
+def _horizon_headline(report: HorizonReport) -> str:
+    """The one line this command exists to produce: the 1-3m median edge."""
+    n = report.holding_buckets.get(HORIZON_HEADLINE_BUCKET, 0)
+    if n == 0:
+        return f"{HORIZON_HEADLINE_BUCKET} median edge: n/a (no round trips in this bucket)"
+    edge = report.edge_by_bucket[HORIZON_HEADLINE_BUCKET]
+    return f"{HORIZON_HEADLINE_BUCKET} median edge: {edge:+.2%} over {n} round trip(s)"
+
+
+def _horizon_report_md(
+    report: HorizonReport,
+    run: RunRecord,
+    bench: RunRecord,
+    first_day: dt.date,
+    last_day: dt.date,
+) -> str:
+    n_open = sum(1 for t in report.trips if t.still_open)
+    lines = [
+        "# Horizon-matched trade report",
+        "",
+        execution_line(str(run.config.get("execution", "formula"))),
+        "",
+        f"Backtest run `{run.run_id}` (`{run.strategy}`) vs benchmark run "
+        f"`{bench.run_id}` (`{bench.strategy}`), {first_day} .. {last_day}.",
+        "",
+        f"Benchmark provenance: recorded {bench.recorded_at}, git "
+        f"`{bench.git_sha or 'unknown'}`{'*' if bench.git_dirty else ''}. Buy-and-hold's",
+        "allocation rule changed on this branch, so the strategy name alone does",
+        "not identify the bar -- the sha does.",
+        "",
+    ]
+    if bench.git_sha != run.git_sha:
+        lines += [
+            f"**Warning: the benchmark was produced at git `{bench.git_sha or 'unknown'}` "
+            f"but this backtest at `{run.git_sha or 'unknown'}`.** Check the two curves",
+            "were computed under the same buy-and-hold rule before trusting the edges.",
+            "",
+        ]
+    lines += [
+        "Every OTHER report in this project scores a strategy against one",
+        "28-month buy-and-hold, which measures exposure time as much as skill.",
+        "Here each round trip is scored against holding the sealed index over",
+        "that trip's OWN entry and exit dates, so a six-week trade is compared",
+        "with six weeks of the index. `edge` = trip return - index return over",
+        "the same days.",
+        "",
+        f"**{_horizon_headline(report)}**",
+        "",
+        "| metric | value |",
+        "|---|---|",
+        f"| round trips | {len(report.trips)} |",
+        f"| still open at {last_day} (closed at that day's mark, net of a "
+        f"modelled exit) | {n_open} |",
+        f"| median edge | {report.median_edge:+.2%} |",
+        f"| mean edge | {report.mean_edge:+.2%} |",
+        f"| win rate (edge > 0) | {report.win_rate:.1%} |",
+        "",
+        "## Holding period",
+        "",
+        "| bucket | round trips | median edge |",
+        "|---|---|---|",
+    ]
+    for bucket in HORIZON_BUCKETS:
+        count = report.holding_buckets.get(bucket, 0)
+        edge = f"{report.edge_by_bucket[bucket]:+.2%}" if count else "n/a"
+        lines += [f"| {bucket} | {count} | {edge} |"]
+    lines += [
+        "",
+        "Caveats: marks on this data are smoothed (thin markets, carry-forward",
+        "marks), so a still-open trip's return is a mark, not a realized exit.",
+        "That exit IS charged, though -- fees, shipping and the sell-side walk",
+        "through the run's own cost model -- because a closed trip's proceeds",
+        "are already net and scoring open ones gross would hand them roughly 13",
+        "free points. The modelled exit ignores the per-day liquidity cap, so a",
+        "large lot is charged as one same-day sale.",
+        "A per-trip edge is not a portfolio return either -- it ignores how much",
+        "capital sat idle between trips.",
+        "",
+    ]
+    return "\n".join(lines)
+
+
+@app.command()
+def horizon(
+    run_id: str = typer.Argument(..., help="Backtest run id; see `pkmn runs list`."),
+    benchmark: str | None = typer.Option(
+        None,
+        help="Benchmark run id (NOT a directory); default: newest buy-and-hold "
+        "backtest in the run registry.",
+    ),
+    root: Path = typer.Option(Path("."), help="Project root holding the data/ directory."),
+) -> None:
+    """Per-trade edge against the sealed index over each trade's OWN window.
+
+    Pairs a backtest's fills into FIFO round trips and scores each one against
+    holding the sealed index between that trip's entry and exit dates. Answers
+    "did this strategy beat the index on the trades it actually made", which a
+    stitched return against a 28-month buy-and-hold does not. Writes
+    data/results/horizon-<run-id>/{report.md,horizon.json} and records a
+    registry entry like every other run.
+    """
+    from collections.abc import Callable
+
+    from pkmn_quant.data.warehouse import Warehouse
+    from pkmn_quant.engine.costs import CostModel
+    from pkmn_quant.engine.data import MarketData
+    from pkmn_quant.research.horizon import horizon_report
+    from pkmn_quant.research.runs import load_runs, record_run
+
+    def fail(msg: str) -> NoReturn:
+        typer.echo(f"error: {msg}", err=True)
+        raise typer.Exit(1)
+
+    records = load_runs(root)
+    by_id = {r.run_id: r for r in records}
+
+    run = by_id.get(run_id)
+    if run is None:
+        fail(f"no run matching {run_id!r}; see `pkmn runs list`")
+    if run.command != "backtest":
+        fail(f"run {run_id} is a {run.command} run; horizon needs a backtest run (it pairs fills)")
+
+    art = Path(run.artifact_path)
+    for name in ("fills.parquet", "equity.parquet"):
+        if not (art / name).is_file():
+            fail(f"run {run_id} is missing {name} under {art}")
+    fills = pl.read_parquet(art / "fills.parquet")
+    if fills.height == 0:
+        fail(f"run {run_id} has no fills; there is nothing to pair")
+    equity = pl.read_parquet(art / "equity.parquet").sort("date")
+    if equity.height == 0:
+        fail(f"run {run_id} has an empty equity curve")
+    first_day: dt.date = equity["date"][0]
+    last_day: dt.date = equity["date"][-1]
+
+    # The run's execution mode (missing = formula, every pre-Plan-B record).
+    # The benchmark must share it: book and formula bars are priced by
+    # different execution models.
+    execution = str(run.config.get("execution", "formula"))
+
+    # -- benchmark: registry only, see _benchmark_candidates --
+    if benchmark is not None:
+        bench = by_id.get(benchmark)
+        if bench is None:
+            fail(f"no run matching benchmark {benchmark!r}; see `pkmn runs list`")
+        if not (Path(bench.artifact_path) / "equity.parquet").is_file():
+            fail(f"benchmark run {benchmark} has no equity.parquet under {bench.artifact_path}")
+        bench_mode = str(bench.config.get("execution", "formula"))
+        if bench_mode != execution:
+            fail(
+                f"benchmark run {benchmark} is a {bench_mode}-execution run but run "
+                f"{run_id} is {execution}; book and formula runs are not comparable"
+            )
+    else:
+        candidates = _benchmark_candidates(records, execution)
+        if not candidates:
+            fail(
+                f"no {execution}-execution buy-and-hold benchmark backtest in the run "
+                "registry; run `pkmn backtest` to make one, or pass --benchmark <run-id> "
+                "(a run id, never a directory)"
+            )
+        bench = candidates[0]
+
+    index = pl.read_parquet(Path(bench.artifact_path) / "equity.parquet").sort("date")
+    if index.height == 0:
+        fail(f"benchmark run {bench.run_id} has an empty equity curve")
+    index_first: dt.date = index["date"][0]
+    index_last: dt.date = index["date"][-1]
+    # A benchmark that does not SPAN the run's window silently corrupts every
+    # trip: horizon.py's _index_at guards only the left edge, so past the
+    # curve's end it carries the last available value forward and a trip that
+    # ran four months past the benchmark's end is scored as if the index moved
+    # 0% over those months. That is reachable on the DEFAULT path, not just
+    # --benchmark: the newest buy-and-hold backtest may well be a two-month
+    # ad-hoc run. Refuse rather than under-report the bar.
+    if index_first > first_day or index_last < last_day:
+        fail(
+            f"benchmark run {bench.run_id} covers {index_first} .. {index_last}, which does "
+            f"not span the run's window {first_day} .. {last_day}; every trip outside that "
+            "range would be scored against a flat index. Pass --benchmark <run-id> for a "
+            "buy-and-hold run covering the whole window."
+        )
+    if bench.git_sha != run.git_sha:
+        typer.echo(
+            f"warning: benchmark run {bench.run_id} was produced at git "
+            f"{bench.git_sha or 'unknown'} but this backtest at {run.git_sha or 'unknown'}; "
+            "buy-and-hold's allocation rule has changed on this branch, so check the two "
+            "curves are comparable",
+            err=True,
+        )
+
+    # -- final marks: the engine's own mark source (MarketData.marks_on), so a
+    # still-open lot is closed at exactly the price the run's last equity point
+    # was computed from, not at a separately re-derived price.
+    wh = Warehouse(Paths(root=root))
+    market = MarketData.from_warehouse(wh, first_day, last_day)
+    marks_on_last = market.marks_on(last_day)
+    final_marks = {(a.product_id, a.sub_type): v for a, v in marks_on_last.items()}
+    # ...and last_day's cheapest listings, so the modelled exit on a still-open
+    # lot carries sell-side impact and not only fees. Only assets that printed
+    # on last_day have a quote; the rest simply pay no walk.
+    final_lows = {
+        (a.product_id, a.sub_type): q.low
+        for a, q in market.quotes_on(last_day, list(marks_on_last)).items()
+        if q.low is not None
+    }
+    # The run's own cost model: run_single_backtest builds CostModel(
+    # impact_enabled=impact) and varies nothing else, and `impact` is in the
+    # registry config. A still-open lot is scored net of a modelled exit
+    # through it — closed trips already paid fees, shipping and impact, so
+    # scoring open ones gross put them ~13 points ahead for free.
+    run_costs = CostModel(impact_enabled=bool(run.config.get("impact", True)))
+    # A book run's open lots exit through the modelled bid book (synthetic,
+    # built from the day's tcgcsv quote), like its closed trips did; units
+    # past the day's depth go on the ramp's extension (hypothetical exit only).
+    exit_impact: Callable[[float, float | None, int], float] | None = None
+    if execution == "book":
+        from pkmn_quant.engine.native import book_sell_impact
+
+        def book_exit(mark: float, low: float | None, qty: int) -> float:
+            return book_sell_impact(run_costs, mark, low, qty)
+
+        exit_impact = book_exit
+
+    try:
+        report = horizon_report(
+            fills, index, final_marks, last_day, run_costs, final_lows, exit_impact=exit_impact
+        )
+    except ValueError as exc:
+        fail(str(exc))
+
+    out_dir = root / "data" / "results" / f"horizon-{run_id}"
+    if out_dir.exists():
+        typer.echo(f"warning: overwriting existing results in {out_dir}", err=True)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    # Which BUILD of buy-and-hold produced this bar. Task 1 of this branch
+    # rewrote buy-and-hold's allocation rule, so "buy-and-hold-sealed" alone
+    # does not identify a benchmark: a pre-Task-1 run is a valid most-recent
+    # candidate measured under a different rule. The git sha + recorded_at +
+    # both windows make that recoverable from the artifact instead of only
+    # from the registry.
+    bench_info: dict[str, Any] = {
+        "benchmark_run_id": bench.run_id,
+        "benchmark_strategy": bench.strategy,
+        "benchmark_artifact": bench.artifact_path,
+        "benchmark_git_sha": bench.git_sha,
+        "benchmark_git_dirty": bench.git_dirty,
+        "benchmark_recorded_at": bench.recorded_at,
+        "benchmark_config_start": bench.config.get("start"),
+        "benchmark_config_end": bench.config.get("end"),
+        "benchmark_index_start": index_first.isoformat(),
+        "benchmark_index_end": index_last.isoformat(),
+    }
+
+    payload: dict[str, Any] = {
+        "backtest_run_id": run_id,
+        "strategy": run.strategy,
+        "git_sha": run.git_sha,
+        "execution": execution,
+        **bench_info,
+        "start": first_day.isoformat(),
+        "last_day": last_day.isoformat(),
+        "n_trips": len(report.trips),
+        "n_open": sum(1 for t in report.trips if t.still_open),
+        "median_edge": report.median_edge,
+        "mean_edge": report.mean_edge,
+        "win_rate": report.win_rate,
+        "holding_buckets": report.holding_buckets,
+        "edge_by_bucket": report.edge_by_bucket,
+        "trips": [
+            {
+                "product_id": t.product_id,
+                "sub_type": t.sub_type,
+                "entry": t.entry.isoformat(),
+                "exit": t.exit.isoformat(),
+                "holding_days": t.holding_days,
+                "quantity": t.quantity,
+                "strategy_return": t.strategy_return,
+                "index_return": t.index_return,
+                "edge": t.edge,
+                "still_open": t.still_open,
+            }
+            for t in report.trips
+        ],
+    }
+    (out_dir / "horizon.json").write_text(json.dumps(payload, indent=2, default=str))
+    (out_dir / "report.md").write_text(_horizon_report_md(report, run, bench, first_day, last_day))
+
+    flat: dict[str, float] = {
+        "n_trips": float(len(report.trips)),
+        "median_edge": report.median_edge,
+        "mean_edge": report.mean_edge,
+        "win_rate": report.win_rate,
+    }
+    for bucket, edge in report.edge_by_bucket.items():
+        flat[f"median_edge_{HORIZON_BUCKET_SLUGS[bucket]}"] = edge
+    recorded = record_run(
+        root=root,
+        command="horizon",
+        strategy=run.strategy,
+        config={
+            "command": "horizon",
+            "backtest_run_id": run_id,
+            "execution": execution,
+            **bench_info,
+            "start": first_day.isoformat(),
+            "end": last_day.isoformat(),
+        },
+        results=flat,
+        artifact_path=out_dir,
+        warehouse=wh,
+    )
+    if recorded is not None:
+        typer.echo(f"run recorded: {recorded}")
+    typer.echo(f"{len(report.trips)} round trips vs benchmark {bench.run_id} ({bench.strategy})")
+    typer.echo(_execution_line(execution))
+    typer.echo(_horizon_headline(report))
+    typer.echo(f"median edge (all trips): {report.median_edge:+.2%}")
     typer.echo(f"results written to {out_dir}")
 
 

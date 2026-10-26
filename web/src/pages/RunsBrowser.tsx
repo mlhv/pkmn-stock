@@ -3,6 +3,7 @@ import { apiClient } from "../api/client";
 import type { RunSummary } from "../api/types";
 import { AsyncState } from "../components/AsyncState";
 import { useAsync } from "../hooks/useAsync";
+import { executionLabel } from "../execution";
 
 const DETAIL_PATH: Record<string, string> = {
   walkforward: "walkforward",
@@ -24,7 +25,7 @@ export function RunsBrowser() {
         {(runs) => (
           <table>
             <thead>
-              <tr><th>Run</th><th>Command</th><th>Strategy</th><th>Result</th><th>Recorded</th></tr>
+              <tr><th>Run</th><th>Command</th><th>Strategy</th><th>Execution</th><th>Result</th><th>Recorded</th></tr>
             </thead>
             <tbody>
               {runs.map((r) => {
@@ -38,6 +39,7 @@ export function RunsBrowser() {
                     </td>
                     <td>{r.command}</td>
                     <td>{r.strategy}</td>
+                    <td>{executionLabel(r.execution)}</td>
                     <td>{headline(r)}</td>
                     <td>{r.recorded_at.slice(0, 10)}</td>
                   </tr>

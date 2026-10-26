@@ -1,7 +1,13 @@
 # Walk-forward findings — 2026-07-04
 
-> **SUPERSEDED (2026-08-04). Read the "Full set coverage" section at the end
-> of this file first.** Every number in this document, including in the
+> **SUPERSEDED THREE TIMES. Read the last three sections of this file
+> first, newest last: "Full set coverage" (2026-08-04), "Instrument repair
+> and horizon-matched evaluation" (2026-08-09) and "Formula baseline"
+> (2026-10-24/25). The last one carries the current bar (+126.84%, run
+> `20261024T170908Z-99ee95`) and supersedes every benchmark and horizon
+> figure in the one before it, including the +24.93% quoted just below.**
+>
+> *Universe (2026-08-04).* Every number in this document, including in the
 > catalog-completeness note immediately below and the section it points at,
 > was computed against a price warehouse covering **23 of tcgcsv's 217
 > groups**. Prices now cover all 217: 11.36x the rows, 4.75x the products.
@@ -10,10 +16,21 @@
 > +10.53%, and all six active strategies to between −8.59% and −99.81%. The
 > old rows are intact (the rebuild was verified bit-for-bit and is purely
 > additive); they are simply a measurement of a much narrower market. Cite
-> the numbers below only as "on the 23-group universe", and read the final
-> section before drawing any conclusion from them — it explains why the new
-> benchmark figure is itself an artifact and should not be used as a bar
-> either.
+> the numbers below only as "on the 23-group universe".
+>
+> *Instruments (2026-08-09).* Both of the benchmark figures above are
+> returns on a barely-invested account (60.1% and 4.7% of cash into product;
+> 63.0% and 5.5% all-in, i.e. including fees and impact), and every number
+> in this file above the last section priced buys from `market`, a
+> sales-derived print that often sits below the cheapest listing. Both were
+> repaired. **The current benchmark reference figure is +24.93% (run
+> `20260807T135424Z-8362bc`, 74.2% notional / 99.9% all-in deployed,
+> impact-on, `warmup_days=0`, 2024-03-01..2026-06-30)** and it is not
+> comparable to +183.67% or +10.53%. Quote deployment on one basis or the
+> other, never one from each: notional runs 60.1 → 4.7 → 74.2 and all-in
+> runs 63.0 → 5.5 → 99.9. The last section also answers, per round trip
+> over matched 1-3 month windows, whether any strategy beats holding
+> sealed: **no**.
 
 **Catalog-completeness note (2026-07-29/30), read before anything below.**
 Every section in this file above the "Catalog completeness" section near the
@@ -1193,6 +1210,12 @@ difference is the universe. The benchmark row is a single full-window
 | ml-ranker | −5.05% (`db7880`) | **−81.64%** (`2862d3`) | −76.6 pts |
 | ml-ranker-v2 | −23.15% (`37eeeb`) | **−99.81%** (`452b23`) | −76.7 pts |
 
+**Superseded 2026-08-09** by the Instrument repair section at the end of this
+file: the benchmark row was measured at 4.7% notional deployment (now 74.2%
+notional / 99.9% all-in, +24.93%)
+and every row was measured without the executable buy-price floor. Those
+figures are the "before" column of that section's before/after table.
+
 Two of these numbers demand an explanation before anything else in this
 section can be read: the benchmark falling by an order of magnitude, and
 four strategies losing essentially everything. Both were investigated;
@@ -1479,10 +1502,16 @@ environment for it.
    products, and their features include price-ratio terms that inverted
    quotes would corrupt — but that is a hypothesis, not a measurement. Do
    not cite a mechanism for those two numbers.
-2. **Whether `market < low` is a tcgcsv data defect or a real (thin) print**
-   was not established. The two readings imply opposite fixes — quarantine
-   the row, or trust it and fix the impact model's "market is the front of
-   the book" premise — and this plan produced no evidence for either.
+2. ~~**Whether `market < low` is a tcgcsv data defect or a real (thin)
+   print**~~ **CLOSED 2026-08-09** — see the Instrument repair section at the
+   end of this file. It was neither, because the question had a false
+   premise: `market` is sales-derived and `low` is the cheapest current
+   listing, so they are different series and `market < low` is an ordinary,
+   well-formed observation. The defect was in the consumer — the impact
+   model's "market is the front of the book" premise. Buys now price at
+   `max(market, low)`. (As originally recorded: "The two readings imply
+   opposite fixes — quarantine the row, or trust it and fix the impact
+   model's premise — and this plan produced no evidence for either.")
 3. **What a liquidity floor would do.** The obvious next experiment
    (restrict the universe to products above some print-density or spread-
    sanity threshold) was out of scope for this plan and has not been run, so
@@ -1686,6 +1715,14 @@ work is a liquidity/quote-sanity layer and a benchmark sizing fix, in that
 order, and until both land, no cross-strategy comparison on the wide
 universe should be treated as a research result.
 
+**Update 2026-08-09:** the benchmark sizing fix landed (screen + deficit
+sweep, 4.7% → 74.2% notional and 5.5% → 99.9% all-in deployed) along with an
+executable buy-price floor, and
+the zoo was re-run against both; see the Instrument repair section at the end
+of this file. The liquidity/quote-sanity *experiment* — restricting the
+traded universe by a print-density or spread threshold — is still not run.
+The screen built for the benchmark is the machinery it needs.
+
 ### Plan amendment: `published_on` is a mutating timestamp, and the gate caught it
 
 The plan as written failed at the verification step, and it is worth
@@ -1749,3 +1786,757 @@ rediscovered as a surprise.
   run gives no progress signal regardless of `PYTHONUNBUFFERED`. Budget
   ~4.5 minutes per native-strategy walk-forward and 75-140 minutes per ML
   walk-forward on this universe, and check liveness with `ps`, not the log.
+
+## Instrument repair and horizon-matched evaluation (2026-08-09): a benchmark worth losing to, buys priced at a listing that existed, and the 1-3 month answer
+
+**This section supersedes the Full set coverage section above on two axes:
+the benchmark figure, and the price a buy executes at.** Every number in that
+section was measured against a benchmark that put 4.7% of the account into
+product (5.5% all-in), and with buys priced from `market` — a sales-derived
+print that on 2.19M in-window rows sits *below* the cheapest listing. Both
+were repaired here.
+The universe is unchanged (all 217 groups, same 908-day warehouse), the
+window is unchanged (2024-03-01..2026-06-30), and market impact is on
+throughout, so this section and that one differ only by the two repairs.
+
+### The question this section exists to answer
+
+The owner's goal, stated plainly: **enter and exit within 1-3 months and beat
+simply holding sealed over that same window.** Every prior result in this
+file compares a strategy's stitched 28-month return against a single
+28-month buy-and-hold, which measures exposure time as much as skill — a
+strategy that is in the market a third of the days is being scored against
+one that is in it all of them. Nothing in this repo could answer the owner's
+question before this branch.
+
+### What changed
+
+Three things: two repairs and one new measurement
+(`docs/superpowers/specs/2026-08-05-instrument-repair-and-horizon-design.md`).
+
+1. **`buy_and_hold` gained a liquidity screen and a deficit sweep**
+   (`research/screen.py`, `strategies/buy_and_hold.py`, and the C++ port in
+   `cpp/src/pkmn_engine/strategies/buy_and_hold.cpp`). It had been splitting
+   cash evenly across all 1,315 day-one sealed assets and flooring to integer
+   units, so at a $7.60 per-asset budget most sealed products were simply
+   unbuyable. It now ranks by print density, then relative spread
+   `(mid - low) / mid`, then `product_id`/`sub_type`; keeps the top
+   `n_assets` (default 100); allocates equal-dollar; then sweeps the
+   remaining cash into whichever screened asset has the largest dollar
+   deficit until nothing is affordable. Deployment went **4.7% → 74.2% of
+   the account in product, and 5.5% → 99.9% all-in** (all-in adds fees and
+   the impact charge; keep the two bases apart, see the deployment table
+   below).
+
+   **Amended 2026-08-09, before these figures were re-derived.** As written
+   above, the sweep had no per-asset bound: `deficit = target - qty*price`
+   saturates at `target` for an asset too expensive to hold one unit of, and
+   the only affordability test was against the whole remaining balance, so
+   the most expensive product in the universe always won the sweep. Measured
+   on the run below, that put **50.05% of the account into a single box**
+   (product 91594: one unit, $3,500 print plus $1,500 impact) whose last
+   price print was 19 months before the window ended, so its mark was frozen
+   carry-forward for that whole stretch. The screen fed it: the spread
+   tiebreaker sorted `(mid - low)/mid` ascending, and 91594 had
+   `low == mid == 5000` — a single listing with no depth, scoring 0.0 and
+   ranking best of all. Both are fixed: a non-positive relative spread now
+   sorts last with the undefined case, and an affordability filter keeps the
+   largest k whose k cheapest members each cost at most `cash / k`, then
+   re-targets over those (`_affordable`). Every figure in this section is
+   from before that fix and is superseded by the re-run.
+2. **Buys price at `max(market, low)`** (`engine/costs.py` `buy_impact`,
+   `engine/execution.py` `_fill_buy`, mirrored in C++). The premium over
+   `market` is charged through the `impact` column rather than the `price`
+   column, so a fill's `price` field is still the day's `market` print and
+   the floor stays auditable as a separate number. Sells and marking are
+   deliberately unchanged; see the asymmetry note below.
+3. **`research/horizon.py` and `pkmn horizon <run-id>`** pair a backtest's
+   fills into FIFO round trips and score each trip against holding the sealed
+   index over **that trip's own entry and exit dates**. A six-week trade is
+   compared with six weeks of the index.
+
+Both repairs are bit-for-bit identical between the Python and C++ engines —
+`scripts/parity_full.py` on the real warehouse, after both changes:
+
+```
+[buy-and-hold]          python  72.72s / cpp 31.83s   PASS  (42 fills)
+[sealed-accumulation]   python  65.19s / cpp 30.19s   PASS  (56 fills)
+[dip-buyer]             python 816.67s / cpp 34.42s   PASS  (334 fills)
+[xs-momentum]           python 427.76s / cpp 29.51s   PASS  (183 fills)
+[cost-aware-reversion]  python  95.23s / cpp 30.53s   PASS  (253 fills)
+```
+
+That run's output covered the five native strategies. CLAUDE.md describes
+`parity_full.py` as also covering the ml-ranker callback bridge (`--ml`);
+**that case did not appear in this run's output and is not claimed as
+re-verified here.**
+
+(Its buy-and-hold line shows 42 fills where the benchmark run below shows 38.
+Not a discrepancy, and not a parity issue — parity is between the two
+*engines* on identical inputs, which is what the PASS asserts. The two runs
+have different inputs: `parity_full.py` uses `warmup_days=120` and `pkmn
+backtest` uses 0. See the warmup caveat under the benchmark below, which was
+measured rather than assumed.)
+
+### Open question 2, closed: `market < low` is a category error in the consumer, not a bad row
+
+The Full set coverage section records as open (above, "What remains
+unexplained", item 2) whether `market < low` is a tcgcsv data defect or a
+real thin print, noting that the two readings imply opposite fixes —
+quarantine the row, or trust it and fix the impact model's premise.
+
+**The answer is neither, because the question had a false premise.** `market`
+and `low` are two different series, not two versions of one.
+`data/transforms.py` maps them straight through from tcgcsv: `market` ←
+`marketPrice`, `low` ← `lowPrice`, `mid` ← `midPrice`. TCGplayer derives
+`marketPrice` from recent completed **sales**; `lowPrice`/`midPrice`/
+`highPrice` describe **current listings**. `market < low` is therefore the
+ordinary, well-formed observation that recent sales cleared below today's
+cheapest offer — 2,191,059 in-window rows across 15,186 products are in this
+state, and none of them is corrupt.
+
+The defect was in the consumer. The impact model treated `market` as the
+front of the book and walked outward from it, which prices a buy at a number
+nobody was offering. Fixing the premise rather than the data is what
+Component 2 of the design does: a buy's base price is `max(market, low)`,
+because you cannot lift an offer that does not exist. When `low` is null the
+base stays `market` — a missing `low` means no floor, never a guessed one.
+
+**Open questions 1 (the two ML losses were never traced) and 3 (what a
+liquidity floor would do) remain open.** The screen built here is the
+machinery question 3 needs, but running it is a separate full-zoo re-run and
+was deliberately out of scope.
+
+### The repaired benchmark
+
+> **Superseded (2026-08-09).** Every figure in this subsection comes from a
+> run made before the final-review fix wave, which changed the screen's
+> spread tiebreaker, added the affordability filter to the sweep, and moved
+> the buy-side liquidity tier onto the floored base — see the amendment under
+> item 1 above. Half this run's account sat in one non-printing product. The
+> re-run replaces these numbers.
+
+Run `20260807T135424Z-8362bc`, `pkmn backtest --start 2024-03-01 --end
+2026-06-30` (impact on, `n_assets=100`, $10,000):
+
+| metric | value |
+|---|---:|
+| total return | **+24.93%** |
+| CAGR | +10.02% |
+| max drawdown | −25.73% |
+| Sharpe / Sortino / Calmar | 0.6336 / 0.6824 / 0.3894 |
+| equity | $10,000.00 → $12,492.97 |
+| fills | 38 (all buys; it buys once and holds) |
+
+Deployment, computed from that run's `fills.parquet` (`sum(price*quantity)`
+for notional, plus `sum(fees)` and `sum(impact)` for all-in):
+
+| measure | value |
+|---|---:|
+| buy fills / units / distinct assets | 38 / 74 / 38 |
+| notional | $7,423.07 (74.2% of $10,000) |
+| fees | $38.00 |
+| impact | $2,530.36 |
+| **all-in capital consumed** | **$9,991.43 (99.9%)** |
+
+The plan gated on ≥90% all-in deployment before any strategy was allowed to
+run against this bar. 99.9% clears it.
+
+**Two things in that table deserve to be drawn out rather than buried.**
+
+*Impact is 34.1% of notional* ($2,530.36 / $7,423.07). The buy floor makes
+entering the sealed universe far more expensive than the old model priced it,
+and that cost is now visible instead of silently absent.
+
+*Only 38 of the 100 screened assets ended up holding units*, where the design
+spec's day-one measurement (equal-dollar plus sweep, no buy floor yet)
+predicted 73 at `n_assets=100`. The floor raises the all-in cost per unit, so
+the same $10,000 reaches fewer assets. **The repaired benchmark is therefore
+less diversified than the design table suggested** — 38 assets, not 73.
+Deployment is what the gate measured and it holds; breadth is not, and it
+fell.
+
+**A third fact, found while checking the two above, and it is a caveat on the
+bar itself: the benchmark is warmup-sensitive.** The screen reads
+`ctx.history` for print density and for the quote feeding its spread, and
+`warmup_days` is exactly how much history exists at the first bar. Measured
+on the native engine, same window, cash, kind and impact setting, varying
+only `warmup_days`:
+
+| warmup_days | fills | final equity | total return |
+|---:|---:|---:|---:|
+| 0 (`pkmn backtest`'s only setting) | 38 | $12,492.97 | **+24.93%** |
+| 120 (`pkmn walkforward`'s default, and `parity_full.py`'s) | 42 | $11,607.09 | +16.07% |
+
+The warmup-0 row reproduces run `20260807T135424Z-8362bc` exactly, which is
+how the pair was checked. **The published bar is the warmup-0 number, because
+`pkmn backtest` exposes no `--warmup-days` flag and `run_single_backtest`
+defaults to 0.** Note the asymmetry this creates in the comparison table
+below: the six strategy rows are walk-forward runs at `warmup_days=120`,
+while the bar is a backtest at 0. That asymmetry is not new — every prior
+benchmark figure in this file came from `pkmn backtest` the same way — but
+the screen makes buy-and-hold newly sensitive to it, so "+24.93%" carries an
+implicit `warmup_days=0` and a re-run under a different warmup will not
+reproduce it.
+
+**Direction and scope, stated so a later reader does not have to re-derive
+them.** *Direction:* the published bar is the **harder** of the two
+(+24.93% against +16.07%), so a warmup-matched comparison would lower the bar
+and make it easier to beat. The mismatch therefore runs against the
+strategies, not for them, and since every strategy is deeply negative on
+either bar, nothing about the conclusion turns on it. *Scope:* it touches
+only the walk-forward comparison table below. **The horizon results — this
+section's headline finding — are unaffected**, because all six horizon source
+runs and the index they are scored against are `pkmn backtest` runs at
+`warmup_days=0`, so that comparison is internally warmup-consistent by
+construction.
+
+### +24.93% is not comparable to +183.67% or +10.53%
+
+These three numbers are the same command over the same window, and it is a
+mistake to read them as a time series of market performance. They differ
+primarily in **how much of the account was invested**, which is an allocation
+rule, not a market fact:
+
+| benchmark run | universe | allocation | buy floor | notional deployed | all-in deployed | headline |
+|---|---|---|---|---:|---:|---:|
+| `20260729T200904Z-4aeaa9` | 23 groups | equal-weight, all | no | $6,012.55 (60.1%) | $6,296.27 (63.0%) | **+183.67%** |
+| `20260804T061600Z-37a23f` | 217 groups | equal-weight, all | no | $466.78 (4.7%) | $550.77 (5.5%) | **+10.53%** |
+| `20260807T135424Z-8362bc` | 217 groups | screened top-100 + sweep | yes | $7,423.07 (74.2%) | $9,991.43 (99.9%) | **+24.93%** |
+
+All three are impact-on. The first two rows are taken from this file's Full
+set coverage section (its capital-deployment table), which is where they were
+derived; only the third is new here.
+
+**+24.93% is the first of the three that is a return on a substantially
+invested account**, so it is the first that can be read as "what holding
+sealed did". The other two are returns on 63% and 5.5% of the money, with the
+rest in a zero-yield cash sleeve. Do not construct a narrative out of
+183.67 → 10.53 → 24.93: it is **three different allocation rules over two
+different universes under two different cost models**, not a market time
+series. The table's own columns say so — step 1 widened the universe from 23
+tcgcsv groups to 217, and step 3 added the buy floor on top of a new
+allocation rule. (An earlier version of this paragraph called it "an
+allocation rule changing under a fixed market", which contradicts the table
+directly; the conclusion it supports is unchanged.) Only the last figure is
+a bar. Every published number from
+the previous plan was measured against the 4.7%-deployed benchmark and is
+superseded as a comparison point.
+
+Its risk metrics change character for the same reason. The 4.7% benchmark
+reported a Sharpe of 6.57 and a max drawdown of −0.90%, which were
+money-market artifacts of a 95%-cash account, not risk-adjusted quality. The
+repaired benchmark reports Sharpe 0.63 and a far larger max drawdown. That
+looks worse and is more honest.
+
+**But read that drawdown for what it measures, which is not market risk.**
+Recomputed from the run's own `equity.parquet`, the maximum drawdown occurs
+on the **first fill day**, against a running peak equal to the starting cash
+— i.e. the all-cash, pre-trade account. Equity steps down the moment the
+account converts cash into inventory and never approaches that level of
+drawdown again over the remaining 28 months. It is **entry friction booked
+instantly**: seller-side costs plus, since the buy floor landed, the premium
+between the sales print a position marks at and the cheapest listing it must
+actually pay. That makes it a genuinely useful number — it is the round-trip
+cost of *taking* the sealed position, priced in one figure — but it is not
+"how far a long sealed position fell". Do not quote it as market risk, and do
+not compare it against a strategy's drawdown as though the two measure the
+same thing. (The standing mark-smoothing caveat applies to every Sharpe in
+this file: thin markets and carry-forward marks inflate them all.)
+
+### Before/after: stitched OOS total return, all six strategies plus the benchmark
+
+All runs `--start 2024-03-01 --end 2026-06-30 --trials 15`, 11 folds, market
+impact **on**, 217-group universe on both sides. The "before" column is taken
+from the Full set coverage section's post-swap column, which is the most
+recent impact-on set and shares this section's universe and window. **For the
+six strategy rows the only instrument difference is the buy floor** — a
+strategy's stitched OOS return never reads the benchmark (nothing in
+`research/walkforward.py` or `research/search.py` touches buy-and-hold), and
+every other change on the branch is off the backtest path: `buy_and_hold`
+itself, the same floor mirrored into the live paper-fill planner
+(`live/paper.py`), the new `research/horizon.py` and its CLI command, and an
+`(asset, day)` uniqueness guard in the C++ market view that throws on
+violation rather than altering behaviour (no run hit it — every run
+completed). The benchmark row is a single full-window `pkmn
+backtest`, not a walk-forward, on both sides, and that row *does* move on
+both axes at once.
+
+| strategy | run id (after) | before (no floor) | after (floor) | IS mean CAGR | OOS mean CAGR | gap |
+|---|---|---:|---:|---:|---:|---:|
+| sealed-accumulation | `20260808T215853Z-b10d5e` | −8.59% | **−10.31%** | +3.12% | −0.97% | 0.1186 |
+| xs-momentum | `20260808T220726Z-4b7346` | −38.72% | **−54.46%** | −5.60% | −6.14% | 0.1098 |
+| ml-ranker | `20260808T231711Z-415dc2` | −81.64% | **−84.48%** | −24.94% | −14.18% | 0.0487 |
+| ml-ranker-v2 | `20260809T013624Z-98cf5a` | −99.81% | **−99.43%** | −47.61% | −27.37% | −0.0600 |
+| cost-aware-reversion | `20260808T221152Z-4766a9` | −98.70% | **−99.98%** | −34.77% | −46.00% | 0.3047 |
+| dip-buyer | `20260808T220318Z-15d706` | −99.80% | **−100.00%** | −74.28% | −54.39% | 0.0086 |
+| **buy-and-hold sealed** (backtest) | `20260807T135424Z-8362bc` | +10.53% (4.7% notional / 5.5% all-in) | **+24.93% (74.2% notional / 99.9% all-in)** | — | — | — |
+
+Timings: the four native walk-forwards took ~4.5 minutes each; ml-ranker 65
+minutes and ml-ranker-v2 139 minutes, both `--workers 1` under
+`caffeinate -dimsu`.
+
+### Five of six got worse. That is the instrument working, not a regression
+
+The design spec predicted this in advance and committed in writing to not
+treating it as failure ("Expected consequence, stated in advance": *"A plan
+built on this design must not treat a worse result as failure."*). It
+happened, and it is recorded here as predicted rather than discovered.
+
+The mechanism is direct. dip-buyer and cost-aware-reversion select on
+`market`, so they still see a $71.88 print as a bargain — and now pay the
+$1,800 that was the cheapest listing actually available that day. The
+"bargains" the dip-selectors were finding stopped being buyable at the price
+that made them look like bargains.
+
+**Be precise about the size of that change, because this file already
+measured the old cost.** On the exact fill traced in the Full set coverage
+section (product 107010, 2025-08-19), the old model's walk from `market`
+toward `mid` already produced an effective **$936.27/unit all-in** — about
+half the cheapest listing, which is why that section concluded the impact
+charge was defensible and in fact undercharging, and that the entry *price*
+was the problem. Under the floor, the same quote row costs `max(71.88, 1800)`
+= $1,800 base plus a walk term that collapses to zero (that day `low` = `mid`
+= `high` = $1,800, so `mid - base` = 0), i.e. **≈$1,800/unit all-in**. So the
+honest contrast on that row is roughly **$936 → $1,800, a doubling** — not
+$71.88 → $1,800. (That is per-unit arithmetic on the quote row, not a claim
+about an observed fill: the floor also changes affordability sizing, so the
+new engine need not buy the same 3 units.) Compounding it, positions still **mark**
+at `market` (deliberately unchanged), so buying at the ask and marking at the
+last sale books an immediate unrealised loss. That combination is correct:
+you really did pay the offer, and the position really is worth what
+comparable units are selling for.
+
+What changed is not that the strategies became worse traders. It is that the
+number is now a real price paid for a real listing instead of an artifact of
+walking outward from a price nobody was offering. **The previous numbers were
+flattering; the current ones are not punitive.**
+
+ml-ranker-v2 moved the other way, −99.81% → −99.43%. At that magnitude the
+difference is noise on a near-total loss, not a signal, and it should not be
+cited as the buy floor helping anything.
+
+### Cross-strategy rigor: `pkmn evaluate`
+
+Run `20260809T013934Z-a453f5`, artifacts in
+`data/results/evaluate-2026-08-08/`, 660 aligned days (2024-08-28 ..
+2026-06-18), benchmark `data/results/20260807T135424Z-8362bc` — the repaired
+benchmark, confirmed in the report header rather than assumed.
+
+| strategy | OOS total return | 95% CI | Sharpe (ann.) | deflated Sharpe |
+|---|---:|---|---:|---:|
+| cost-aware-reversion | −99.98% | [−100.00%, −92.14%] | −0.42 | 0.097 |
+| dip-buyer | −100.00% | [−100.00%, −98.58%] | −1.19 | 0.012 |
+| ml-ranker | −84.48% | [−99.47%, +177.32%] | −0.11 | 0.155 |
+| ml-ranker-v2 | −99.43% | [−100.00%, −36.03%] | −1.14 | 0.001 |
+| sealed-accumulation | −10.31% | [−24.22%, +4.57%] | −0.98 | 0.003 |
+| xs-momentum | −54.46% | [−81.44%, −6.08%] | −1.34 | 0.000 |
+
+**White's Reality Check, jointly over all six: p = 1.0000** (seeded
+stationary block bootstrap, n_boot=10000, mean block 10 days, seed 42). The
+observed best excess return sat at or below every one of 10,000 luck-only
+recentered resample maxima. Every deflated Sharpe is far below the 0.5
+coin-flip point, let alone the conventional 0.95 bar. ml-ranker's 0.155 is
+the highest and sits beside a 95% CI spanning [−99.47%, +177.32%] — large
+because the estimate is uninformative, not because the strategy is good.
+
+The p-value moved from the previous branch's corrected 0.8038 back to 1.0000.
+That is expected and is not itself a finding: the benchmark it is measured
+against went from a 5.5%-deployed cash sleeve to a fully invested position
+returning +24.93%, so beating it got harder. The two p-values are measured
+against two different bars.
+
+**A live trap that was still armed when this section was written, and has
+since been disarmed.** At the time of the run above, `pkmn evaluate` still
+resolved its benchmark by globbing `data/results/buy-and-hold-sealed-*`
+before falling back to the run registry — the exact mechanism that published
+p = 1.0000 instead of 0.8038 on the previous branch. It picked the right
+benchmark **only because** the stale directories were renamed
+`STALE-preswap-23group-*`, so the glob matched nothing and the registry
+fallback fired. The glob has now been deleted (2026-08-09): evaluate goes
+through the same `_benchmark_candidates` registry rule `pkmn horizon` uses,
+drops the paired sidecar benchmarks tagged `benchmark_for`, and refuses a
+benchmark whose window does not span the strategies'. **The p-value quoted
+in this section predates that fix**; it was resolved by hand-verified
+directory renames rather than by the code, and the re-run supersedes it.
+
+### `pkmn horizon`: the measurement this branch exists to produce
+
+**Read the method caveat before the numbers.** The plan intended to run
+horizon on the walk-forward artifacts. It cannot: a walk-forward artifact
+carries `stitched_equity.parquet` and **no `fills.parquet`**, and horizon
+pairs fills. So each strategy was re-run as a **default-parameter full-window
+backtest** over the same window, and horizon was run on that. **These are not
+the walk-forward parameter sets.** What they gain is that no tuned parameter
+can contaminate the per-trade comparison; what they lose is that they are not
+the same runs as the walk-forward table above. Read them as a separate
+measurement, not as a decomposition of the walk-forward returns.
+
+The source runs, with their own full-window totals for context (impact on,
+$10,000, no starting holdings):
+
+| strategy | horizon source run | full-window total return |
+|---|---|---:|
+| buy-and-hold sealed (the index) | `20260807T135424Z-8362bc` | +24.93% |
+| sealed-accumulation | `20260809T014019Z-c45150` | +5.57% |
+| cost-aware-reversion | `20260809T014422Z-a9749a` | −98.55% |
+| ml-ranker | `20260809T020349Z-903506` | −99.75% |
+| xs-momentum | `20260809T014340Z-2abc05` | −99.67% |
+| dip-buyer | `20260809T014257Z-e58d69` | −99.74% |
+| ml-ranker-v2 | `20260809T100121Z-0f45f1` | −99.82% |
+
+Every trip is scored against benchmark run `20260807T135424Z-8362bc`, whose
+git sha is recorded in each horizon report — buy-and-hold's allocation rule
+changed on this branch, so the strategy name alone no longer identifies the
+bar.
+
+**Per-strategy summary. Sample size is part of every number here and must
+travel with it.**
+
+| strategy | round trips | still open at 2026-06-30 | median edge (all trips) | mean edge | win rate | **1-3m median edge** | **trips in 1-3m** |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| sealed-accumulation | 33 | 10 | −10.98% | −11.16% | 33.3% | **+13.90%** | **1** |
+| cost-aware-reversion | 132 | 10 | −39.25% | −30.79% | 15.9% | **−16.57%** | **41** |
+| ml-ranker | 145 | 0 | −33.63% | −23.27% | 20.7% | **−37.96%** | **109** |
+| xs-momentum | 106 | 1 | −44.02% | −41.66% | 6.6% | **−45.33%** | **99** |
+| dip-buyer | 175 | 0 | −46.12% | −39.60% | 9.7% | **−51.21%** | **116** |
+| ml-ranker-v2 | 20 | 0 | −84.32% | −77.76% | **0.0%** | **−84.32%** | **20** |
+
+Median edge per holding-period bucket, trip count in parentheses. Buckets are
+`<1m` = under 30 days, `1-3m` = 30-89, `3-6m` = 90-179, `>6m` = 180+
+(`research/horizon.py` `_bucket_for`):
+
+| strategy | <1m | 1-3m | 3-6m | >6m |
+|---|---|---|---|---|
+| sealed-accumulation | −12.40% (5) | **+13.90% (1)** | +6.91% (8) | −22.43% (19) |
+| dip-buyer | −28.92% (59) | −51.21% (116) | n/a (0) | n/a (0) |
+| xs-momentum | n/a (0) | −45.33% (99) | +55.40% (5) | −83.63% (2) |
+| cost-aware-reversion | −13.29% (30) | −16.57% (41) | −65.10% (60) | −37.24% (1) |
+| ml-ranker | n/a (0) | −37.96% (109) | −17.28% (20) | +4.75% (16) |
+| ml-ranker-v2 | n/a (0) | −84.32% (20) | n/a (0) | n/a (0) |
+
+#### Reading the 1-3 month band honestly
+
+**The only positive 1-3m figure in the table is sealed-accumulation's
++13.90%, and it is one round trip** — against that same strategy's all-trip
+median of −10.98%. One trade is an anecdote. It is reported because it is
+what the data says, and it must never appear anywhere without its sample size
+beside it. The other scattered positives are the same kind of number:
+xs-momentum's 3-6m +55.40% rests on 5 trips and sealed-accumulation's 3-6m
++6.91% on 8.
+
+**The five strategies with a real sample in the band — 20 to 116 trips — lose
+to simply holding the index over the identical dates by 16.6 to 84.3
+percentage points per trade.** Median, mean and win rate all point the same
+way, so this is not an artifact of one summary statistic.
+
+Win rate *within* the 1-3m band, counted directly off the `trips` arrays in
+each `horizon.json` using the same bucket rule (the counts reproduce the
+published bucket sizes exactly):
+
+| strategy | trips in band that beat the index |
+|---|---|
+| sealed-accumulation | 1 / 1 (the single trip above) |
+| cost-aware-reversion | 9 / 41 (22.0%) |
+| ml-ranker | 14 / 109 (12.8%) |
+| xs-momentum | 2 / 99 (2.0%) |
+| dip-buyer | 1 / 116 (0.9%) |
+| ml-ranker-v2 | 0 / 20 (0.0%) |
+
+ml-ranker-v2 beat the index on **none** of its 20 trades, every one of which
+fell in the 1-3m band.
+
+Two structural notes on the band. dip-buyer and ml-ranker-v2 have *no* trips
+past 3 months at all, so their 1-3m number is nearly their whole record
+rather than a slice of it. cost-aware-reversion has 4 still-open trips inside
+its 41-trip band (closed at the final mark and flagged in the artifact); the
+other five strategies have none in-band, so only cost-aware-reversion's band
+figure mixes marks with realized exits.
+
+#### What a per-trip edge is and is not
+
+It is one round trip's return, net of the fees and impact recorded on both
+fills, minus the sealed index's return over those same two dates. It is
+**not** a portfolio return: it ignores how much capital sat idle between
+trips, and it weights a one-unit trade the same as a twenty-unit one. A
+strategy could in principle post a positive median edge and still lose money,
+or the reverse. Here the two agree — every strategy with a negative median
+edge also lost at the portfolio level, and sealed-accumulation's +5.57%
+full-window return still trails the benchmark's +24.93% — so nothing rests on
+the distinction, but it should not be forgotten the next time only one of the
+two is positive.
+
+The standing mark-smoothing caveat applies with full force: a still-open
+trip's return is a mark, not a realized exit, and marks on this data are
+carried forward through thin markets.
+
+**Correction (2026-08-09), affecting every still-open trip in the tables
+above.** When those numbers were produced, an open trip was scored at the
+raw final mark with **no exit cost deducted**, while every closed trip beside
+it was already net of the fees and impact the engine charged on both fills.
+With a 12.75% seller fee that flattered open trips by roughly 13 points, and
+it fell hardest on the two least-bad strategies (10 of sealed-accumulation's
+33 trips; 4 of cost-aware-reversion's 41 in-band). `research/horizon.py` now
+charges a modelled exit — fees, shipping and the sell-side walk, through the
+run's own CostModel — so open and closed trips sit on one scale. **The edge
+figures in this section therefore overstate exactly those strategies and are
+superseded by the re-run.** The modelled exit still ignores the per-day
+liquidity cap and is still a mark rather than a fill; both are stated in the
+generated report.
+
+### The honest conclusion
+
+**The owner's question now has a measured answer, and the answer is no.**
+
+Over the 1-3 month band, measured per round trip against holding the sealed
+index over that trip's own dates, on a benchmark holding 74.2% of the account
+in product and consuming 99.9% of it all-in, with
+buys priced at the cheapest listing that actually existed, **none of the six
+strategies beats holding sealed — and not narrowly.** The strategies with
+real samples in the band lose by 16.6 to 84.3 percentage points per trade and
+beat the index on 0.9% to 22.0% of their trades. The single positive 1-3m
+figure in the whole study is one trade.
+
+The horizon framing was built specifically to remove the excuse that the old
+28-month comparison was unfair on exposure time. The excuse is gone and the
+strategies still lose.
+
+What this branch delivered:
+
+- **A bar worth measuring against.** 74.2% of the account in product instead
+  of 4.7% (99.9% all-in instead of 5.5%), +24.93% over the window, and a max
+  drawdown that finally measures something — though not market risk: it is
+  booked on the first fill day against the all-cash starting peak, so it
+  prices the friction of *entering* the sealed universe (see "The repaired
+  benchmark" above).
+- **Fills priced at something you could actually transact at**, and the
+  resolution of an open question about `market < low` that turned out to be a
+  category error in the consumer rather than a property of the data.
+- **A per-trade measurement matched to the holding period the owner cares
+  about**, which no prior section in this file could produce.
+
+It delivered **no strategy**. Nothing here is a candidate for real money, and
+the correct reading of the five-of-six worsening is that the previous numbers
+were measured with a broken instrument, not that anything degraded.
+
+### Deliberate deviations from the design spec
+
+Both are behaviour the spec called for differently; both are intentional and
+recorded here rather than left to be discovered.
+
+1. **`n_assets` is not walk-forward-searchable.** The spec put it on the
+   registry entry "like every other hyperparameter — CLI-settable,
+   walk-forward-searchable, and declarative". It is CLI-settable and
+   declarative (`BUY_AND_HOLD_PARAMS` in `research/backtest_run.py`, bounds
+   [1, 10000], default 100) but deliberately **not** in `REGISTRY`, so no
+   optuna search space exists for it. Reason: buy-and-hold is the bar, not a
+   candidate. Tuning the bar to maximise its own return would make every
+   comparison against it self-serving, and tuning it to anything else would
+   make it arbitrary. A fixed, declared, auditable `n_assets` is the point.
+2. **The buy floor is gated on `impact_enabled`**
+   (`engine/execution.py:86-102`, `engine/costs.py` `buy_impact`). The floor
+   premium is routed through the `impact` column, so with impact off there is
+   no column to charge it to; worse, clipping affordability off a floored base
+   with no offsetting impact term cut real quantities by up to 10x on a 10x
+   floor. Gating keeps `--no-impact` runs bit-identical to the pre-floor
+   engine. **The consequence is real and must be stated: a `--no-impact` run
+   again sizes and prices buys at a sales print that may sit below any live
+   offer.** Flat-cost runs are a comparability tool, not a model of executable
+   prices — do not read a `--no-impact` fill as a price you could get.
+
+### Known live traps and follow-ups
+
+- ~~**`pkmn evaluate`'s benchmark glob is still unfixed.**~~ **Fixed
+  2026-08-09.** The glob is deleted; resolution is registry-only through
+  `_benchmark_candidates`, sidecar benchmarks tagged `benchmark_for` are
+  skipped, and a benchmark that does not span the strategies' window is
+  refused instead of silently shrinking the comparison. Creating a
+  `buy-and-hold-sealed-*` directory by hand no longer changes any result.
+- **Walk-forward artifacts carry no `fills.parquet`**, so `pkmn horizon`
+  cannot read a walk-forward run. Every horizon number above therefore comes
+  from a default-parameter backtest. Writing per-fold fills into the
+  walk-forward artifact would let horizon score the tuned parameter sets; that
+  is unbuilt.
+- **`pkmn horizon` cannot analyse a run started with `--holdings`.** Seeded
+  positions have no matching buy, so FIFO pairing has nothing to pair the exit
+  against; it fails cleanly with an error rather than silently dropping the
+  trip.
+- **The ml-ranker parity bridge was not re-verified on this branch.** Only the
+  five native strategies appeared in the `parity_full.py` output quoted above.
+- **The benchmark is more concentrated than designed** — 38 assets holding
+  units where the pre-floor day-one measurement predicted 73. Whether
+  `n_assets` should be raised to restore breadth is unmeasured.
+- **The bar is warmup-sensitive and `pkmn backtest` has no `--warmup-days`
+  flag.** +24.93% is the warmup-0 figure; warmup 120 gives +16.07% on the
+  same window. Whether the bar should be produced at the walk-forward's
+  warmup (120) instead, so bar and candidates share it, is a real question
+  this branch did not answer.
+- **Open questions 1 and 3 from the Full set coverage section remain open:**
+  the two ML losses are still untraced, and no liquidity-floor experiment has
+  been run. The screen shipped here is the machinery question 3 needs.
+
+## Formula baseline (2026-10-24/25): the post-fix-wave re-run, and catalog drift as a hidden input
+
+This is the re-run the instrument-repair final-review fix wave left pending.
+It supersedes every benchmark and horizon figure in the Instrument repair
+section above (those predate the fix wave's affordability filter, screen fix,
+floored-base tier and net-of-exit horizon scoring). Same window
+(2024-03-01..2026-06-30), impact on, `--execution formula` on every command,
+so none of it is comparable to a book run. Code `3617c61` on
+`feat/instrument-repair-horizon`. Every record reads `git_dirty: true`; the
+only differences from that commit were the untracked `.vscode/` and
+`docs/superpowers/handoffs/` directories, with no tracked file modified.
+Warehouse fingerprint 38,202,342 rows, 2024-02-08..2026-09-13. Catalog
+`products.parquet` sha256 `4cf6c3a62084071524ef0b0a506821fbe5ac520e829580320e019bc22deb1798`
+(32,887 rows), snapshotted at
+`data/results/ARCHIVE-b154d96-20260810/products-snapshot-20261025T1106.parquet`.
+These registry records predate `catalog_sha256` in `data_fingerprint`, so
+this paragraph is the only place the catalog hash is recorded for them.
+
+### The bar
+
+Buy-and-hold sealed, run `20261024T170908Z-99ee95`: **+126.84%**, CAGR
+42.09%, Sharpe 3.50, max drawdown -14.27%, 60 fills. It is bit-identical
+to the August post-fix run `20260809T235407Z-7c776b`.
+
+Deployment, from the run's own fills (all 60 buys land on 2024-03-02, one
+fill per asset across 60 assets): $8,614.21 notional + $60.00 fees +
+$1,321.21 impact = $9,995.42 of $10,000. **86.1% notional, 99.95% all-in.**
+The largest single position is 2.23% of the account notional (3.76%
+all-in), against 50.05% in one product before the affordability filter.
+
+The drawdown is entry friction again, not market risk: the trough is
+2024-03-28 against the all-cash starting peak, after which nothing deeper
+recurs. Day-one equity is already $8,618.79 (-13.8%), which is what it
+costs to convert the account into sealed inventory under the buy floor.
+
+The usual caveats apply unchanged: `warmup_days=0` (the walk-forward rows
+below use 120), the Sharpe is inflated by mark smoothing, and **+126.84% is
+not comparable to +24.93%, +10.53% or +183.67%**: each is a different
+allocation rule, and the affordability filter is what moved this one.
+
+### Walk-forward, stitched OOS, and `pkmn evaluate`
+
+`pkmn evaluate --execution formula`, run `20261025T195117Z-04d2b6`,
+artifact `data/results/evaluate-2026-10-25/`, 660 aligned days
+(2024-08-28..2026-06-18) against `99ee95`:
+
+| strategy | walk-forward run | stitched OOS | 95% CI | Sharpe | DSR |
+|---|---|---|---|---|---|
+| sealed-accumulation | `20261024T171900Z-638007` | -10.31% | [-24.22%, +4.57%] | -0.98 | 0.001 |
+| xs-momentum | `20261024T173024Z-899966` | -35.16% | [-64.80%, +3.85%] | -1.12 | 0.000 |
+| ml-ranker | `20261025T165638Z-74aaba` | -90.33% | [-99.37%, -20.30%] | -0.77 | 0.010 |
+| cost-aware-reversion | `20261024T173611Z-93cf6a` | -97.87% | [-99.93%, -73.01%] | -1.23 | 0.002 |
+| dip-buyer | `20261024T172414Z-e221d5` | -99.17% | [-99.93%, -93.45%] | -2.50 | 0.000 |
+| ml-ranker-v2 | `20261025T195113Z-5c1b81` | -99.94% | [-100.00%, -85.51%] | -1.82 | 0.000 |
+
+**Joint White's Reality Check p = 1.0000.** Every deflated Sharpe is far
+below the 0.5 coin-flip point. Nothing beats buy-and-hold sealed.
+
+The four native walk-forwards are bit-identical to August
+(`evaluate-2026-08-10`, run `20260810T182923Z-946543`). The two ML ones are
+not. ml-ranker moved from -92.88% to -90.33% (August CI [-99.80%, +0.91%],
+DSR 0.020), with different fold-1 parameters. ml-ranker-v2 moved from
+-99.9358% to -99.9434% (Sharpe -1.755 to -1.815), with different
+parameters in folds 4 and 9 and the same in the other nine. The native
+strategies' DSRs shift in the third decimal only because DSR is corrected
+across all six strategies' Sharpes.
+
+### `pkmn horizon`, default-parameter backtests
+
+Same method caveat as before: walk-forward artifacts carry no
+`fills.parquet`, so these are default-parameter backtests over the same
+window, scored per round trip against the sealed index over each trip's own
+dates, with still-open trips net of a modelled exit.
+
+| strategy | backtest run | total return | trips | 1-3m trips | 1-3m median edge | 1-3m trips beating the index |
+|---|---|---|---|---|---|---|
+| sealed-accumulation | `20261024T171049Z-e89484` | +6.22% | 32 | 2 | -11.96% | 1 of 2 |
+| cost-aware-reversion | `20261024T171319Z-316389` | -98.41% | 125 | 35 | -22.66% | 8 of 35 |
+| ml-ranker | `20261024T182706Z-43d70a` | -99.81% | 121 | 104 | -44.62% | 10 of 104 |
+| xs-momentum | `20261024T171230Z-d79ea2` | -98.69% | 170 | 159 | -49.00% | 2 of 159 |
+| dip-buyer | `20261024T171145Z-419922` | -99.71% | 164 | 115 | -52.88% | 1 of 115 |
+| ml-ranker-v2 | none | | | | | |
+
+**Over the owner's 1-3 month band, none of them beats holding sealed.** The
+only positive band figure anywhere is xs-momentum's 3-6m +45.63% over 8
+trips; quote it with the 8. The previous section's one positive 1-3m number
+(sealed-accumulation, one trip) is gone: with today's catalog it is
+-11.96% over two trips.
+
+**ml-ranker-v2 has no horizon result.** Its default-parameter backtest was
+killed after 21 hours of swapping (memory growth, most likely in a polars
+`group_by` inside the per-bar bridge; not profiled). That is an open gap,
+not a finding.
+
+### Catalog drift: a hidden, mutable input to every number in this file
+
+Three of the five default backtests (dip-buyer, xs-momentum,
+cost-aware-reversion) and the benchmark are bit-identical to August.
+Sealed-accumulation (+5.57% then, +6.22% now) and ml-ranker (-99.820%
+then, -99.813% now) are not, and neither are the two ML walk-forwards.
+
+**ML is deterministic.** A second ml-ranker walk-forward on the same
+catalog reproduced `74aaba` bit for bit (equity curve, summary, every fold's
+parameters, stitched -0.9033089469500113). So the August difference is an
+input, not noise.
+
+**The input is the product catalog, and specifically `released_on`.**
+Prices inside the window are immutable archive days. The catalog is not:
+`refresh_products` merges a fresh fetch into `products.parquet` on every
+ingest, and fresh rows win. Against the closest surviving older copy
+(`data/warehouse-full-failed-197groups/products.parquet`, 2026-08-03), the
+current catalog has 360 new rows and, on the 32,527 shared ones, 104
+changed `released_on` values (102 dates that became null, 2 that moved; 7
+sealed, 97 single), 73 changed names, 13 changed groups, 7 changed
+rarities and **0** changed kinds. Upstream TCGplayer data dropped release
+dates that it used to publish.
+
+That explains the pattern exactly. `released_on` is read by
+sealed-accumulation's age gate (`strategies/sealed_accumulation.py:54-55`;
+a null date fails both comparisons, so the product leaves the candidate set)
+and by the ML strategies' age features. The three strategies that never read
+it, and the benchmark, which screens on `kind` (unchanged) and prices, did not move.
+
+**Proven for sealed-accumulation by A/B.** In a scratch root (price
+partitions symlinked, today's catalog with only those 104 `released_on`
+values restored from the 2026-08-03 copy), the sealed-accumulation default
+backtest reproduces August's `20260810T182947Z-1544c1` bit for bit: total
+return 0.055682032500000034, the same 52 fills and the same equity curve.
+One of the swapped trades is product 624676 (Destined Rivals Elite Trainer
+Box), whose release date was 2025-05-30 in August and is null now.
+**Not proven for ml-ranker.** The same scratch-root A/B on the ml-ranker
+default backtest (run `20261026T163602Z-28a797` in the scratch registry)
+gives -99.780%, against August's -99.820% (`20260810T214552Z-d96e5f`) and
+today's -99.813%, with 182 fills against August's 191. Restoring release
+dates alone moves ml-ranker but does not reproduce August. That is expected
+if more than `released_on` matters to it: the ML features also read `kind`
+and catalog membership, and 360 rows were added and 73 names, 13 groups and
+7 rarities changed. It is also possible that the 2026-08-03 copy is simply
+not the catalog August's ML runs saw (they ran on 2026-08-10, after
+further daily merges). The August catalog itself was never saved, so the
+ML half of this finding stays "input-driven, catalog the only changed
+input, mechanism not isolated". The ML run took about 10 hours wall-clock
+through the bridge, against 51 minutes for the same backtest on
+2026-10-24; the cause was not investigated (the lid-closed overnight hours
+are the obvious suspect), so treat it as a warning, not a measurement.
+
+What this means:
+
+- **Every research number in this file is a function of the catalog's state
+  on the day it was run**, not only of the code and the price history. Until
+  now the registry did not record that state. `feat/live-ingest` adds
+  `catalog_sha256` to `data_fingerprint`; until it lands, pin the catalog by
+  hand (as above) for any run that matters.
+- **The size of the effect tracks fragility, again.** The hard-filtered
+  native strategies moved by zero, or by 0.65 points on one default
+  backtest. The ML walk-forwards moved by 2.55 points on a 104-row metadata
+  change out of 32,887. This is the same signal as the Catalog completeness
+  section: an edge that real would not sit on release-date metadata.
+- **No conclusion changes.** Reality Check p = 1.0000 in both August and
+  today, and nothing beats the bar on either catalog.
+- **Not fixed, and a choice is needed.** The options are: freeze
+  `released_on` once seen, so a later null cannot erase a known date;
+  snapshot the catalog per research run; or accept drift and record the
+  hash. The third is what `feat/live-ingest` ships. The first is a
+  one-line merge rule but changes what "upstream wins" means.

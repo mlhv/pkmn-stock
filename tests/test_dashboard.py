@@ -158,3 +158,68 @@ def test_benchmark_runs_excludes_paired_benchmarks(tmp_path, monkeypatch) -> Non
 
     names = [p.name for p in dash.benchmark_runs()]
     assert names == ["20260727T100000Z-aaa111"]
+
+
+def test_benchmark_runs_filters_by_execution(tmp_path, monkeypatch) -> None:
+    """No comparison mixes book and formula runs: the overlay asks for the
+    viewed run's mode, and a missing execution key is formula."""
+    import app.dashboard as dash
+
+    results = _seed_registry(
+        tmp_path,
+        [
+            ("20260727T100000Z-aaa111", "buy-and-hold-sealed", {}),  # legacy = formula
+            ("20260727T100001Z-bbb222", "buy-and-hold-sealed", {"execution": "book"}),
+            ("20260727T100002Z-ccc333", "buy-and-hold-sealed", {"execution": "formula"}),
+        ],
+    )
+    # a legacy pre-registry directory: formula by construction
+    (results / "buy-and-hold-sealed-legacy").mkdir()
+    (results / "buy-and-hold-sealed-legacy" / "equity.parquet").write_bytes(b"")
+    monkeypatch.setattr(dash, "ROOT", tmp_path)
+    monkeypatch.setattr(dash, "RESULTS", results)
+
+    assert [p.name for p in dash.benchmark_runs("book")] == ["20260727T100001Z-bbb222"]
+    assert [p.name for p in dash.benchmark_runs("formula")] == [
+        "20260727T100002Z-ccc333",
+        "20260727T100000Z-aaa111",
+        "buy-and-hold-sealed-legacy",
+    ]
+    assert len(dash.benchmark_runs()) == 4  # unfiltered (Trades tab)
+
+
+def test_overlay_offers_only_benchmarks_in_the_viewed_runs_mode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Rendered: viewing a book walk-forward, the overlay selector lists the
+    book benchmark only, even though a NEWER formula one exists."""
+    from datetime import date, timedelta
+
+    import polars as pl
+
+    results = _seed_registry(
+        tmp_path,
+        [
+            ("20260727T100000Z-aaa111", "buy-and-hold-sealed", {"execution": "book"}),
+            ("20260727T100001Z-bbb222", "buy-and-hold-sealed", {}),  # newer, formula
+        ],
+    )
+    days = [date(2025, 1, 1) + timedelta(days=i) for i in range(5)]
+    curve = pl.DataFrame({"date": days, "equity": [100.0 + i for i in range(5)]})
+    for run_id in ("20260727T100000Z-aaa111", "20260727T100001Z-bbb222"):
+        curve.write_parquet(results / run_id / "equity.parquet")
+    wf = results / "wf-alpha-2025-01-01-2025-01-05-book"
+    wf.mkdir()
+    curve.write_parquet(wf / "stitched_equity.parquet")
+    (wf / "walkforward.json").write_text(
+        json.dumps({"strategy": "alpha", "folds": [], "summary": {}, "execution": "book"})
+    )
+    monkeypatch.chdir(tmp_path)
+    at = AppTest.from_file(DASHBOARD, default_timeout=30).run()
+    assert not at.exception
+    [overlay] = [s for s in at.selectbox if s.label == "Benchmark overlay"]
+    assert list(overlay.options) == ["20260727T100000Z-aaa111"]
+    # Final-review Important 2: the caption names the mode with the synthetic label.
+    from pkmn_quant.research.execution import BOOK_LABEL
+
+    assert f"Execution: {BOOK_LABEL}" in [c.value for c in at.caption]

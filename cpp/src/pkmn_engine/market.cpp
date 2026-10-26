@@ -57,17 +57,33 @@ MarketView::MarketView(std::size_t n_assets, std::vector<Day> trading_days,
     for (std::size_t a = 0; a < n_assets_; ++a) h_off_[a + 1] = h_off_[a] + counts[a];
     h_day_.resize(rows_.size());
     h_price_.resize(rows_.size());
+    h_mid_.resize(rows_.size());
+    h_low_.resize(rows_.size());
     std::vector<std::size_t> cursor(h_off_.begin(), h_off_.end() - 1);
     for (const auto& r : rows_) {
         auto& c = cursor[static_cast<std::size_t>(r.asset)];
         h_day_[c] = r.day;
         h_price_[c] = r.market;
+        h_mid_[c] = r.mid;
+        h_low_[c] = r.low;
         ++c;
     }
     h_prefmax_.resize(rows_.size());
     for (std::size_t a = 0; a < n_assets_; ++a) {
         double running = -std::numeric_limits<double>::infinity();
         for (std::size_t i = h_off_[a]; i < h_off_[a + 1]; ++i) {
+            // (asset, day) must be unique. The whole view assumes it and
+            // fails DIFFERENTLY in each place if it does not hold:
+            // print_count_at_or_before counts rows where screen.py counts
+            // distinct dates (a benchmark that buys different assets in each
+            // engine), quote_at_or_before/load_day keep one row and drop the
+            // other, and the marks compaction upstream drops repeats. One
+            // loud throw here beats several quiet divergences there. The
+            // slice is day-sorted, so adjacent equality proves it, and this
+            // rides the pass that already builds h_prefmax_ — no extra pass,
+            // no extra memory.
+            if (i > h_off_[a] && h_day_[i] == h_day_[i - 1])
+                throw std::invalid_argument("duplicate (asset, day) in price rows");
             running = std::max(running, h_price_[i]);
             h_prefmax_[i] = running;
         }
@@ -128,6 +144,25 @@ std::optional<double> MarketView::peak_until(AssetId a, Day d) const {
     auto it = std::upper_bound(h_day_.begin() + b, h_day_.begin() + e, d);
     if (it == h_day_.begin() + b) return std::nullopt;
     return h_prefmax_[static_cast<std::size_t>(it - h_day_.begin()) - 1];
+}
+
+std::int64_t MarketView::print_count_at_or_before(AssetId a, Day d) const {
+    // One row per (asset, day) — ENFORCED by the constructor above, not
+    // assumed — so the row count IS the distinct-day count that screen.py's
+    // n_unique("date") computes.
+    auto [b, e] = range_(a);
+    auto begin = h_day_.begin() + static_cast<std::ptrdiff_t>(b);
+    auto it = std::upper_bound(begin, h_day_.begin() + static_cast<std::ptrdiff_t>(e), d);
+    return static_cast<std::int64_t>(it - begin);
+}
+
+HistoricalQuote MarketView::quote_at_or_before(AssetId a, Day d) const {
+    auto [b, e] = range_(a);
+    auto begin = h_day_.begin() + static_cast<std::ptrdiff_t>(b);
+    auto it = std::upper_bound(begin, h_day_.begin() + static_cast<std::ptrdiff_t>(e), d);
+    if (it == begin) return {kNaN, kNaN};
+    auto i = static_cast<std::size_t>(it - h_day_.begin()) - 1;
+    return {h_mid_[i], h_low_[i]};
 }
 
 std::optional<double> MarketView::max_in_window(AssetId a, Day from, Day to) const {

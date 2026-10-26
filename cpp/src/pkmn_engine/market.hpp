@@ -29,6 +29,14 @@ struct MarkEvent {
     double price;
 };
 
+// The mid/low of one historical print. NaN in either field means "no usable
+// quote" — the asset had no print in range, or the source row's value was
+// null (Python None).
+struct HistoricalQuote {
+    double mid;
+    double low;
+};
+
 // Per-asset product attributes, indexed by AssetId.
 struct ProductTable {
     std::vector<std::int64_t> product_id;
@@ -66,6 +74,18 @@ class MarketView {
     std::optional<double> peak_until(AssetId a, Day d) const;
     std::optional<double> max_in_window(AssetId a, Day from, Day to) const;
 
+    // Count of distinct printed days for `a` at or before `d`. Mirrors
+    // research/screen.py's n_prints (which counts distinct dates — the
+    // constructor enforces one row per (asset, day) so the two agree).
+    // Anti-look-ahead: callers pass d <= today.
+    std::int64_t print_count_at_or_before(AssetId a, Day d) const;
+
+    // mid/low of the most recent print at or before `d`; both NaN when there
+    // is none. Mirrors research/screen.py's `latest` per-asset last-row join
+    // — deliberately NOT mid()/low(), which read only TODAY's print and would
+    // report "no quote" for an asset carrying a stale mark.
+    HistoricalQuote quote_at_or_before(AssetId a, Day d) const;
+
   private:
     double current_(const std::vector<double>& table, AssetId a) const;
     std::pair<std::size_t, std::size_t> range_(AssetId a) const;
@@ -87,6 +107,8 @@ class MarketView {
     std::vector<std::size_t> h_off_;   // n_assets_+1
     std::vector<Day> h_day_;
     std::vector<double> h_price_;
+    std::vector<double> h_mid_;        // NaN = source row had no value
+    std::vector<double> h_low_;        // NaN = source row had no value
     std::vector<double> h_prefmax_;    // running max within each asset slice
 
     // marks cursor

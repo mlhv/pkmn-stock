@@ -5,6 +5,7 @@ from datetime import date, timedelta
 from itertools import pairwise
 
 import polars as pl
+import pytest
 
 from pkmn_quant.research.features import (
     FEATURE_COLS,
@@ -280,27 +281,84 @@ def test_cost_frac_expr_matches_scalar_cost_model() -> None:
     """The vectorized label cost must equal the scalar CostModel arithmetic:
     cost = (buy_price + buy_impact) - (sell_proceeds - sell_impact), as a
     fraction of market, for one unit. Swept across tier edges and quote
-    shapes (present / missing / crossed)."""
+    shapes (present / missing / crossed).
+
+    The real `low` is passed to buy_impact, so this stays a genuine
+    cross-check of the label cost model against the engine cost model. The one
+    shape where the two legitimately differ — low > market, where the engine
+    applies an executable-price floor and cost_frac_expr does not — is
+    excluded here and pinned exactly by
+    test_cost_frac_expr_omits_the_executable_price_floor_by_design below."""
     from pkmn_quant.engine.costs import CostModel
     from pkmn_quant.research.features import cost_frac_expr
 
     cm = CostModel(impact_enabled=True)
+    markets = (0.5, 4.99, 5.0, 49.99, 50.0, 199.99, 200.0, 350.0)
     cases = []
-    for market in (0.5, 4.99, 5.0, 49.99, 50.0, 199.99, 200.0, 350.0):
+    for market in markets:
         for mid, low in (
             (market * 1.05, market * 0.9),  # normal quotes
             (None, None),  # missing
-            (market * 0.95, market * 1.1),  # crossed both ways -> zero impact
+            (market * 0.95, market * 1.1),  # crossed both ways -> zero walk
         ):
             cases.append({"market": market, "mid": mid, "low": low})
     frame = pl.DataFrame(cases).with_columns(cost_frac_expr(cm).alias("frac"))
+    checked = 0
     for row in frame.iter_rows(named=True):
         m, mid, low = row["market"], row["mid"], row["low"]
+        if low is not None and low > m:
+            continue  # floor case; see the dedicated test below
+        checked += 1
         scalar = (
-            (cm.buy_price(m) + cm.buy_impact(m, mid, 1))
+            (cm.buy_price(m) + cm.buy_impact(m, mid, low, 1))
             - (cm.sell_proceeds(m) - cm.sell_impact(m, low, 1))
         ) / m
         assert abs(row["frac"] - scalar) < 1e-12, (m, mid, low)
+    # The skip above must not quietly swallow the sweep: 2 of the 3 quote
+    # shapes are non-inverted, across every market.
+    assert checked == 2 * len(markets)
+
+
+def test_cost_frac_expr_omits_the_executable_price_floor_by_design() -> None:
+    """Pins a KNOWN, DELIBERATE inconsistency between the label cost model and
+    the engine cost model, so it is asserted rather than hidden.
+
+    Since 2026-08 the engine floors a buy at max(market, low): tcgcsv derives
+    `market` from recent completed SALES but `low` from current LISTINGS, so
+    market < low is ordinary and a fill cannot happen below the cheapest offer.
+    `cost_frac_expr` does NOT model that floor. Closing the gap is a research
+    change, not a cost-model change — it would move ml-ranker-v2's
+    net-of-cost training labels (features.py:259, the only consumer;
+    cost_aware_reversion.py computes its own hurdle and is unaffected) — so it
+    is deferred rather than smuggled in.
+
+    The divergence is exactly the floor premium as a fraction of market, and
+    nothing else. market 10, mid 9.5, low 11 (listings above the print, so the
+    walk is crossed on both sides and contributes zero):
+      engine scalar = (buy_price 11 + buy_impact 1.0)
+                      - (sell_proceeds 7.725 - sell_impact 0.0) = 4.275
+                      -> 0.4275 of market
+      cost_frac_expr = 2*1 + 10*0.1275 + 0 + 0 = 3.275 -> 0.3275 of market
+      difference     = 0.1000 = (11 - 10) / 10, the premium per unit
+    If cost_frac_expr is ever taught the floor, this test fails and tells the
+    next reader precisely which gap closed.
+    """
+    from pkmn_quant.engine.costs import CostModel
+    from pkmn_quant.research.features import cost_frac_expr
+
+    cm = CostModel(impact_enabled=True)
+    m, mid, low = 10.0, 9.5, 11.0
+    frame = pl.DataFrame([{"market": m, "mid": mid, "low": low}]).with_columns(
+        cost_frac_expr(cm).alias("frac")
+    )
+    scalar = (
+        (cm.buy_price(m) + cm.buy_impact(m, mid, low, 1))
+        - (cm.sell_proceeds(m) - cm.sell_impact(m, low, 1))
+    ) / m
+    assert scalar == pytest.approx(0.4275)
+    assert frame["frac"][0] == pytest.approx(0.3275)
+    # The whole gap is the premium (low - market) / market, to the last bit.
+    assert scalar - frame["frac"][0] == pytest.approx((low - m) / m, abs=1e-12)
 
 
 def test_cost_frac_hand_derivation() -> None:

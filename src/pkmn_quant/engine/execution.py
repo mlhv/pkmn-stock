@@ -56,10 +56,20 @@ class ExecutionSimulator:
             if market is None or market <= 0 or order.quantity == 0:
                 continue  # asset didn't trade today; order expires unfilled
             used = filled_today.get(order.asset, 0)
-            cap_left = self.cost_model.max_daily_qty(market) - used
+            quote = quotes_map.get(order.asset)
+            # The depth cap is a claim about the product being transacted, so
+            # it is tiered on the price actually paid: the floored base on a
+            # buy (CostModel.buy_base), the print on a sell, which has no
+            # floor. Off `market`, an inverted row buys at $60 with the depth
+            # of the $4 product the print names.
+            tier_price = (
+                self.cost_model.buy_base(market, quote.low if quote is not None else None)
+                if order.quantity > 0
+                else market
+            )
+            cap_left = self.cost_model.max_daily_qty(tier_price) - used
             if cap_left <= 0:
                 continue
-            quote = quotes_map.get(order.asset)
             fill = (
                 self._fill_buy(order, market, portfolio, day, cap_left, used, quote)
                 if order.quantity > 0
@@ -81,16 +91,29 @@ class ExecutionSimulator:
         used: int,
         quote: Quote | None,
     ) -> Fill | None:
-        qty = min(order.quantity, cap_left)
-        # afford: qty * market + shipping_per_line + impact(qty) <= cash
-        affordable = math.floor((portfolio.cash - self.cost_model.shipping_per_line) / market)
-        qty = min(qty, max(affordable, 0))
         mid = quote.mid if quote is not None else None
-        impact = self.cost_model.buy_impact(market, mid, qty, used)
+        low = quote.low if quote is not None else None
+        # A buy cannot execute below the cheapest current listing; `market` is
+        # sales-derived and can sit under it (see CostModel.buy_base, which
+        # also explains the impact_enabled gate and is the single definition
+        # of this price — `cap_left` above was tiered on the same number).
+        base = self.cost_model.buy_base(market, low)
+        qty = min(order.quantity, cap_left)
+        # afford: qty * base + shipping_per_line + walk-impact(qty) <= cash.
+        # With impact ON, qty*base <= qty*market + impact(qty), so `base` is a
+        # valid upper bound: it only changes how many times the decrement loop
+        # below runs, never where it stops — and off `market` that loop can run
+        # hundreds of iterations when low >> market. With impact OFF the true
+        # constraint is qty*market + shipping <= cash and a `base` clip would
+        # bind BELOW it, cutting real quantities (10x on a 10x floor); hence
+        # the gate above.
+        affordable = math.floor((portfolio.cash - self.cost_model.shipping_per_line) / base)
+        qty = min(qty, max(affordable, 0))
+        impact = self.cost_model.buy_impact(market, mid, low, qty, used)
         cost = qty * market + self.cost_model.shipping_per_line + impact
         while qty > 0 and cost > portfolio.cash:
             qty -= 1
-            impact = self.cost_model.buy_impact(market, mid, qty, used)
+            impact = self.cost_model.buy_impact(market, mid, low, qty, used)
             cost = qty * market + self.cost_model.shipping_per_line + impact
         if qty <= 0:
             return None

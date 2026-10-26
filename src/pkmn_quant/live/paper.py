@@ -50,9 +50,15 @@ def plan_paper_fills(
     """
     cash_remaining = cash
     batch: list[dict[str, object]] = []
+    # Live and paper pricing use the formula cost model, not book execution;
+    # research runs default to book, so a recommendation's quoted outlay can
+    # differ from what a book backtest would have charged.
     for rec in recommendations:
         mark = rec.market_price
-        cap = costs.max_daily_qty(mark)
+        # Executor parity (engine/execution.py): the depth tier comes off the
+        # price actually paid, so a buy tiers on the floored base and a sell,
+        # which has no floor, on the print.
+        cap = costs.max_daily_qty(costs.buy_base(mark, rec.low) if rec.action == "BUY" else mark)
         if rec.action == "SELL":
             # Clip to liquidity cap; rec.quantity already equals held qty.
             qty = min(rec.quantity, cap)
@@ -62,14 +68,19 @@ def plan_paper_fills(
             fees = round(qty * mark * costs.fee_rate + costs.shipping_per_line, 2)
             cash_remaining += qty * mark * (1 - costs.fee_rate) - costs.shipping_per_line - impact
         else:  # BUY
-            # Mirror executor _fill_buy: clip to liquidity cap, then to
-            # what cash_remaining can afford after shipping is reserved.
-            affordable = math.floor((cash_remaining - costs.shipping_per_line) / mark)
+            # Mirror executor _fill_buy: clip to liquidity cap, then to what
+            # cash_remaining can afford after shipping is reserved. Sizing runs
+            # off the executable-price floor, not the print — a buy cannot fill
+            # below the cheapest current listing — and the floor is gated on
+            # impact_enabled, since that is where the premium is charged. Both
+            # rules live in CostModel.buy_base; do not re-derive them here.
+            base = costs.buy_base(mark, rec.low)
+            affordable = math.floor((cash_remaining - costs.shipping_per_line) / base)
             qty = min(rec.quantity, cap, max(affordable, 0))
-            impact = costs.buy_impact(mark, rec.mid, qty)
+            impact = costs.buy_impact(mark, rec.mid, rec.low, qty)
             while qty > 0 and qty * mark + costs.shipping_per_line + impact > cash_remaining:
                 qty -= 1
-                impact = costs.buy_impact(mark, rec.mid, qty)
+                impact = costs.buy_impact(mark, rec.mid, rec.low, qty)
             if qty <= 0:
                 continue
             fees = costs.shipping_per_line

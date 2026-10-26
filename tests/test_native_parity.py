@@ -134,6 +134,75 @@ def seed_rich_with_uncataloged(root: Path, n_days: int = 40) -> None:
     # seed_rich(), not rewritten here.
 
 
+# tcgcsv derives `market` from recent completed SALES but low/mid/high from
+# current LISTINGS, so market < low is ordinary (2.19M in-window warehouse rows
+# are in that state). Buys then floor at max(market, low). Every other fixture
+# here has low = 0.9 * market, so without this one the floor branch is never
+# executed and parity over it would pass vacuously.
+def seed_inverted_quote(root: Path, n_days: int = 40) -> None:
+    """seed_rich()'s price path, but the listings sit far ABOVE the sales print.
+
+    low = 3x market makes the floor premium (2 * market per unit) exceed the
+    print itself, which is what the non-vacuity guard in the tests below keys
+    on; mid = 3.5x leaves a real walk above the floor as well.
+    """
+    w = Warehouse(Paths(root=root))
+    for i in range(n_days):
+        day = START + timedelta(days=i)
+        if i % 9 == 4:  # market-wide gap day
+            continue
+        rows = []
+        for (pid, st), base in BASES.items():
+            if (pid * 3 + i) % 11 == 0:  # per-asset missing prints
+                continue
+            market = round(base * _path(i + pid), 2)
+            rows.append(
+                {
+                    "date": day,
+                    "product_id": pid,
+                    "sub_type": st,
+                    "low": round(market * 3.0, 2),
+                    "mid": round(market * 3.5, 2),
+                    "high": round(market * 4.0, 2),
+                    "market": market,
+                }
+            )
+        w.write_prices(day, pl.DataFrame(rows, schema=PRICE_SCHEMA))
+    w.write_products(PRODUCTS)
+
+
+def assert_floor_actually_fired(res: Result) -> None:
+    """Guard against a vacuous inverted-quote run.
+
+    On seed_inverted_quote (low = 3x market, mid = 3.5x) the two regimes are
+    separated by a factor of 2 in impact-per-unit:
+
+      floor ON:  premium alone is (3*market - market) = 2 * market per unit,
+                 and the walk term on top is non-negative, so impact/unit >=
+                 2.0 * price always.
+      floor OFF: base collapses to market, so the walk spread is the FULL
+                 mid - market = 2.5 * market. A fill at the daily cap costs
+                 spread/2 = 1.25 * market per unit, which is the maximum the
+                 unfloored engine can charge.
+
+    So `impact >= 2.0 * qty * price` is reachable only through the floor
+    branch, while the unfloored ceiling is 1.25.
+
+    An earlier version of this guard used `impact > qty * price`, which the
+    unfloored engine clears comfortably at 1.25 — it passed with the floor
+    fully removed and guarded nothing. The bound 0.25 * market it cited is
+    the post-floor spread (mid - low = 0.5 * market), not the pre-floor one.
+
+    The 1.25 ceiling holds only at `used == 0`: the walk term scales with
+    (2*used + qty), so a strategy issuing a SECOND buy order for the same
+    asset on the same day can exceed it without any floor, and this guard
+    would go vacuous again in exactly the silent way the earlier one did.
+    Every strategy here emits at most one order per asset per bar. If that
+    ever changes, re-derive the ceiling before trusting this function.
+    """
+    assert any(f.quantity > 0 and f.impact >= 2.0 * f.quantity * f.price for f in res.fills)
+
+
 def assert_results_equal(py: Result, cpp: Result) -> None:
     assert py.equity_curve["date"].to_list() == cpp.equity_curve["date"].to_list()
     assert py.equity_curve["equity"].to_list() == cpp.equity_curve["equity"].to_list()
@@ -196,6 +265,179 @@ def test_buy_and_hold_parity_single_universe(tmp_path: Path) -> None:
         initial_cash=1000.0,
     ).run()
     assert len(py.fills) > 0
+    assert_results_equal(py, cpp)
+
+
+@pytest.mark.parametrize(("kind", "n_assets"), [("sealed", 1), ("single", 2), ("single", 3)])
+def test_buy_and_hold_parity_screened_universe(tmp_path: Path, kind: str, n_assets: int) -> None:
+    """n_assets below the universe size exercises the screen's ORDER, which
+    the default-100 cases never reach (they keep everything, so a wrong sort
+    is invisible). On this fixture the sealed pair's relative spreads agree to
+    ~15 significant digits, so the winner is decided in the last bits of
+    (mid - low) / mid — exactly the arithmetic that must not be rearranged.
+    """
+    seed_rich(tmp_path)
+    wh = Warehouse(Paths(root=tmp_path))
+    cm = CostModel(impact_enabled=True)
+    end = START + timedelta(days=39)
+    py = Backtest(
+        warehouse=wh,
+        strategy=BuyAndHold(kind=kind, n_assets=n_assets),
+        cost_model=cm,
+        start=START,
+        end=end,
+        initial_cash=1000.0,
+    ).run()
+    cpp = NativeBacktest(
+        warehouse=wh,
+        strategy=NativeStrategySpec("buy-and-hold", {"n_assets": float(n_assets)}, kind=kind),
+        cost_model=cm,
+        start=START,
+        end=end,
+        initial_cash=1000.0,
+    ).run()
+    assert len(py.fills) > 0
+    assert len({f.asset for f in py.fills}) == n_assets  # the screen really truncated
+    assert_results_equal(py, cpp)
+
+
+@pytest.mark.parametrize("n_assets", [0, -1])
+def test_buy_and_hold_parity_non_positive_n_assets(tmp_path: Path, n_assets: int) -> None:
+    """n_assets <= 0 must mean "no orders" on BOTH engines.
+
+    Python's slice is the hazard: `candidates[:-1]` keeps all but the last
+    screened asset and trades them, where C++ returns none. Unreachable
+    through resolve_params (range [1, 10000]), but both constructors are
+    public, so the agreement is pinned here rather than left to the comment.
+    """
+    seed_rich(tmp_path)
+    wh = Warehouse(Paths(root=tmp_path))
+    cm = CostModel(impact_enabled=True)
+    end = START + timedelta(days=39)
+    py = Backtest(
+        warehouse=wh,
+        strategy=BuyAndHold(kind="sealed", n_assets=n_assets),
+        cost_model=cm,
+        start=START,
+        end=end,
+        initial_cash=1000.0,
+    ).run()
+    cpp = NativeBacktest(
+        warehouse=wh,
+        strategy=NativeStrategySpec("buy-and-hold", {"n_assets": float(n_assets)}, kind="sealed"),
+        cost_model=cm,
+        start=START,
+        end=end,
+        initial_cash=1000.0,
+    ).run()
+    assert py.fills == []
+    assert cpp.fills == []
+    assert_results_equal(py, cpp)
+
+
+def test_native_rejects_duplicate_asset_day_rows(tmp_path: Path) -> None:
+    """A duplicated (product_id, sub_type, date) row must fail loudly.
+
+    The C++ screen counts ROWS at or before today; research/screen.py counts
+    DISTINCT DATES. They agree only under uniqueness, so a duplicate would
+    silently change which assets the benchmark buys on the native engine
+    only. MarketView's constructor rejects it instead.
+    """
+    seed_rich(tmp_path, n_days=5)
+    wh = Warehouse(Paths(root=tmp_path))
+    day = START + timedelta(days=1)
+    existing = wh.load_day(day)
+    wh.write_prices(day, pl.concat([existing, existing.head(1)]))  # one row twice
+    with pytest.raises(ValueError, match="duplicate"):
+        NativeBacktest(
+            warehouse=wh,
+            strategy=NativeStrategySpec("buy-and-hold", {}, kind="sealed"),
+            cost_model=CostModel(),
+            start=START,
+            end=START + timedelta(days=4),
+            initial_cash=1000.0,
+        ).run()
+
+
+# Four sealed products for the stale-quote regression below. Product 1 has no
+# print on the entry bar but a very tight quote on the bar before; the other
+# three print on the entry bar with a wide quote. Every asset has exactly two
+# prints as of the entry bar, so density ties and the spread alone decides.
+STALE_START = START + timedelta(days=2)
+
+
+def seed_stale_quote(root: Path) -> None:
+    w = Warehouse(Paths(root=root))
+    plan: dict[int, tuple[list[int], float]] = {
+        1: ([0, 1, 3], 99.0),  # tight (spread 0.01), gaps on the entry bar
+        2: ([1, 2, 3], 50.0),  # wide (spread 0.50)
+        3: ([1, 2, 3], 50.0),
+        4: ([1, 2, 3], 50.0),
+    }
+    for i in range(4):
+        rows = [
+            {
+                "date": START + timedelta(days=i),
+                "product_id": pid,
+                "sub_type": "Normal",
+                "low": low,
+                "mid": 100.0,
+                "high": 200.0,
+                "market": 100.0,
+            }
+            for pid, (offsets, low) in plan.items()
+            if i in offsets
+        ]
+        w.write_prices(START + timedelta(days=i), pl.DataFrame(rows, schema=PRICE_SCHEMA))
+    w.write_products(
+        pl.DataFrame(
+            {
+                "product_id": [1, 2, 3, 4],
+                "group_id": [1, 1, 1, 1],
+                "name": ["Box 1", "Box 2", "Box 3", "Box 4"],
+                "rarity": [None, None, None, None],
+                "kind": ["sealed"] * 4,
+                "released_on": [date(2024, 11, 1)] * 4,
+            }
+        )
+    )
+
+
+def test_buy_and_hold_parity_screens_on_the_last_quote_not_todays(tmp_path: Path) -> None:
+    """The screened quote is the last print AT OR BEFORE today, not today's.
+
+    An asset carrying a stale mark still has a real quote, and dropping it to
+    "no quote" would rank it last. Here that flips which two of four products
+    the screen keeps, so the two engines can only agree if the C++ side reads
+    MarketView::quote_at_or_before rather than MarketView::mid/low (which are
+    today's print only, NaN across a gap).
+    """
+    seed_stale_quote(tmp_path)
+    wh = Warehouse(Paths(root=tmp_path))
+    cm = CostModel()
+    end = START + timedelta(days=3)
+    py = Backtest(
+        warehouse=wh,
+        strategy=BuyAndHold(kind="sealed", n_assets=2),
+        cost_model=cm,
+        start=STALE_START,
+        end=end,
+        initial_cash=1000.0,
+        warmup_days=2,
+    ).run()
+    cpp = NativeBacktest(
+        warehouse=wh,
+        strategy=NativeStrategySpec("buy-and-hold", {"n_assets": 2.0}, kind="sealed"),
+        cost_model=cm,
+        start=STALE_START,
+        end=end,
+        initial_cash=1000.0,
+        warmup_days=2,
+    ).run()
+    assert len(py.fills) > 0
+    # Product 1 gapped on the entry bar; the stale tight quote is what keeps
+    # it in the top 2. If either engine read today's print it would be last.
+    assert {f.asset.product_id for f in py.fills} == {1, 2}
     assert_results_equal(py, cpp)
 
 
@@ -413,6 +655,93 @@ def test_cost_aware_reversion_parity(tmp_path: Path, impact: bool) -> None:
     assert_results_equal(py, cpp)
 
 
+@pytest.mark.parametrize("impact", [False, True])
+def test_buy_and_hold_parity_when_market_prints_below_the_lowest_listing(
+    tmp_path: Path, impact: bool
+) -> None:
+    """The executable-price floor must be bit-identical on both engines.
+
+    Python represents a missing quote as None and C++ as NaN, and the two
+    floors are written as `market if low is None else max(market, low)` and
+    `std::isnan(low) ? market : std::max(market, low)`. Only a fixture with
+    low > market executes either branch's max().
+
+    Parametrized over impact because the floor is gated on impact_enabled in
+    BOTH engines (the premium is charged through `impact`, so with impact off
+    the floor is not a cost and must not size the order either). The gate is
+    two separate conditionals in two languages; impact=False is what pins them
+    to the same answer.
+    """
+    seed_inverted_quote(tmp_path)
+    wh = Warehouse(Paths(root=tmp_path))
+    cm = CostModel(impact_enabled=impact)
+    end = START + timedelta(days=39)
+    py = Backtest(
+        warehouse=wh,
+        strategy=BuyAndHold(kind="sealed"),
+        cost_model=cm,
+        start=START,
+        end=end,
+        initial_cash=1000.0,
+    ).run()
+    cpp = NativeBacktest(
+        warehouse=wh,
+        strategy=NativeStrategySpec("buy-and-hold", {}, kind="sealed"),
+        cost_model=cm,
+        start=START,
+        end=end,
+        initial_cash=1000.0,
+    ).run()
+    assert len(py.fills) > 0
+    if impact:
+        assert_floor_actually_fired(py)
+    else:
+        # Flat cost: the floor is inert, so every fill carries zero impact and
+        # sizing is the pre-floor sizing.
+        assert all(f.impact == 0.0 for f in py.fills)
+    assert_results_equal(py, cpp)
+
+
+def test_dip_buyer_parity_when_market_prints_below_the_lowest_listing(tmp_path: Path) -> None:
+    """Same fixture, but a strategy that both enters AND exits: proves the
+    sell side stayed on the unfloored path while the buy side moved.
+    """
+    from pkmn_quant.strategies.dip_buyer import DipBuyer
+
+    seed_inverted_quote(tmp_path)
+    wh = Warehouse(Paths(root=tmp_path))
+    cm = CostModel(impact_enabled=True)
+    end = START + timedelta(days=39)
+    params = {
+        "dip_window_days": 5,
+        "dip_threshold": 0.10,
+        "hold_days": 7,
+        "take_profit": 1.05,
+        "max_positions": 5,
+        "budget_frac": 0.4,
+        "min_price": 3.0,
+    }
+    py = Backtest(
+        warehouse=wh,
+        strategy=DipBuyer(**params),  # type: ignore[arg-type]
+        cost_model=cm,
+        start=START,
+        end=end,
+        initial_cash=1000.0,
+    ).run()
+    cpp = NativeBacktest(
+        warehouse=wh,
+        strategy=NativeStrategySpec("dip-buyer", {k: float(v) for k, v in params.items()}),
+        cost_model=cm,
+        start=START,
+        end=end,
+        initial_cash=1000.0,
+    ).run()
+    assert any(f.quantity < 0 for f in py.fills)  # exits happen too
+    assert_floor_actually_fired(py)
+    assert_results_equal(py, cpp)
+
+
 def test_bridge_runs_python_strategy_bit_for_bit(tmp_path: Path) -> None:
     """The bridge path: a Python Strategy instance on the C++ engine.
 
@@ -563,6 +892,113 @@ def test_bridge_ml_ranker_parity(tmp_path: Path) -> None:
         initial_cash=1000.0,
         warmup_days=20,
     ).run()
+    assert_results_equal(py, cpp)
+
+
+WIDE_N = 130  # > the n_assets default of 100, so the default actually binds
+
+
+def seed_wide(root: Path, n_products: int = WIDE_N, n_days: int = 6) -> None:
+    """`n_products` sealed assets on a short window, priced apart so the
+    screen's truncation and the affordability filter both have real work.
+
+    Every other fixture in this file has 6 assets, i.e. fewer than the
+    n_assets default, so a default that disagreed between the engines could
+    not fail anything here.
+    """
+    w = Warehouse(Paths(root=root))
+    ids = list(range(1, n_products + 1))
+    for i in range(n_days):
+        day = START + timedelta(days=i)
+        rows = []
+        for pid in ids:
+            # 2.50 .. ~330: spans every liquidity tier, and enough assets sit
+            # above the per-asset target that _affordable has to drop some.
+            market = round(2.5 * (1.0 + 0.02 * pid) ** 2 * _path(i + pid), 2)
+            rows.append(
+                {
+                    "date": day,
+                    "product_id": pid,
+                    "sub_type": "Normal",
+                    # Mixed quote shapes: some ordinary, some inverted (low
+                    # above the print), some degenerate (low == mid), so the
+                    # screen's spread key and the buy floor are both exercised.
+                    "low": round(market * (2.0 if pid % 5 == 0 else 0.9), 2),
+                    "mid": round(market * (2.0 if pid % 5 == 0 else 1.15), 2),
+                    "high": round(market * 3.0, 2),
+                    "market": market,
+                }
+            )
+        w.write_prices(day, pl.DataFrame(rows, schema=PRICE_SCHEMA))
+    w.write_products(
+        pl.DataFrame(
+            {
+                "product_id": ids,
+                "group_id": [1] * n_products,
+                "name": [f"Box {i}" for i in ids],
+                "rarity": [None] * n_products,
+                "kind": ["sealed"] * n_products,
+                "released_on": [date(2024, 11, 1)] * n_products,
+            }
+        )
+    )
+
+
+def test_buy_and_hold_default_n_assets_agrees_across_all_four_definitions() -> None:
+    """`n_assets = 100` is written out in four places with nothing pinning
+    agreement: BuyAndHold.__init__, BUY_AND_HOLD_PARAMS (the CLI/web default),
+    the C++ BuyAndHold constructor, and factory.cpp's iparam fallback. The
+    two Python ones are compared directly here; the two C++ ones are pinned
+    by test_buy_and_hold_parity_wide_universe below, whose fixture is the
+    only one in this suite with more than 100 assets — every other fixture
+    has 6, so a drift would fail nothing.
+    """
+    import inspect
+
+    from pkmn_quant.research.backtest_run import BUY_AND_HOLD_PARAMS
+
+    ctor_default = inspect.signature(BuyAndHold.__init__).parameters["n_assets"].default
+    (spec,) = [p for p in BUY_AND_HOLD_PARAMS if p.name == "n_assets"]
+    assert ctor_default == spec.default == 100
+
+
+@pytest.mark.parametrize("n_assets", [None, 120])
+def test_buy_and_hold_parity_wide_universe(tmp_path: Path, n_assets: int | None) -> None:
+    """130 sealed assets: more than the n_assets default, so both engines'
+    DEFAULT must agree (n_assets=None passes no param, taking each side's own
+    default) and the screen's 100-asset truncation is load-bearing.
+
+    Also the only parity fixture where the affordability filter drops
+    candidates at scale, and where inverted and degenerate quotes coexist.
+    """
+    seed_wide(tmp_path)
+    wh = Warehouse(Paths(root=tmp_path))
+    cm = CostModel(impact_enabled=True)
+    end = START + timedelta(days=5)
+    py = Backtest(
+        warehouse=wh,
+        strategy=BuyAndHold(kind="sealed") if n_assets is None else BuyAndHold("sealed", n_assets),
+        cost_model=cm,
+        start=START,
+        end=end,
+        initial_cash=10_000.0,
+    ).run()
+    cpp = NativeBacktest(
+        warehouse=wh,
+        strategy=NativeStrategySpec(
+            "buy-and-hold",
+            {} if n_assets is None else {"n_assets": float(n_assets)},
+            kind="sealed",
+        ),
+        cost_model=cm,
+        start=START,
+        end=end,
+        initial_cash=10_000.0,
+    ).run()
+    filled = {f.asset for f in py.fills}
+    assert len(filled) > 20  # not vacuous
+    assert len(filled) <= (100 if n_assets is None else n_assets)  # truncation binds
+    assert len(filled) < WIDE_N  # something really was excluded
     assert_results_equal(py, cpp)
 
 

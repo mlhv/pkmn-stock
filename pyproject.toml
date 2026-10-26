@@ -60,7 +60,7 @@ strict = true
 # and bench_walkforward have pre-existing errors). These two are pinned
 # individually because they are documented operator tooling — the warehouse
 # rebuild and the swap gate — not throwaway benchmarks.
-files = ["src", "scripts/rebuild_warehouse.py", "scripts/verify_rebuild.py"]
+files = ["src", "scripts/rebuild_warehouse.py", "scripts/verify_rebuild.py", "scripts/iex_hist.py"]
 
 [[tool.mypy.overrides]]
 module = "sklearn.*"

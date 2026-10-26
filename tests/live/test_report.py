@@ -38,6 +38,93 @@ def test_markdown_contains_recommendation_and_wf_record() -> None:
     assert "Thesis:" in md and "supply dries" in md  # strategy reasoning line
 
 
+def test_markdown_quotes_the_executable_price_not_just_the_print() -> None:
+    """I2 regression: the one human-facing "what should I buy" report was the
+    only consumer of the buy floor that never got it.
+
+    The engine, both C++ mirrors and live/paper.py all price a buy at
+    max(market, low); signals.py rendered qty * market. On the real
+    inversion shape that means printing $71.88 for an outlay the model puts
+    at $1,800.
+
+    Fixture: 3 units, market $23.96 (sales-derived), low $600.00 (cheapest
+    listing). Print notional 3 x 23.96 = $71.88; real outlay 3 x 600 =
+    $1,800.00 before shipping and any walk.
+    """
+    rec = Recommendation(
+        action="BUY",
+        product_id=1,
+        sub_type="Normal",
+        name="Inverted Box",
+        quantity=3,
+        market_price=23.96,
+        notional=71.88,
+        mid=650.0,
+        low=600.0,
+    )
+    md = render_signals_markdown(_report([rec]))
+    assert "$1800.00" in md  # the outlay to act on
+    assert "$600.00" in md  # the executable unit price
+    assert "$71.88" not in md  # never quote an outlay nobody can transact at
+    assert "cheapest current listing" in md  # and say why
+
+
+def test_exec_price_is_the_print_for_sells_and_ordinary_buys() -> None:
+    """No floor on a sell (tcgcsv publishes no bid series), and no premium
+    when the print already clears the cheapest listing."""
+    sell = Recommendation(
+        action="SELL",
+        product_id=1,
+        sub_type="Normal",
+        name="Box",
+        quantity=2,
+        market_price=100.0,
+        notional=200.0,
+        low=600.0,  # would be a huge "floor" if the sell side applied one
+    )
+    ordinary = Recommendation(
+        action="BUY",
+        product_id=2,
+        sub_type="Normal",
+        name="Box2",
+        quantity=2,
+        market_price=100.0,
+        notional=200.0,
+        low=90.0,
+    )
+    no_quote = Recommendation(
+        action="BUY",
+        product_id=3,
+        sub_type="Normal",
+        name="Box3",
+        quantity=2,
+        market_price=100.0,
+        notional=200.0,
+    )
+    for rec in (sell, ordinary, no_quote):
+        assert rec.exec_price == 100.0
+        assert rec.exec_notional == 200.0
+    # No inverted line -> no footnote clutter.
+    assert "cheapest current listing" not in render_signals_markdown(_report([ordinary]))
+
+
+def test_json_carries_the_executable_price() -> None:
+    rec = Recommendation(
+        action="BUY",
+        product_id=1,
+        sub_type="Normal",
+        name="Inverted Box",
+        quantity=3,
+        market_price=23.96,
+        notional=71.88,
+        low=600.0,
+    )
+    raw = json.loads(signals_to_json(_report([rec])))["recommendations"][0]
+    assert raw["notional"] == 71.88  # the print-based field is unchanged
+    assert raw["exec_price"] == 600.0
+    assert raw["exec_notional"] == 1800.0
+
+
 def test_thesis_covers_registry() -> None:
     """Every tunable strategy must have a thesis line; a new registry entry
     without one would silently render 'Thesis: n/a'."""

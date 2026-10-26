@@ -11,5 +11,6 @@
   "equity_curve": [
     {"date": "2025-01-01", "equity": 1000.0}, {"date": "2025-01-02", "equity": 1001.0},
     {"date": "2025-01-03", "equity": 1002.5}, {"date": "2025-01-04", "equity": 1001.8}
-  ]
+  ],
+  "execution": "book"
 }

@@ -67,14 +67,24 @@ def git_info(root: Path) -> tuple[str | None, bool]:
 
 
 def data_fingerprint(warehouse: Warehouse) -> dict[str, Any]:
-    """Cheap identity of the price data a run saw: date range + row count."""
+    """Cheap identity of the data a run saw: price date range + row count, and
+    the SHA-256 of the product catalog file (None when absent).
+
+    The catalog is unversioned and rewritten by every daily ingest, so it is
+    an input a price-only fingerprint cannot see.
+    """
     row = warehouse.query(
         'SELECT min("date") AS min_date, max("date") AS max_date, count(*) AS n_rows FROM prices'
     ).row(0, named=True)
+    products = warehouse.paths.products
+    catalog_sha256 = (
+        hashlib.sha256(products.read_bytes()).hexdigest() if products.exists() else None
+    )
     return {
         "min_date": str(row["min_date"]),
         "max_date": str(row["max_date"]),
         "rows": int(row["n_rows"]),
+        "catalog_sha256": catalog_sha256,
     }
 
 

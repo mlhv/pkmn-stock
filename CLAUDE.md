@@ -439,6 +439,312 @@ tcgcsv.com). Design spec: `docs/superpowers/specs/2026-06-09-pkmn-quant-design.m
   research result. Full findings in `docs/research-findings-2026-07.md`
   (Full set coverage section) — that section supersedes **every** earlier
   section in the file, all of which were computed on 23 groups.
+- Instrument repair + horizon-matched evaluation complete on
+  feat/instrument-repair-horizon (`uv sync --group api && uv run pytest`
+  reads **583 passed + 1 skipped** without the dashboard group and **588
+  passed** once it is installed — the skip is `tests/test_dashboard.py`'s 5
+  tests, which also pass standalone via `uv run --group dashboard pytest
+  tests/test_dashboard.py`; ruff clean, mypy clean over 57 source files;
+  26 web tests + a clean `npm run build`; 37 Catch2 tests via ctest — all
+  four counts superseded by the final-review fix wave in the next bullet).
+  Two broken measurement instruments repaired and one
+  missing measurement added, all on the same 217-group, 908-day warehouse and
+  the same 2024-03-01..2026-06-30 window, impact-on. **(1) The benchmark is
+  now actually invested.** `buy_and_hold` gained a liquidity screen
+  (`research/screen.py`: print density desc, relative spread `(mid-low)/mid`
+  asc, then `product_id`/`sub_type`) plus an equal-dollar allocation and a
+  deficit sweep, C++-ported bit-for-bit: **4.7% → 74.2% of the account in
+  product, 5.5% → 99.9% all-in** (never mix the two bases)
+  ($7,423.07 notional + $38.00 fees + $2,530.36 impact = $9,991.43 of
+  $10,000), total return **+10.53% → +24.93%** (run
+  `20260807T135424Z-8362bc`, 38 fills, Sharpe 0.63, max drawdown −25.73%;
+  the figure carries an implicit `warmup_days=0` — see Conventions).
+  **(2) Buys price at `max(market, low)`.** tcgcsv's `market` is
+  sales-derived and `low` is the cheapest current listing, so `market < low`
+  is ordinary (2.19M in-window rows) and the old model priced fills at a
+  number nothing was offered at; this **closes findings-doc open question 2**
+  — the answer was neither "data defect" nor "thin print" but a category
+  error in the consumer. **(3) `pkmn horizon <run-id>`** (`research/
+  horizon.py`) pairs a backtest's fills into FIFO round trips and scores each
+  against holding the sealed index over that trip's **own** entry/exit dates.
+  Full zoo re-run, all six strategies, before → after (before = the Full set
+  coverage figures, same universe/window/cost regime; the buy floor is the
+  only instrument difference for the strategy rows): sealed-accumulation
+  −8.59% → −10.31%; xs-momentum −38.72% → −54.46%; ml-ranker −81.64% →
+  −84.48%; ml-ranker-v2 −99.81% → −99.43%; cost-aware-reversion −98.70% →
+  −99.98%; dip-buyer −99.80% → −100.00%. **Five of six got worse and that is
+  the instrument working, not a regression** — they now pay the cheapest
+  listing that actually existed (the design spec predicted this in writing
+  and committed to not treating it as failure); ml-ranker-v2's small
+  improvement is noise at that magnitude. `pkmn evaluate`
+  (`20260809T013934Z-a453f5`, 660 aligned days, against the repaired
+  benchmark): joint White's Reality Check **p = 1.0000**, every deflated
+  Sharpe far below the 0.5 coin-flip point — the move from the prior
+  branch's 0.8038 is the bar getting harder, not the strategies getting
+  worse. `parity_full.py` PASSes bit-for-bit on all five native strategies
+  after both repairs (the ml-ranker bridge case did **not** appear in that
+  run's output and is not claimed re-verified). **Horizon result, the number
+  this branch exists to produce: over the owner's target 1-3 month band,
+  none of the six beats holding sealed, and not narrowly.** Median 1-3m edge
+  per trade: cost-aware-reversion −16.57% (41 trips), ml-ranker −37.96%
+  (109), xs-momentum −45.33% (99), dip-buyer −51.21% (116), ml-ranker-v2
+  −84.32% (20, and it beat the index on **0 of 20** trades). **The one
+  positive 1-3m figure is sealed-accumulation's +13.90% over exactly ONE
+  round trip**, against its own all-trip median of −10.98% — never quote it
+  without the sample size; same for xs-momentum's 3-6m +55.40% (5 trips) and
+  sealed-accumulation's 3-6m +6.91% (8). Method caveat that changes what
+  these mean: **walk-forward artifacts carry no `fills.parquet`**, so horizon
+  ran on **default-parameter backtests** over the same window, not the
+  walk-forward parameter sets. Honest conclusion: this branch delivered a bar
+  worth measuring against, fills priced at something you could transact at,
+  and a per-trade measurement matched to the holding period that matters —
+  and **no strategy**. Full findings in `docs/research-findings-2026-07.md`
+  (Instrument repair section), which supersedes the Full set coverage
+  section's benchmark figure and every strategy number in it.
+- **Final-review fix wave on the same branch (2026-08-09): every benchmark
+  and horizon figure in the bullet above is superseded and pending a
+  re-run.** `uv run pytest` now reads **611 passed** with the dashboard and
+  api groups installed; 40 Catch2 tests; 35 parity tests still bit-for-bit;
+  26 web tests. Six behaviour changes, all measurement-instrument repairs,
+  none of them a new research result:
+  (1) the deficit sweep had **no per-asset bound** — `deficit = target -
+  qty*price` saturates for an asset too expensive to hold one unit of, so
+  the most expensive product always won it, putting **50.05% of the
+  account** into one box (91594) that had not printed for 19 months; an
+  affordability filter now keeps the largest k whose k cheapest members each
+  cost <= `cash / k` and re-targets over those (measured on the real first
+  bar: 99.9% deployed at a 1.95% largest weight, against 99.9% at 35%
+  before, and against 84.2% deployed if the narrower per-candidate guard is
+  used instead).
+  (2) the screen's spread tiebreaker ranked `low == mid` — one listing, no
+  depth — as the **tightest** quote, which is how 91594 got to the top;
+  non-positive relative spreads now sort last.
+  (3) the liquidity tier for a buy is selected from the **floored base**, not
+  the print (346,378 in-window rows, 15.8% of the inverted ones, fall in a
+  different tier under `low`); the sell side keeps the print, having no
+  floor.
+  (4) `pkmn evaluate`'s benchmark glob is deleted — see the bullet below.
+  (5) `pkmn horizon` scores a still-open trip **net of a modelled exit**;
+  gross scoring flattered open trips by ~13 points and hit
+  sealed-accumulation and cost-aware-reversion hardest.
+  (6) `pkmn signals` reports an executable price and outlay, not a notional
+  at the sales print (it would print $71.88 where the model says $1,800).
+  Items 1, 2, 3 and 5 all move published numbers; nothing here changes a
+  conclusion, because every strategy figure moves against a bar that moves
+  too.
+- **Plan A (IEX order book) complete on feat/iex-book (615 passed pytest via
+  `uv sync --group api --group dashboard && uv run pytest`; 130 Catch2 tests
+  via ctest on macOS and 130 in the OrbStack VM; ruff, format and mypy clean
+  over 58 source files).** Plan A of 4 in the market-data / CLOB track (spec:
+  `docs/superpowers/specs/2026-10-22-market-data-and-clob-design.md`, plan `docs/superpowers/plans/2026-10-22-iex-book.md`).
+  **This branch was cut from `feat/instrument-repair-horizon`, not main, by
+  owner decision, because that branch is not yet merged; merging this one
+  carries those commits with it.** Shipped, all C++20 under `cpp/` with no
+  Python dependency: a price-time `OrderBook` (`cpp/src/pkmn_book`), a
+  streaming pcapng-over-zlib reader, IEX-TP framing with sequence tracking,
+  DEEP+ and DEEP decoders and the TOPS Quote decoder, a per-symbol `BookSet`
+  (`cpp/src/pkmn_md`), tools
+  `iex_decode`, `pcap_count`, `iex_oracle`, `iex_bench` (`cpp/tools`), the
+  HIST downloader `scripts/iex_hist.py`, and `scripts/bench_iex.sh`. Plans B-D
+  are NOT STARTED. **Oracle result, stated plainly: the spec's success
+  criterion ("matches at every checked point on at least one full real day")
+  is NOT met on 2024-12-23.** `iex_oracle` rebuilds the book from DEEP+ and
+  checks it against DEEP price levels and TOPS best quotes: 96,980,017
+  checkpoints evaluated, 5,472 halt zero-quotes excluded by name
+  (`tops_unavailable_zero_quote`), 96,974,545 checked, of which 7,870
+  mismatch (0.008%) in 8 symbols. Every validity precondition held, so the
+  run exits 1 (exit codes: 0 pass, 1 mismatch, 3 inconclusive when a
+  precondition such as gaps, `other_stream` or zero TOPS checks fails).
+  **Coverage: 2024-12-23 is an incident day, not a full session.** Every
+  symbol is operationally halted at 10:22:29 ET, all three feeds restart at
+  11:32:50 ET, DEEP+ carries 80,992 messages after the restart against
+  50,878,184 before, and the last book event is at 13:45:40 ET against a
+  16:00 ET close. Even a zero-mismatch run on these files would arguably not
+  meet the "full real day" criterion; the second oracle day should be a
+  normal session (no incident, no mid-day restart, not a DST boundary).
+  7,819 of the 7,870 trace to an undocumented DEEP+ order-id rewind starting
+  at 09:48:38 ET (926,703 Adds below their symbol's running maximum id across
+  901 symbols; only 5 symbols mismatch: DRIP, OTEX, CNH, KBE, WMT). The other
+  51 are round-lot (NVR, MKL, SEB), which vanish only with the opt-in
+  `--round-lot NVR=10 --round-lot MKL=10 --round-lot SEB=1`; those values
+  were inferred from TOPS itself, which is why the option is not the
+  default. The book applies DEEP+ correctly (an independent Python replay
+  agreed message for message); what is open is a second oracle day, asking
+  IEX, or a named rule approved by the owner, and none has been taken. **Mid-day
+  restart finding:** all three feeds restart together at send_time
+  1734971570036197067 (11:32:50 ET), data resumes 11:39 ET, so the day is
+  not one continuous stream; the oracle resolves pending checks and clears
+  every book at the restart. Full detail: `docs/iex-oracle.md`. **Benchmark**
+  (`docs/benchmarks/iex-book.md`; DEEP+ decode + `BookSet::apply` on the
+  2024-12-23 DPLS file, 50,959,176 messages, so measured on that incident
+  day's message mix, not a normal session's; Apple M1 Pro, 7-vCPU OrbStack
+  Ubuntu 24.04 arm64 VM, g++ 13.3.0, `-O3 -DNDEBUG -ffp-contract=off`, timer
+  cntvct_el0 at 24 MHz = 41.7 ns per tick; empty read pair 9.5-11.9 ns mean across the three runs, 10.5 ns in the run the percentiles come from).
+  The Task 6 optimization (pooled order arena, open-addressing id map,
+  contiguous levels, commit bc6e805) was kept on an interleaved A/B of 9
+  pairs: best-of-9 ram throughput 4,926,764 -> 7,584,533 msgs/s, median
+  timed-region mean 184.3 -> 121.5 ns, B faster in all 9 pairs. **VM noise is
+  10% or more**: within-session spread was 32.4% (A) and 46.8% (B) on msgs/s,
+  and median msgs/s moved only +27.5%, inside those spreads; the keep rests
+  on the pairing and the non-overlapping timed-mean ranges, not on a clean
+  margin. The clean generated run at bc6e805 reads 7,342,902 msgs/s best of
+  3 (spread 13.5%), latency p50 83 ns (2 ticks, **quantized: +/-50%**), p99
+  626 ns, p99.9 6,448 ns, max 40,436,760 ns (the VM being descheduled is the
+  likely cause, not verified), and 2,497,490 msgs/s end to end including
+  gunzip. Tail (p99.9, max) did not move in the A/B. Next profile target:
+  `OrderBook::level_pos` at 22.7% self time. IEX data results carry the
+  required citation: Data provided for free by IEX. By accessing or using IEX
+  Historical Data, you agree to the IEX Historical Data Terms of Use
+  (`docs/iex-hist-terms.md`).
+
+- **Plan B (Pokemon order book) complete on feat/pokemon-book (668 passed
+  pytest via `uv sync --group api --group dashboard && uv run pytest`; 29
+  vitest via `cd web && npm run check`; 163 Catch2 tests via ctest, on macOS
+  and in the OrbStack VM; counts after the final-review fix wave).** Plan B
+  of 4 in the market-data / CLOB track. **Cut
+  from `feat/instrument-repair-horizon`, not main (same owner ruling as Plan
+  A); Plans C-D are NOT STARTED.** `pkmn backtest`, `pkmn walkforward` and
+  `POST /api/backtest` now default to `--execution book`: fills run against
+  daily ladders of **modelled resting orders (synthetic, built from the day's
+  tcgcsv quote)**. tcgcsv publishes one quote per product per day, not an
+  order book, so every resting order is a model, never market data. The
+  library default (`NativeBacktest.execution`, C++ `CostModel::execution`)
+  stays formula, and so do the live paths. `--execution formula` selects the
+  walk-the-spread formula; `--no-impact` is flat cost under either mode and
+  is recorded as formula. Shipped: `ladder.*` and `execution_book.*` in
+  `cpp/src/pkmn_engine`, the ITCH-style wire protocol in `cpp/src/pkmn_wire`
+  (`docs/pokemon-wire-protocol.md`), `pkmn wire encode`, the `pokemon_replay`
+  tool, and the equivalence and benchmark scripts. **Equivalence (real
+  warehouse, 2024-03-01..2026-06-30, 949-day warehouse):** the test-only
+  exact ladder matches `buy_impact`/`sell_impact` on 34,092,324 rows and
+  11,165,181,052 `(used, qty)` checks with max abs error 4.66e-10 dollars
+  (tolerance 1e-6); on the five native strategies at default params the
+  formula and exact-ladder runs agree on every fill (0 mismatches), and
+  **zero fills fell on two-sided asset-days** (a statement about those
+  strategies at default params, not about the change). The whole-cent default
+  ladder moves per-run impact by cents to about $1.38 and leaves every fill
+  count unchanged. **Identical books:** encoding the window to the wire and
+  replaying it builds the same ladders as the backtester's in-memory path, 0
+  mismatches over 1,315,694 asset-days (June 2026; the command, output, date
+  and SHA are recorded in `docs/benchmarks/pokemon-book.md` section 7b).
+  The pricing gate now also checks that each side's book depth equals the
+  cost model's `max_daily_qty` (`depth_mismatches`, 0 on the same 34,092,324
+  rows). **Costs:** encode of 949
+  days, 38,250,316 messages, 890,723,220 bytes in 10.8 s (n=1); replay in
+  the VM 1,472,031 msgs/s median with ladders built for every quote (decode
+  only is far faster but its spread is 70.6%, page-cache dominated); backtest
+  book vs formula is inside the run-to-run noise on a swapping 16 GB laptop;
+  sealed-accumulation walk-forward 266.24 s book vs 266.33 s formula (n=1
+  each). `parity_full.py` still PASSes bit-for-bit on the formula path. Full
+  detail and raw JSON: `docs/benchmarks/pokemon-book.md`,
+  `docs/benchmarks/pokemon-book-raw/`. **No research number was re-run: that
+  is Plan D.** Every pre-Plan-B registry record reads as formula (a missing
+  `config["execution"]` is formula). The benchmark and horizon figures from
+  the instrument-repair final-review fix wave above are **still pending the
+  owner's re-run**; nothing here supplies them. **That re-run is a formula
+  baseline, and the user-facing defaults are now book, so it must say so
+  explicitly:** `pkmn backtest ... --execution formula`, `pkmn walkforward
+  ... --execution formula`, then `pkmn evaluate --execution formula`
+  (`pkmn horizon` follows the backtest's recorded mode). Run without the
+  flag, it silently produces book numbers that are not comparable to
+  anything in the instrument-repair bullets. Every report, the evaluate and
+  horizon stdout, the dashboard caption and the web explorer now state the
+  mode, book with the synthetic label. Book evaluates write
+  `data/results/evaluate-<date>-book/`; formula keeps `evaluate-<date>/`.
+- **Formula baseline re-run done (2026-10-24/25), on code `3617c61` and
+  catalog sha256 `4cf6c3a6...` (32,887 rows).** This is the re-run the
+  final-review fix wave left pending; it supersedes every benchmark and
+  horizon figure in the instrument-repair bullets. All `--execution formula`,
+  impact on, 2024-03-01..2026-06-30. Bar: **+126.84%** (run
+  `20261024T170908Z-99ee95`, 60 fills, Sharpe 3.50, max drawdown -14.27%,
+  86.1% notional / 99.95% all-in, largest position 2.23%), bit-identical to
+  August's `7c776b`. `pkmn evaluate` (`20261025T195117Z-04d2b6`,
+  `data/results/evaluate-2026-10-25/`): Reality Check **p = 1.0000**, every
+  DSR at or below 0.010; stitched OOS from -10.31% (sealed-accumulation) to
+  -99.94% (ml-ranker-v2). Horizon, 1-3m median edge per trade: none beats
+  holding sealed (sealed-accumulation -11.96% over 2 trips, cost-aware-
+  reversion -22.66% over 35, ml-ranker -44.62% over 104, xs-momentum
+  -49.00% over 159, dip-buyer -52.88% over 115). **ml-ranker-v2 has no
+  horizon result**: its backtest was killed after a 21-hour swap thrash.
+  **Catalog drift finding:** the native walk-forwards and three of five
+  default backtests match August bit for bit; sealed-accumulation's backtest,
+  ml-ranker's backtest and both ML walk-forwards do not. ML is deterministic
+  (a same-catalog re-run of `74aaba` is bit-identical). The cause is
+  `released_on` drifting upstream (104 values changed since 2026-08-03,
+  102 of them to null), which sealed-accumulation's age gate and the ML age
+  features read. Restoring those 104 dates in a scratch root reproduces
+  August's sealed-accumulation backtest bit for bit; the same A/B on
+  ml-ranker moves it (-99.813% to -99.780%) but does not reproduce August
+  (-99.820%), so the ML mechanism is not isolated. No conclusion changes.
+  Full write-up: findings doc, "Formula baseline" section.
+
+- **Live ingest and phone alerts on feat/live-ingest (2026-10-25; 753
+  passed pytest via `uv sync --group api --group dashboard && uv run
+  pytest`).** Cut from `feat/instrument-repair-horizon` (owner ruling: the
+  launchd job runs that checkout). Spec:
+  `docs/superpowers/specs/2026-10-25-live-ingest-design.md`. tcgcsv took its
+  price archive offline: every `/archive/...ppmd.7z` URL 403s, and `pkmn
+  daily`'s archive ingest failed every day from 2026-09-14 on. The warehouse
+  stops at 2026-09-13. `data/live.py` now captures each tcgcsv update from
+  the live per-group `/prices` endpoints (raw responses kept under
+  `data/raw/live/<day>/`, resumable, each group fetched at most once per
+  update, only failed groups re-fetched) and finalizes it through the same
+  `prices_frame` + `apply_quality_gates` path as an archive day. `pkmn daily`
+  calls `run_live_ingest` instead of `ingest_range`, probes the archive at
+  most once a local day (an "archive is back" alert if it returns 200), runs
+  signals and paper fills only when the newest stored day differs from the
+  last one they ran on for that mode (so four runs a day never re-notify or
+  re-record fills), and applies a rate-limited alert policy
+  (`live/alerts.py`, state in `data/results/daily-state.json`): a capture
+  problem (capture incomplete, the update's day not stored, or the ingest
+  or a day's write raised) alerts only on a run at or after 21:00 local or
+  when the warehouse is stale (`STALE_AFTER` = 28h after 20:00 UTC on the
+  newest stored day, i.e. 00:00 UTC two days later, judged after the run's
+  ingest, so a morning run alerts while the missed update can still be
+  captured); partial days, abandoned days and two updates on one UTC day
+  alert; non-ingest failures alert once, then at most daily; each cleared
+  condition sends one "recovered". A superseded day (an older captured day,
+  or a day holding an earlier update of the same UTC date) is written only
+  if it holds at least `LIVE_FLOOR` (90%) of its groups, counted as held /
+  (held + failed + never attempted) from that day's own manifest, and at
+  least one row. Otherwise it is **abandoned**: nothing is written, the raw
+  files stay, the manifest gets an `abandoned` record, it is never retried,
+  and `pkmn daily` alerts once (key `abandoned:<date>`). A capture run stops
+  fetching after `MAX_CONSECUTIVE_FAILURES` (10) failed groups in a row; the
+  untried groups have no manifest entry, count as failed, and are fetched on
+  the next run. Days are written one at a time; the first write that raises
+  stops the run and lands in the report's `finalize_errors`, which `pkmn
+  daily` treats as an ingest error. The archive probe asks for the day after
+  the newest archive-stored day and is skipped when that day is already
+  stored (no gap left). Alerts go to a macOS banner plus an ntfy phone push
+  (`live/notify.py`). `daily.json` gains `live` (null under
+  `--skip-ingest`; it lists `abandoned` days) and `signals_skipped`. The launchd template runs at
+  09:00, 13:00, 17:00 and 21:00. **The days 2026-09-14 to 2026-10-23 are
+  lost**: the live endpoints serve only the current update, so nothing can
+  recover them unless tcgcsv republishes the archive. **2026-10-24 and
+  2026-10-25** were captured by an owner-approved throwaway stopgap script
+  outside the repo (`capture_raw.py`) into `data/raw/live/<day>/`, in the
+  same layout `data/live.py` reads, so the first real run finalizes them as
+  ordinary days (2026-10-24's capture, 2026-10-25 16:33 UTC: 220 of 220
+  groups held, 45,400 price rows, 5 held-empty). Stopgap manifests carry no
+  `tracked` list, so their missing set is read from their own entries
+  only. **Task 6, run with owner approval on 2026-10-26:** `pkmn
+  live-ingest --root /Users/ml3787/pkmn-stock` finalized both stopgap days
+  into the real warehouse, 2026-10-24 as 44,597 clean + 803 quarantined
+  (= the manifest's 45,400) and 2026-10-25 as 44,602 + 797 (= 45,399).
+  Every non-empty held group (215 of 220 each day) has product ids in the
+  stored partitions and no held product id is missing; the check maps
+  product ids back to each group's raw file, because the price partition
+  has no `group_id`. The catalog refresh in that run left
+  `products.parquet` at sha256 `4cf6c3a6...`, unchanged. ntfy is
+  configured (`data/config/notify.toml`, gitignored) and `pkmn notify-test`
+  reached the owner's phone. The launchd job is reinstalled with the four
+  daily runs; a `launchctl kickstart` run finished `status: ok` (no new
+  update to store, signals on 2026-10-25, 0 buys / 0 sells, archive probe
+  recorded). The job first ran from the `pkmn-stock-live-ingest` worktree
+  (with `--root /Users/ml3787/pkmn-stock`) and was repointed at the main
+  checkout when this branch merged into `feat/instrument-repair-horizon` on
+  2026-10-26.
 
 ## Commands
 
@@ -448,11 +754,17 @@ uv run pytest                # test suite
 uv run ruff check . && uv run ruff format --check . && uv run mypy
                              # lint + format + strict typecheck (src/ plus the two
                              # operator scripts: rebuild_warehouse, verify_rebuild)
-uv run pkmn ingest --start 2026-07-01 --end 2026-07-31   # extend price history
+uv run pkmn ingest --start 2026-07-01 --end 2026-07-31   # archive backfill/rebuild path (archive offline since 2026-09-14: 403s)
+uv run pkmn live-ingest                                  # capture the current tcgcsv update from the live endpoints once; exit 1 if incomplete
+uv run pkmn notify-test                                  # send a test ntfy push (needs data/config/notify.toml)
 uv run pkmn refresh-products                             # repair the catalog from all 217 groups, no price ingest
 uv run python scripts/rebuild_warehouse.py --root .      # rebuild the warehouse into data/warehouse-full/ from cached archives (~17 min, resumable; leave --start at its default)
 uv run python scripts/verify_rebuild.py --root .         # gate the swap: every pre-existing product must reproduce exactly, prices + quarantine + catalog (exit 0 = safe)
-uv run pkmn backtest --start 2024-03-01 --end 2026-06-30 # buy-and-hold benchmark (default strategy)
+uv run pkmn backtest --start 2024-03-01 --end 2026-06-30 # buy-and-hold benchmark (default strategy; default --execution book)
+# The formula baseline (done 2026-10-25) used --execution formula on backtest and
+# walkforward, then `pkmn evaluate --execution formula`. Any re-run of it must too:
+# without the flag every one of them defaults to book (see the Plan B bullet).
+uv run pkmn backtest --start 2024-03-01 --end 2026-06-30 --execution formula   # formula baseline benchmark
 uv run pkmn backtest --strategy sealed-accumulation --start 2024-03-01 \
     --end 2026-06-30 --param take_profit=2.0 --holdings holdings.csv   # any strategy + cash/holdings
 uv run pkmn walkforward --strategy sealed-accumulation \
@@ -468,10 +780,19 @@ uv run pkmn daily --skip-ingest                          # the loop, offline
 uv run pkmn daily --skip-ingest --paper                  # paper mode dry-run
 uv run pkmn runs list                                     # experiment registry: recorded runs
 uv run pkmn runs show <run-id>                             # full record for one run
-uv run pkmn evaluate                                     # cross-strategy rigor: CIs, DSR, Reality Check
+uv run pkmn evaluate                                     # cross-strategy rigor: CIs, DSR, Reality Check (default book)
+uv run pkmn horizon <backtest-run-id>                     # per-trade edge vs holding sealed over each trip's OWN dates
+uv run pkmn horizon <backtest-run-id> --benchmark <run-id> # pin the index run explicitly (registry ids, never a directory)
 uv run pkmn backtest --start ... --end ... --no-impact    # flat-cost, skip market-impact model
 uv run pkmn walkforward --strategy sealed-accumulation --start ... --end ... \
-    --trials 15 --engine python                          # reference (slow) Python engine, walkforward only
+    --trials 15 --engine python --execution formula      # reference (slow) Python engine, walkforward only (python + book is rejected)
+uv run pkmn walkforward ... --execution book|formula     # default book: modelled resting orders (synthetic, built from the day's tcgcsv quote)
+uv run pkmn evaluate --execution formula                 # score formula walk-forwards (default book; one mode per run); REQUIRED for the formula baseline re-run
+uv run pkmn wire encode --start 2024-02-08 --end 2026-09-13 --out data/wire/full.pkw  # warehouse -> ITCH-style quote file
+cpp/build-linux-release/pokemon_replay data/wire/full.pkw [--no-ladders] [--repeat N]   # (in the VM) replay a wire file, rebuild each day's ladders
+uv run python scripts/book_equivalence.py --start 2024-03-01 --end 2026-06-30   # book vs formula pricing, real data
+uv run python scripts/bench_pokemon_book.py              # encode, backtest and walk-forward cost, book vs formula
+scripts/bench_pokemon_replay.sh                          # replay throughput in the VM
 cmake -S cpp -B cpp/build -DPKMN_BUILD_TESTS=ON && cmake --build cpp/build -j && ctest --test-dir cpp/build
                              # C++ unit tests (Catch2), independent of pytest
 uv run python scripts/parity_full.py                      # full-data bit-for-bit acceptance, both engines
@@ -482,6 +803,16 @@ make web                                                  # run the API + web de
 All four gates must pass before every commit. CI runs them with
 `uv sync --frozen` (stale uv.lock fails the build — commit pyproject.toml and
 uv.lock together).
+
+```bash
+# Plan A (IEX order book); the VM is the Linux build/benchmark host
+orb -m ubuntu bash -lc 'cd /Users/ml3787/pkmn-stock && cmake -S cpp -B cpp/build-linux -DPKMN_BUILD_TESTS=ON && cmake --build cpp/build-linux -j && ctest --test-dir cpp/build-linux'
+uv run python scripts/iex_hist.py --date 20241223 --feeds DPLS DEEP TOPS --dest data/iex   # download (gzip kept on disk)
+orb -m ubuntu bash -lc 'cd /Users/ml3787/pkmn-stock && cmake -S cpp -B cpp/build-linux-release -DCMAKE_BUILD_TYPE=Release && cmake --build cpp/build-linux-release -j --target iex_oracle'   # builds the Release iex_oracle (bench_iex.sh builds only iex_bench)
+cpp/build-linux-release/iex_oracle --deep-plus data/iex/20241223_IEXTP1_DPLS1.0.pcap.gz \
+    --deep data/iex/20241223_IEXTP1_DEEP1.0.pcap.gz --tops data/iex/20241223_IEXTP1_TOPS1.6.pcap.gz  # exit 0 pass, 1 mismatch, 3 inconclusive (currently 1, see docs/iex-oracle.md)
+scripts/bench_iex.sh [--profile] [--no-record]            # re-execs in the VM, prepends a section to docs/benchmarks/iex-book.md
+```
 
 ## Layout
 
@@ -526,6 +857,17 @@ uv.lock together).
   `data/runs/registry.jsonl`; `pkmn runs list`/`show` inspect it.
   `stats.py`: seeded bootstrap statistics (CIs, deflated Sharpe, Reality
   Check) feeding `pkmn evaluate` and walkforward reports.
+  `screen.py`: `rank_assets(history, today)` — tradeability ranking (print
+  density desc, then relative spread `(mid-low)/mid` asc, then
+  `product_id`/`sub_type`), leakage-bounded by `today` and mirrored
+  bit-for-bit by the C++ `BuyAndHold`. Used by the benchmark's allocation
+  today; it is also the machinery the not-yet-run liquidity-floor experiment
+  (findings-doc open question 3) needs, so keep it strategy-agnostic. Any
+  change to the sort key or the undefined-spread rule must land on both
+  language sides in the same commit. `horizon.py`: FIFO round-trip pairing
+  of a backtest's `fills.parquet` plus per-trip edge against the sealed
+  index over each trip's own entry/exit dates (`horizon_report`); Python-only
+  by design — it reads artifacts after a run and is not on the hot path.
 - `src/pkmn_quant/live/` — `pkmn signals`: one on_bar at the latest warehouse
   date using the last fold's params from the latest walk-forward artifact;
   markdown + JSON reports that carry the strategy's OOS record.
@@ -616,9 +958,35 @@ uv.lock together).
   polling), walk-forward detail (`/walkforward/:runId`), backtest detail
   (`/backtest/:runId`, benchmark overlaid on the equity chart, seeded-exit
   markers, paginated fills table), and cross-strategy rigor compare
-  (`/evaluate/:runId`). `npm run check` (tsc --noEmit + vitest, 25 tests)
+  (`/evaluate/:runId`). `npm run check` (tsc --noEmit + vitest, 29 tests)
   and `npm run build` (production build) gate it; CI runs both in a
   dedicated `web` job alongside the Python `checks` job.
+- `cpp/src/pkmn_book/` — `OrderBook`: price-time order book (per-book
+  pooled order arena, open-addressing order-id table, per-side contiguous
+  price levels with the best price at the back). No Python or zlib dependency.
+- `cpp/src/pkmn_md/` — IEX market data: streaming pcapng reader over zlib,
+  IEX-TP framing + sequence tracker (a seq-1 packet with a newer send time is
+  a stream restart), DEEP+ and DEEP decoders, the TOPS Quote decoder,
+  `BookSet` (one `OrderBook` per
+  symbol), `timing.hpp` (cntvct_el0 timer). Built into `md_tests`, separate
+  from `engine_tests`, and kept out of the Python wheel build.
+- `cpp/tools/` — `iex_decode`, `pcap_count`, `iex_oracle` (book vs DEEP/TOPS,
+  see `docs/iex-oracle.md`), `iex_bench` (driven by `scripts/bench_iex.sh`).
+- `cpp/src/pkmn_engine/ladder.*`, `execution_book.*` — Plan B: the daily
+  ladder builder (modelled resting orders, synthetic, built from the day's
+  tcgcsv quote) and book execution against it. `cpp/src/pkmn_wire/` — the
+  ITCH-style Pokemon quote wire format: encoder, decoder, `replay.hpp`.
+  `docs/pokemon-wire-protocol.md` specifies it; `docs/benchmarks/
+  pokemon-book.md` (raw JSON in `pokemon-book-raw/`) records the
+  measurements. `src/pkmn_quant/wire.py` feeds the encoder.
+- `docs/benchmarks/` — `iex-book.md` (dated results, newest first, plus the
+  hand-written Task 6 A/B), flamegraphs and folded stacks for the baseline
+  (`-c9e60e0`) and the optimized book. Also `docs/iex-oracle.md` and
+  `docs/iex-hist-terms.md` (IEX data terms; the citation line is required
+  wherever IEX data results are published).
+- `data/iex/` — gitignored (covered by `/data/`); the three 2024-12-23
+  `.pcap.gz` files (DPLS, DEEP, TOPS) are about 4.5 GiB on disk (`du -sh`).
+  Never decompress to disk; every tool streams the gzip.
 
 ## Conventions and gotchas
 
@@ -629,6 +997,52 @@ uv.lock together).
   numbers — if a deliberate change shifts results, update the goldens in the
   same commit with a hand-derivation in the docstring.
 - tcgcsv.com 401s httpx's default User-Agent — always use `tcgcsv.make_client()`.
+- **The catalog is a mutable research input.** Every ingest merges a fresh
+  fetch into `products.parquet` and upstream rows win, so `released_on`,
+  `name` or `group_id` can change under a fixed price history (104 release
+  dates changed between 2026-08-03 and 2026-10-25, 102 of them to null).
+  sealed-accumulation and both ML strategies read `released_on`, so their
+  results move with it. Record the catalog sha256 with any run you intend to
+  reproduce (runs recorded since the live-ingest merge carry
+  `catalog_sha256` in `data_fingerprint`), and snapshot the file before a
+  long batch.
+- **The tcgcsv price archive is offline (403 since 2026-09-14).** New days
+  come only from the live per-group endpoints, which serve only the current
+  update: a day not captured while it is current is lost for good. `pkmn
+  ingest`/`ingest_range` remain for rebuilds and a backfill if the archive
+  returns; `pkmn daily` no longer calls them. A day written from live data is
+  final, and a restored archive must never overwrite it.
+- **Live snapshots are dated by the UTC calendar date of tcgcsv's update
+  timestamp** (`last-updated.txt`), never by the local date or the fetch
+  time: a 2026-10-24T20:05Z update is day 2026-10-24 even if fetched the next
+  morning. This assumes the old archive file `prices-D` held the update
+  published on UTC day D. **That equivalence is a convention, not a verified
+  fact**: no day exists in both sources to check it against. If it is ever
+  shown to be off by one, change `live.update_day` and nothing else.
+- **An abandoned live day is not in the warehouse on purpose.** A
+  superseded day under `LIVE_FLOOR` (or with zero rows) gets an `abandoned`
+  record in its `data/raw/live/<day>/manifest.json` and is skipped by
+  `pending_days` from then on. Because it is not stored, `ingest_range`
+  would fill it from a restored archive. Deleting the record makes the next
+  run write the partial day, and after that no archive backfill can replace
+  it, because a live day, once written, is final.
+- ntfy phone alerts read `[ntfy] topic` (and optional `server`) from
+  gitignored `data/config/notify.toml`. Absent or unreadable config means
+  banners only. Never commit the topic: anyone who knows a public ntfy topic
+  can read and post to it. A notification failure never fails a run.
+- The launchd job only changes when it is reinstalled: editing
+  `scripts/com.pkmn-quant.daily.plist` does nothing to the installed
+  `~/Library/LaunchAgents/com.pkmn-quant.daily.plist`. Reinstall it (sed
+  REPO_PATH, `launchctl bootout`, `launchctl bootstrap`) for a change to
+  apply. Since the merge (2026-10-26) the installed copy runs the main
+  checkout (`/Users/ml3787/pkmn-stock`), so it runs whatever branch that
+  checkout has checked out.
+- The stopgap `capture_raw.py` (outside the repo) is superseded by `pkmn
+  live-ingest`/`pkmn daily`, which is now installed; do not run it again. Its
+  `data/raw/live/` directories are read as already held, not re-fetched.
+- `data/results/daily-state.json` (alert state) sits next to the
+  `daily-<date>/` directories, so a bare `glob("daily-*")` matches it too;
+  glob `daily-*/daily.json` (as the dashboard does) or `daily-2*`.
 - `refresh_products` merges into `products.parquet` and never replaces it: it
   runs on every ingest, including the unattended `pkmn daily` job that
   swallows ingest errors, so a replace lets one transient connection reset
@@ -673,19 +1087,99 @@ uv.lock together).
   is preserved as `data/results/evaluate-2026-08-04-stale-benchmark/`, and a
   registry record's own `config.benchmark`/`results.reality_check_p` are the
   authoritative per-run values, not whatever is in the directory today.
-- **Buy-and-hold benchmark reference figure, 2024-03-01→2026-06-30,
-  impact-on: +10.53%** (run `20260804T061600Z-37a23f`) on the current
-  217-group universe. The older +186.0% flat-cost / +183.7% impact-on
-  figures are **dead** — they were measured on the 23-group universe and
-  cannot be compared to anything run today. **Do not use +10.53% as a bar
-  either without reading the caveat**: `BuyAndHold` equal-weights the sealed
-  universe with integer quantities, and on 1,315 day-1 sealed assets a
-  $10,000 account gives a $7.60 per-asset budget, so the run deploys only
-  $466.78 (4.7%) and sits 95% in cash for 22 months. Its Sharpe of 6.57 and
-  max drawdown of −0.90% are money-market artifacts, not risk-adjusted
-  quality. The benchmark's sizing rule needs fixing before any wide-universe
-  comparison means anything (see the findings doc's Full set coverage
-  section); until then, state the deployment fraction alongside the return.
+  **The glob is now deleted (2026-08-09)**: `pkmn evaluate` resolves its
+  benchmark through `_benchmark_candidates(load_runs(root))`, the same
+  registry-only rule `pkmn horizon`, `/api/runs` and the dashboard apply —
+  which also drops the paired sidecar benchmarks tagged `benchmark_for` —
+  and it now refuses a benchmark whose window does not span the strategies'
+  (a real 61-day buy-and-hold on disk used to clear the >= 60-day overlap
+  check and would have produced a Reality Check over 61 days of 660-day
+  curves). Until that fix, the 2026-08-08 run picked the correct benchmark
+  only because those renames were in place, so nothing matched.
+- **Current bar (2026-10-24, formula): +126.84%, run
+  `20261024T170908Z-99ee95`**, 86.1% notional / 99.95% all-in deployed,
+  warmup 0; see the Formula baseline status bullet. The paragraph below is
+  the older, superseded figure, kept for provenance.
+- **Buy-and-hold benchmark reference figure (pre-fix-wave), SUPERSEDED by
+  the formula baseline above.** The run below allocated half the account to one
+  non-printing product through the unbounded deficit sweep, and predates the
+  screen and liquidity-tier fixes as well; do not quote it as the bar until
+  the re-run lands. Kept here with its provenance so the replacement can be
+  compared against it. 2024-03-01→2026-06-30,
+  impact-on, 217-group universe: +24.93% (run `20260807T135424Z-8362bc`,
+  $10,000, `n_assets=100`). CAGR +10.02%, max drawdown −25.73%, Sharpe
+  0.6336, equity $10,000.00 → $12,492.97, 38 fills. **That drawdown is entry
+  friction, not market risk**: recomputed from the run's `equity.parquet` it
+  lands on the FIRST fill day against a running peak equal to the all-cash
+  starting balance, and nothing near it recurs across the remaining 28
+  months. It prices what it costs to convert the account into sealed
+  inventory (fees plus the floor premium, since positions mark at `market`
+  while buys pay `max(market, low)`) — a real and useful number, but never
+  quote it as "how far a long sealed position fell" or set it beside a
+  strategy's drawdown. **This is the bar; use
+  it, and state the deployment fraction with it: 74.2% notional / 99.9%
+  all-in** ($7,423.07 notional + $38.00 fees + $2,530.36 impact = $9,991.43;
+  impact alone is 34.1% of notional under the buy floor, so a quarter of the
+  account is friction, not inventory). **Quote deployment on one basis or the
+  other, never one from each** — notional runs 60.1 → 4.7 → 74.2 across the
+  three benchmark eras and all-in runs 63.0 → 5.5 → 99.9; "4.7% → 99.9%"
+  mixes them and overstates the repair. Every earlier benchmark
+  figure is **dead as a comparison point**: +186.0% flat-cost and +183.67%
+  impact-on were the 23-group universe, the impact-on one at 63.0% all-in
+  deployment (the flat-cost run charges no impact at all, so its all-in
+  necessarily differs and 63.0% does not describe it), and
+  +10.53% (`20260804T061600Z-37a23f`) was the 217-group universe at 5.5%
+  all-in — a 95%-cash account whose Sharpe 6.57 and −0.90% drawdown were
+  money-market artifacts. **+24.93% is not "the market fell then recovered"
+  relative to those numbers: the three are different allocation rules over
+  two different universes (23 groups, then 217) under two different cost
+  models (the buy floor arrived with the third)** — not one market measured
+  three times, so never chart them as a series. Two caveats survive the repair.
+  (a) 38 of the 100 screened assets actually hold units (the pre-floor
+  day-one measurement predicted 73), so the bar is less diversified than
+  designed. (b) **The figure carries an implicit `warmup_days=0`** — the
+  screen ranks on `ctx.history`, so the bar moves with how much history
+  exists at the first bar: measured on the native engine, same window/cash/
+  impact, warmup 0 gives 38 fills / +24.93% (reproducing the run exactly)
+  and warmup 120 gives 42 fills / +16.07%. `pkmn backtest` exposes no
+  `--warmup-days` flag and defaults to 0, while `pkmn walkforward` defaults
+  to 120, so the bar and the walk-forward rows compared against it are not
+  on the same warmup. **Direction and scope, so nobody has to re-derive
+  them:** the published bar is the *harder* of the two (+24.93% vs +16.07%),
+  so the mismatch is conservative against the strategies and no conclusion
+  flips; and **the horizon results are unaffected** — all six horizon source
+  runs and the index are `pkmn backtest` at warmup 0, so they are internally
+  consistent. See the findings doc's Instrument repair section.
+- **The benchmark is deliberately NOT walk-forward-searchable.**
+  `buy-and-hold` stays out of `REGISTRY`; its one knob lives in
+  `BUY_AND_HOLD_PARAMS` (`research/backtest_run.py`, `n_assets`, default
+  100, bounds [1, 10000]) so it is CLI-settable and declarative but has no
+  optuna search space. This is a deliberate deviation from the
+  instrument-repair design spec, which asked for it to be searchable.
+  Reason: buy-and-hold is the bar, not a candidate — tuning the bar to
+  maximise its own return makes every comparison against it self-serving,
+  and tuning it to anything else makes it arbitrary. If you change
+  `n_assets`, you have changed the bar: re-run the benchmark, say so, and
+  do not compare across the change.
+- **Buys price at `max(market, low)`; sells are deliberately asymmetric.**
+  tcgcsv's `market` is derived from completed **sales** while `low`/`mid`/
+  `high` describe current **listings**, so `market < low` is ordinary (2.19M
+  in-window rows), not corrupt — a buy simply cannot execute below the
+  cheapest live offer. `CostModel.buy_impact` floors the base at
+  `max(market, low)` and charges the premium through the **`impact` column**,
+  leaving a fill's `price` as the day's `market` print, then walks toward
+  `mid` from the floored base. A null `low` means no floor, never a guessed
+  one. **No sell-side floor exists and none should be invented**: tcgcsv
+  publishes no bid series (`low`/`mid`/`high` are all ask-side), so a
+  symmetric fix would be fabricating a price. **Marking is also unchanged** —
+  positions mark at `market`, so buying at the ask and marking at the last
+  sale books an immediate unrealised loss; that is correct, not a bug.
+  One consequence to know: the floor is **gated on `impact_enabled`**
+  (`engine/execution.py:86-102`), because the premium has no column to live
+  in with impact off and sizing off a floored base without it cut real
+  quantities up to 10x. So `--no-impact` runs again size and price buys at a
+  sales print that may sit below any live offer — they are a comparability
+  tool, not a model of executable prices.
 - Sharpe/Sortino on this data are inflated by mark smoothing (thin markets,
   carry-forward marks), and the full-set-coverage swap made this **worse,
   not better**: the same carry-forward marks now apply to 31,713 priced
@@ -735,3 +1229,44 @@ uv.lock together).
   bit-for-bit parity with the Python engine depends on IEEE-754-exact,
   non-reassociated floating point; either flag will pass the C++ unit tests
   and silently break parity on real data.
+
+- **IEX/Plan A build gotchas.** A non-SKBUILD cmake configure of `cpp/` now
+  requires zlib (`find_package(ZLIB REQUIRED)`); the Python wheel build does
+  not (the market-data targets are excluded from it). On macOS FindZLIB
+  returns the SDK `usr/include`, which `cpp/CMakeLists.txt` clears from
+  `ZLIB::ZLIB`'s interface includes to avoid shadowing the toolchain headers.
+  A plain `uv sync` drops the `api` and `dashboard` groups, after which
+  `uv run mypy` fails on the api code; use
+  `uv sync --group api --group dashboard` before the gates. The bench SHA
+  stamp is dirty-aware and counts untracked files (a build directory inside
+  the tree makes a result read `-dirty`; that is why the Task 6 A/B rows
+  say `1c14e20e25d7-dirty`). Benchmark comparisons in this VM need
+  interleaved A/B runs; a single before/after pair is inside the noise.
+
+- **Plan B book execution gotchas.** Book and formula results are never
+  compared: `pkmn evaluate` and `pkmn horizon` refuse to mix modes.
+  `pkmn evaluate` defaults to `--execution book` and filters to one mode;
+  pass `--execution formula` for the legacy artifacts. Book walk-forwards
+  write `data/results/wf-{strategy}-{start}-{end}-book`; formula keeps the
+  legacy name, and `walkforward.json` and registry records carry
+  `"execution"` (missing means formula). Live paths are still formula:
+  `pkmn signals` prices with the formula, but it picks the lexicographically
+  last `wf-{strategy}-*` directory, which is the `-book` one when both
+  exist, so its params can come from a book walk-forward while its prices
+  stay formula. Impact-off runs are recorded as formula. The ladder prices in
+  whole cents, rounded to nearest with halves away from zero (`std::llround`);
+  the exact 1e9-ticks ladder is test-only. Each side has its own full depth
+  per asset-day (the formula shares one counter across both sides), two buys
+  walk the same ask ladder in arrival order, and the book is rebuilt fresh
+  every day. On the five native strategies at default params zero fills fell
+  on two-sided asset-days, so the one designed divergence never fired there.
+  Crossed or missing quotes build flat books at the base price. The wire
+  encoder raises `ValueError` on a price that is not a whole number of
+  cents or is at or above the u32 null sentinel. Wire files live in
+  gitignored `data/wire/`. `pkmn evaluate` writes book runs to
+  `evaluate-<date>-book/` and formula to `evaluate-<date>/`, so one of each
+  per day coexist (two of the same mode on one day still overwrite).
+- Formula records now carry `"execution": "formula"` in their config, so the
+  config hash of an otherwise identical formula run differs before vs after
+  Plan B (the hash is display-only today; compare configs, not hashes).
+- **The catalog is unversioned and mutates daily.** `products.parquet` is rewritten by every `pkmn daily` or `pkmn live-ingest` run that writes a day (runs that write nothing leave it alone), and it is an input a price-only fingerprint cannot see. Compare `catalog_sha256` in two runs' `data_fingerprint` before calling two ML runs comparable. Records written before the key existed lack it.

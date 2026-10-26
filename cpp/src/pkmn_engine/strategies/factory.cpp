@@ -47,8 +47,8 @@ void check_known_params(const ParamMap& params, const std::string& strategy_name
 std::unique_ptr<Strategy> make_strategy(const std::string& name, const ParamMap& params,
                                         std::int8_t universe_kind) {
     if (name == "buy-and-hold") {
-        check_known_params(params, name, {});
-        return std::make_unique<BuyAndHold>(universe_kind);
+        check_known_params(params, name, {"n_assets"});
+        return std::make_unique<BuyAndHold>(universe_kind, iparam(params, "n_assets", 100));
     }
     if (name == "sealed-accumulation") {
         check_known_params(params, name,

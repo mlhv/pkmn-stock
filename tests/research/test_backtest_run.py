@@ -110,10 +110,13 @@ def test_resolve_params_rejects_non_numeric_string() -> None:
         resolve_params("sealed-accumulation", {"min_drawdown": "abc"})
 
 
-def test_resolve_params_buy_and_hold_takes_none() -> None:
-    assert resolve_params("buy-and-hold", {}) == {}
-    with pytest.raises(ValueError, match="no tunable"):
+def test_resolve_params_buy_and_hold_takes_only_n_assets() -> None:
+    assert resolve_params("buy-and-hold", {}) == {"n_assets": 100}
+    assert resolve_params("buy-and-hold", {"n_assets": "25"}) == {"n_assets": 25}
+    with pytest.raises(ValueError, match="unknown param"):
         resolve_params("buy-and-hold", {"x": 1})
+    with pytest.raises(ValueError, match="n_assets"):
+        resolve_params("buy-and-hold", {"n_assets": 0})
 
 
 def test_resolve_params_unknown_strategy() -> None:
@@ -371,3 +374,15 @@ def test_run_with_benchmark_skips_self_pairing(tmp_path: Path) -> None:
         kind="sealed",
     )
     assert paired.benchmark is None
+
+
+def test_effective_execution() -> None:
+    import pytest
+
+    from pkmn_quant.research.backtest_run import effective_execution
+
+    assert effective_execution("book", True) == "book"
+    assert effective_execution("formula", True) == "formula"
+    assert effective_execution("book", False) == "formula"
+    with pytest.raises(ValueError, match="book"):
+        effective_execution("fast", True)

@@ -242,13 +242,31 @@ def strategy_catalog() -> list[dict[str, Any]]:
     single source the web form generates its inputs from. `buy-and-hold` is
     triggerable but absent from REGISTRY, so it is added explicitly."""
     from pkmn_quant.live.report import THESIS
+    from pkmn_quant.research.backtest_run import BUY_AND_HOLD_PARAMS
     from pkmn_quant.research.registry import REGISTRY
 
+    def specs(params: Any) -> list[dict[str, Any]]:
+        return [
+            {
+                "name": p.name,
+                "kind": p.kind,
+                "default": float(p.default),
+                "low": float(p.low),
+                "high": float(p.high),
+                "log": p.log,
+            }
+            for p in params
+        ]
+
+    # buy-and-hold's one knob (n_assets) comes from BUY_AND_HOLD_PARAMS, the
+    # same ParamSpecs `resolve_params` validates a triggered run against. This
+    # used to advertise "params": [], so the web form could not set n_assets
+    # even though the CLI could and the branch called it declarative.
     out: list[dict[str, Any]] = [
         {
             "name": "buy-and-hold",
             "thesis": THESIS.get("buy-and-hold", "Buy the universe on day one and hold."),
-            "params": [],
+            "params": specs(BUY_AND_HOLD_PARAMS),
         }
     ]
     for name in sorted(REGISTRY):
@@ -256,17 +274,7 @@ def strategy_catalog() -> list[dict[str, Any]]:
             {
                 "name": name,
                 "thesis": THESIS.get(name, ""),
-                "params": [
-                    {
-                        "name": p.name,
-                        "kind": p.kind,
-                        "default": float(p.default),
-                        "low": float(p.low),
-                        "high": float(p.high),
-                        "log": p.log,
-                    }
-                    for p in REGISTRY[name].params
-                ],
+                "params": specs(REGISTRY[name].params),
             }
         )
     return out

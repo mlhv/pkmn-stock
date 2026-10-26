@@ -8,28 +8,39 @@ namespace pkmn {
 
 namespace {
 
-// execution.py:74-104
+// execution.py `_fill_buy`
 std::optional<Fill> fill_buy(const Order& order, double market, const Portfolio& pf, Day day,
                              std::int64_t cap_left, std::int64_t used, const MarketView& mkt,
                              const CostModel& cm) {
-    std::int64_t qty = std::min(order.quantity, cap_left);
-    // afford: qty * market + shipping_per_line + impact(qty) <= cash
-    auto affordable =
-        static_cast<std::int64_t>(std::floor((pf.cash - cm.shipping_per_line) / market));
-    qty = std::min(qty, std::max<std::int64_t>(affordable, 0));
     double mid = mkt.mid(order.asset);  // NaN when the asset has no quote today
-    double impact = cm.buy_impact(market, mid, qty, used);
+    double low = mkt.low(order.asset);  // NaN when the asset has no quote today
+    // A buy cannot execute below the cheapest current listing; `market` is
+    // sales-derived and can sit under it (see CostModel::buy_base, which also
+    // explains the impact_enabled gate and is the single definition of this
+    // price — `cap_left` was tiered on the same number).
+    double base = cm.buy_base(market, low);
+    std::int64_t qty = std::min(order.quantity, cap_left);
+    // afford: qty * base + shipping_per_line + walk-impact(qty) <= cash.
+    // With impact ON, qty*base <= qty*market + impact(qty), so `base` is a
+    // valid upper bound: it only changes how many times the decrement loop
+    // below runs, never where it stops. With impact OFF the true constraint is
+    // qty*market + shipping <= cash and a `base` clip would bind BELOW it;
+    // hence the gate above.
+    auto affordable =
+        static_cast<std::int64_t>(std::floor((pf.cash - cm.shipping_per_line) / base));
+    qty = std::min(qty, std::max<std::int64_t>(affordable, 0));
+    double impact = cm.buy_impact(market, mid, low, qty, used);
     double cost = static_cast<double>(qty) * market + cm.shipping_per_line + impact;
     while (qty > 0 && cost > pf.cash) {
         --qty;
-        impact = cm.buy_impact(market, mid, qty, used);
+        impact = cm.buy_impact(market, mid, low, qty, used);
         cost = static_cast<double>(qty) * market + cm.shipping_per_line + impact;
     }
     if (qty <= 0) return std::nullopt;
     return Fill{day, order.asset, qty, market, cm.shipping_per_line, impact};
 }
 
-// execution.py:106-132
+// execution.py `_fill_sell`
 std::optional<Fill> fill_sell(const Order& order, double market, const Portfolio& pf, Day day,
                               std::int64_t cap_left, std::int64_t used, const MarketView& mkt,
                               const CostModel& cm) {
@@ -53,12 +64,16 @@ std::vector<Fill> execute(const std::vector<Order>& orders, const MarketView& ma
     InsertionMap<std::int64_t> filled_today(market.n_assets());
     for (const auto& order : orders) {
         double px = market.price(order.asset);
-        // execution.py:53-57 — NaN = didn't print (Python None); <= 0
+        // execution.py `execute` — NaN = didn't print (Python None); <= 0
         // defensive skip.
         if (std::isnan(px) || px <= 0.0 || order.quantity == 0) continue;
         std::int64_t used = 0;
         if (const auto* u = filled_today.find(order.asset)) used = *u;
-        std::int64_t cap_left = cm.max_daily_qty(px) - used;
+        // execution.py: the depth cap is tiered on the price actually paid —
+        // the floored base on a buy, the print on a sell (no floor there).
+        double tier_price =
+            order.quantity > 0 ? cm.buy_base(px, market.low(order.asset)) : px;
+        std::int64_t cap_left = cm.max_daily_qty(tier_price) - used;
         if (cap_left <= 0) continue;
         auto fill = order.quantity > 0
                         ? fill_buy(order, px, portfolio, day, cap_left, used, market, cm)

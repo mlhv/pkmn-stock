@@ -6,6 +6,7 @@ export interface RunSummary {
   git_sha: string | null;
   git_dirty: boolean;
   results: Record<string, number>;
+  execution: string;  // "book" | "formula"; missing in the registry = formula
 }
 
 export interface RunDetail extends RunSummary {
@@ -35,6 +36,7 @@ export interface WalkForwardResponse {
   folds: FoldRow[];
   rigor: RigorCI | null;
   equity_curve: EquityPoint[];
+  execution: string;
 }
 
 export interface ConfidenceInterval { point: number; lo: number; hi: number; level: number; }
@@ -49,6 +51,7 @@ export interface EvaluateResponse {
   n_days: number; start: string; end: string;
   params: Record<string, unknown>;
   strategies: StrategyStat[];
+  execution: string;
 }
 
 export interface ParamSpecInfo {
@@ -71,7 +74,7 @@ export interface HoldingInput {
 export interface BacktestRequest {
   strategy: string; start: string; end: string;
   params: Record<string, number>;
-  cash: number; impact: boolean; kind: string;
+  cash: number; impact: boolean; execution: "book" | "formula"; kind: string;
   holdings: HoldingInput[];
 }
 

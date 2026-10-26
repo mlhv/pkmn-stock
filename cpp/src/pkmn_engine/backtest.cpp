@@ -1,6 +1,7 @@
 #include "pkmn_engine/backtest.hpp"
 
 #include "pkmn_engine/execution.hpp"
+#include "pkmn_engine/execution_book.hpp"
 #include "pkmn_engine/portfolio.hpp"
 
 namespace pkmn {
@@ -16,10 +17,21 @@ BacktestResult run_backtest(MarketView& market, const ProductTable& products,
     portfolio.seed(initial_holdings);  // Plan 2a: pre-existing holdings, day 0
     BacktestResult out;
     std::vector<Order> pending;
+    // Book mode needs impact on: --no-impact (flat cost) overrides both modes.
+    const bool use_book =
+        cost_model.impact_enabled && cost_model.execution != ExecutionMode::Formula;
+    // Owned per call, so walk-forward fold threads never share books.
+    DayBooks books(use_book ? market.n_assets() : 0);
     for (Day day : market.days()) {
         // 1. Yesterday's orders fill at today's actually-printed prices.
         market.load_day(day);
-        auto fills = execute(pending, market, portfolio, day, cost_model);
+        std::vector<Fill> fills;
+        if (use_book) {
+            books.new_day();
+            fills = execute_book(pending, market, portfolio, day, cost_model, books);
+        } else {
+            fills = execute(pending, market, portfolio, day, cost_model);
+        }
         out.fills.insert(out.fills.end(), fills.begin(), fills.end());
         pending.clear();
         // 2. Strategy sees history <= today, emits orders for tomorrow.

@@ -25,9 +25,25 @@ def test_strategies_carry_paramspecs(client: TestClient) -> None:
     assert [p["log"] for p in ml["params"] if p["name"] == "max_iter"] == [True]
 
 
-def test_buy_and_hold_is_offered_with_no_params(client: TestClient) -> None:
+def test_buy_and_hold_advertises_its_one_param(client: TestClient) -> None:
+    """It used to advertise "params": [], so the web form could not set
+    n_assets even though `pkmn backtest --param n_assets=...` could and
+    resolve_params validated it -- the endpoint was contradicting the
+    declarative-ParamSpec claim it exists to serve. The spec must be the same
+    BUY_AND_HOLD_PARAMS entry a triggered run is validated against."""
+    from pkmn_quant.research.backtest_run import BUY_AND_HOLD_PARAMS
+
     by_name = {s["name"]: s for s in client.get("/api/strategies").json()}
-    assert by_name["buy-and-hold"]["params"] == []
+    (spec,) = by_name["buy-and-hold"]["params"]
+    (source,) = BUY_AND_HOLD_PARAMS
+    assert spec == {
+        "name": "n_assets",
+        "kind": "int",
+        "default": float(source.default),
+        "low": float(source.low),
+        "high": float(source.high),
+        "log": False,
+    }
     assert by_name["buy-and-hold"]["thesis"]
 
 
