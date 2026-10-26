@@ -66,6 +66,7 @@ if(NOT SKBUILD)
     src/pkmn_md/book_digest.cpp
     src/pkmn_md/recovery_proto.cpp
     src/pkmn_md/retransmit_ring.cpp
+    src/pkmn_md/gap_recovery.cpp
   )
   target_include_directories(pkmn_md PUBLIC src)
   target_compile_options(pkmn_md PUBLIC -ffp-contract=off)
@@ -151,7 +152,7 @@ if(PKMN_BUILD_TESTS)
   if(NOT SKBUILD)
     add_executable(md_tests tests/test_pcapng.cpp tests/test_iextp.cpp tests/test_deep_plus.cpp
       tests/test_book_set.cpp tests/test_deep.cpp tests/test_timing.cpp tests/test_iex_oracle.cpp
-      tests/test_book_digest.cpp tests/test_recovery_parts.cpp)
+      tests/test_book_digest.cpp tests/test_recovery_parts.cpp tests/test_gap_recovery.cpp)
     target_link_libraries(md_tests PRIVATE pkmn_md ZLIB::ZLIB Catch2::Catch2WithMain)
     # test_iex_oracle.cpp runs the built tool end to end (exit codes, counts).
     add_dependencies(md_tests iex_oracle)
