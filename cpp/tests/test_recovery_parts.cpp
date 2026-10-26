@@ -282,3 +282,18 @@ TEST_CASE("ring: oversize payload is not stored") {
     CHECK(r.bytes() == 10);
     CHECK(r.evicted() == 1);
 }
+
+TEST_CASE("ring: walk-back reaches the longest stored packet (max_count bound)") {
+    RetransmitRing r(100000);
+    r.store(0, 1, 1000, payload(1));  // longest, encloses everything below
+    for (std::int64_t s = 2; s < 900; s += 2) r.store(0, s, 1, payload(2));
+    r.store(0, 1001, 5, payload(3));
+    std::vector<std::span<const std::uint8_t>> out;
+    REQUIRE(r.collect(0, 950, 1003, out));
+    REQUIRE(out.size() == 2);
+    CHECK(out[0][0] == 1);
+    CHECK(out[1][0] == 3);
+    // in-place replace by a longer packet keeps bytes and lookup consistent
+    r.store(0, 1001, 9, payload(4, 30));
+    CHECK(r.collect(0, 1005, 1010, out));
+}

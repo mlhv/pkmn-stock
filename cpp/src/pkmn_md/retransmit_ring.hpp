@@ -29,8 +29,8 @@ public:
     // Appends every stored packet of `epoch` overlapping [from, to), ascending
     // by first_seq. Returns false, leaving out unchanged, unless the union of
     // those packets' [first_seq, first_seq + count) covers [from, to) with no
-    // hole; overlapping stored packets are all returned. An empty range is trivially covered. Spans stay valid until the
-    // next store().
+    // hole; overlapping stored packets are all returned. An empty range is
+    // trivially covered. Spans stay valid until the next store().
     bool collect(std::uint32_t epoch, std::int64_t from, std::int64_t to,
                  std::vector<std::span<const std::uint8_t>>& out) const;
 
@@ -46,6 +46,7 @@ private:
     std::size_t cap_;
     std::size_t bytes_ = 0;
     std::uint64_t evicted_ = 0;
+    std::int64_t max_count_ = 0;  // largest count ever stored; bounds collect's walk-back
     std::map<Key, Entry> index_;
     std::deque<Key> fifo_;
 };

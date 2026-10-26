@@ -14,20 +14,24 @@ void RetransmitRing::store(std::uint32_t epoch, std::int64_t first_seq, std::uin
     }
     if (auto old = index_.find(k); old != index_.end()) {
         if (old->second.count >= count) return;  // keep the longer packet
-        bytes_ -= old->second.payload.size();
-        index_.erase(old);
-        fifo_.erase(std::find(fifo_.begin(), fifo_.end(), k));
+        // Replace in place: the FIFO slot (and so eviction age) is kept.
+        bytes_ = bytes_ - old->second.payload.size() + payload.size();
+        old->second.count = count;
+        old->second.payload.assign(payload.begin(), payload.end());
+    } else {
+        index_.emplace(k, Entry{count, std::vector<std::uint8_t>(payload.begin(), payload.end())});
+        fifo_.push_back(k);
+        bytes_ += payload.size();
     }
-    while (!fifo_.empty() && bytes_ + payload.size() > cap_) {
+    max_count_ = std::max<std::int64_t>(max_count_, count);
+    // payload <= cap_, so the entry just stored is only reached last.
+    while (bytes_ > cap_ && !fifo_.empty()) {
         auto it = index_.find(fifo_.front());
         bytes_ -= it->second.payload.size();
         index_.erase(it);
         fifo_.pop_front();
         ++evicted_;
     }
-    index_.emplace(k, Entry{count, std::vector<std::uint8_t>(payload.begin(), payload.end())});
-    fifo_.push_back(k);
-    bytes_ += payload.size();
 }
 
 bool RetransmitRing::collect(std::uint32_t epoch, std::int64_t from, std::int64_t to,
@@ -36,11 +40,13 @@ bool RetransmitRing::collect(std::uint32_t epoch, std::int64_t from, std::int64_
     auto it = index_.lower_bound(Key{epoch, from});
     // A packet starting before `from` may reach into the range, and it need
     // not be the immediate predecessor (a long packet can enclose shorter
-    // ones). count <= 65535, so no key at or below from - 65535 can reach
-    // `from`; walk back over same-epoch keys above that bound.
+    // ones). No stored count exceeds max_count_, so no key at or below
+    // from - max_count_ can reach `from`; walk back only over same-epoch
+    // keys above that bound. max_count_ never shrinks (conservative after
+    // eviction) and is MTU-bound (tens) for real packets, so the walk is short.
     while (it != index_.begin()) {
         auto prev = std::prev(it);
-        if (prev->first.first != epoch || prev->first.second + 65535 <= from) break;
+        if (prev->first.first != epoch || prev->first.second + max_count_ <= from) break;
         it = prev;
     }
     std::vector<std::span<const std::uint8_t>> found;
