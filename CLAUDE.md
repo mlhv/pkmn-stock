@@ -702,9 +702,25 @@ tcgcsv.com). Design spec: `docs/superpowers/specs/2026-06-09-pkmn-quant-design.m
   ordinary days (2026-10-24's capture, 2026-10-25 16:33 UTC: 220 of 220
   groups held, 45,400 price rows, 5 held-empty). Stopgap manifests carry no
   `tracked` list, so their missing set is read from their own entries
-  only. No real-data run and no launchd change has happened on this
-  branch: both wait for the owner to confirm the formula baseline batch has
-  finished.
+  only. **Task 6, run with owner approval on 2026-10-26:** `pkmn
+  live-ingest --root /Users/ml3787/pkmn-stock` finalized both stopgap days
+  into the real warehouse, 2026-10-24 as 44,597 clean + 803 quarantined
+  (= the manifest's 45,400) and 2026-10-25 as 44,602 + 797 (= 45,399).
+  Every non-empty held group (215 of 220 each day) has product ids in the
+  stored partitions and no held product id is missing; the check maps
+  product ids back to each group's raw file, because the price partition
+  has no `group_id`. The catalog refresh in that run left
+  `products.parquet` at sha256 `4cf6c3a6...`, unchanged. ntfy is
+  configured (`data/config/notify.toml`, gitignored) and `pkmn notify-test`
+  reached the owner's phone. The launchd job is reinstalled with the four
+  daily runs; a `launchctl kickstart` run finished `status: ok` (no new
+  update to store, signals on 2026-10-25, 0 buys / 0 sells, archive probe
+  recorded). **Until this branch is merged, the installed job runs this
+  worktree's code** (`cd /Users/ml3787/pkmn-stock-live-ingest && uv run
+  pkmn daily --root /Users/ml3787/pkmn-stock`, logging to the main
+  checkout's `data/results/daily.log`), because the main checkout's branch
+  has no live-ingest code. Do not remove the worktree before repointing the
+  job at the main checkout.
 
 ## Commands
 
@@ -984,9 +1000,13 @@ scripts/bench_iex.sh [--profile] [--no-record]            # re-execs in the VM, 
 - The launchd job only changes when it is reinstalled: editing
   `scripts/com.pkmn-quant.daily.plist` does nothing to the installed
   `~/Library/LaunchAgents/com.pkmn-quant.daily.plist`. Reinstall it (sed
-  REPO_PATH, unload, load) after merge to get the four daily runs.
+  REPO_PATH, `launchctl bootout`, `launchctl bootstrap`) for a change to
+  apply. The installed copy currently points at the
+  `pkmn-stock-live-ingest` worktree with `--root /Users/ml3787/pkmn-stock`
+  (see the live ingest status bullet); after merge, reinstall it with
+  REPO_PATH set to the main checkout and no `--root`.
 - The stopgap `capture_raw.py` (outside the repo) is superseded by `pkmn
-  live-ingest`/`pkmn daily`; stop it once the live path is installed. Its
+  live-ingest`/`pkmn daily`, which is now installed; do not run it again. Its
   `data/raw/live/` directories are read as already held, not re-fetched.
 - `data/results/daily-state.json` (alert state) sits next to the
   `daily-<date>/` directories, so a bare `glob("daily-*")` matches it too;
