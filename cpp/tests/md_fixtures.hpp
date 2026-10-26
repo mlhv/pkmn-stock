@@ -161,7 +161,8 @@ inline Bytes capture(const std::vector<std::string>& payloads, const std::vector
 // its little-endian u16 length prefix. `payload_len_override` >= 0 replaces
 // the computed payload length, to build malformed segments.
 inline Bytes tp_segment(std::uint16_t protocol_id, std::int64_t first_seq, const std::vector<Bytes>& msgs,
-                        int payload_len_override = -1, int msg_count_override = -1) {
+                        int payload_len_override = -1, int msg_count_override = -1,
+                        std::int64_t send_time = 1'734'964'524'000'000'000) {
     Bytes body;
     for (const Bytes& m : msgs) {
         put_le16(body, static_cast<std::uint16_t>(m.size()));
@@ -177,9 +178,28 @@ inline Bytes tp_segment(std::uint16_t protocol_id, std::int64_t first_seq, const
     put_le16(b, static_cast<std::uint16_t>(msg_count_override >= 0 ? msg_count_override : msgs.size()));
     put_le64(b, 1000);  // stream offset
     put_le64(b, static_cast<std::uint64_t>(first_seq));
-    put_le64(b, 1'734'964'524'000'000'000ULL);  // send time
+    put_le64(b, static_cast<std::uint64_t>(send_time));  // send time
     append(b, body);
     return b;
+}
+
+// Eight-byte space-padded symbol field.
+inline void put_sym(Bytes& b, const char* s) {
+    std::string v(s);
+    v.resize(8, ' ');
+    append(b, bytes_of(v));
+}
+
+// DEEP+ Add Order 'a' (38 B): side/1 ts/2 sym/10 id/18 size/26 price/30.
+inline Bytes dp_add(const char* sym, char side, std::uint64_t id, std::uint32_t size, std::int64_t price,
+                    std::int64_t ts) {
+    Bytes m = {'a', static_cast<std::uint8_t>(side)};
+    put_le64(m, static_cast<std::uint64_t>(ts));
+    put_sym(m, sym);
+    put_le64(m, id);
+    put_le32(m, size);
+    put_le64(m, static_cast<std::uint64_t>(price));
+    return m;
 }
 
 // Unique path in the system temp dir; the caller removes it (TempFile does).

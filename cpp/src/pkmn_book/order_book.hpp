@@ -73,6 +73,16 @@ class OrderBook {
     // Replaces `out` with up to n levels, best first.
     void depth(Side side, std::size_t n, std::vector<Level>& out) const;
     Qty qty_at(Side side, Price price) const;
+    // Calls f(Price, OrderId, Qty) for every resting order on `side`: best
+    // level first, FIFO within a level. Read-only; the book must not change
+    // during the walk.
+    template <class F>
+    void for_each_order(Side side, F&& f) const {
+        const std::vector<LevelRec>& v = levels(side);
+        for (std::size_t i = v.size(); i-- > 0;) {
+            for (Slot s = v[i].head; s != kNil; s = nodes_[s].next) f(v[i].price, nodes_[s].id, nodes_[s].qty);
+        }
+    }
     std::size_t order_count() const { return count_; }
     void clear();
     const Anomalies& anomalies() const { return anomalies_; }
