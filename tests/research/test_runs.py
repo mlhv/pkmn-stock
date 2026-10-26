@@ -1,3 +1,4 @@
+import hashlib
 import json
 from datetime import date
 from pathlib import Path
@@ -10,6 +11,7 @@ from pkmn_quant.data.transforms import PRICE_SCHEMA
 from pkmn_quant.data.warehouse import Warehouse
 from pkmn_quant.research.runs import (
     config_hash,
+    data_fingerprint,
     load_runs,
     new_run_id,
     record_run,
@@ -60,7 +62,12 @@ def test_record_and_load_round_trip(tmp_path: Path, warehouse: Warehouse) -> Non
     assert r.strategy == "buy-and-hold-sealed"
     assert r.results == {"total_return": 0.23}
     assert r.config_hash == config_hash({"start": "2025-06-01", "end": "2025-06-03"})
-    assert r.data_fingerprint == {"min_date": "2025-06-01", "max_date": "2025-06-01", "rows": 1}
+    assert r.data_fingerprint == {
+        "min_date": "2025-06-01",
+        "max_date": "2025-06-01",
+        "rows": 1,
+        "catalog_sha256": None,
+    }
     # tmp_path is not a git repo -> unknown sha, treated as dirty.
     assert r.git_sha is None
     assert r.git_dirty is True
@@ -97,6 +104,37 @@ def test_recording_failure_warns_but_never_raises(
     )
     assert run_id is None
     assert "run tracking failed" in capsys.readouterr().err
+
+
+def _catalog_rows(names: list[str]) -> pl.DataFrame:
+    return pl.DataFrame({"product_id": list(range(1, len(names) + 1)), "name": names})
+
+
+def test_fingerprint_includes_catalog_hash(warehouse: Warehouse) -> None:
+    warehouse.write_products(_catalog_rows(["Pikachu", "Charizard"]))
+    expected = hashlib.sha256(warehouse.paths.products.read_bytes()).hexdigest()
+
+    fp = data_fingerprint(warehouse)
+
+    assert fp["catalog_sha256"] == expected
+    assert fp["rows"] == 1
+    assert fp["min_date"] == "2025-06-01"
+
+
+def test_fingerprint_catalog_hash_changes_with_catalog(warehouse: Warehouse) -> None:
+    warehouse.write_products(_catalog_rows(["Pikachu"]))
+    before = data_fingerprint(warehouse)["catalog_sha256"]
+
+    warehouse.write_products(_catalog_rows(["Pikachu", "Eevee"]))
+    after = data_fingerprint(warehouse)["catalog_sha256"]
+
+    assert before is not None and after is not None
+    assert before != after
+
+
+def test_fingerprint_catalog_absent_is_none(warehouse: Warehouse) -> None:
+    assert not warehouse.paths.products.exists()
+    assert data_fingerprint(warehouse)["catalog_sha256"] is None
 
 
 def test_load_runs_missing_file_is_empty(tmp_path: Path) -> None:

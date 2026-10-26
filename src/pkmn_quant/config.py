@@ -30,6 +30,10 @@ class Paths:
         return self.root / "data" / "raw" / "archives"
 
     @property
+    def raw_live(self) -> Path:
+        return self.root / "data" / "raw" / "live"
+
+    @property
     def warehouse(self) -> Path:
         return self.root / "data" / self.warehouse_name
 

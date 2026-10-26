@@ -21,7 +21,7 @@ A quant research system for TCGplayer card prices (via tcgcsv.com), built end to
 - **A custom event-driven backtest engine**: daily bars, T+1 fills, long-only, integer quantities, per-day liquidity caps tiered by price, ~12.75% sell fees plus shipping, and a walk-the-spread market-impact model that prices order size against the book.
 - **A native C++20 engine** (nanobind) that reproduces the Python engine **bit for bit**. Every fill and every equity value must match with `==`, never a tolerance, enforced at three levels (unit, differential, full-data acceptance).
 - **An 18x faster research loop**: a full walk-forward dropped from 6 minutes to 20 seconds, measured on the real 874-day / 23-group warehouse of the time, with fold-level parallelism that releases the GIL on the native path.
-- **Real data at scale**: 908 daily snapshots (2024-02 to 2026-08) of every one of tcgcsv's 217 Pokemon groups — 36.4M price rows across 31,713 products, rebuilt from cached archives in 17 minutes and swapped in only after every pre-existing row was verified to reproduce bit-for-bit.
+- **Real data at scale**: 908 daily snapshots (2024-02 to 2026-08) of every one of tcgcsv's 217 Pokemon groups: 36.4M price rows across 31,713 products, rebuilt from cached archives in 17 minutes and swapped in only after every pre-existing row was verified to reproduce bit-for-bit. tcgcsv took its price archive offline on 2026-09-14, so new days now come from its live per-group price endpoints, captured once per daily update (`pkmn live-ingest`, or `pkmn daily` four times a day); the days from 2026-09-14 to 2026-10-23 are lost, because the live endpoints only serve the current update.
 - **Walk-forward validation only**: seeded optuna tunes parameters in-sample, they are frozen, then tested strictly out-of-sample. The headline curve contains zero in-sample days and every run reports its overfitting gap.
 - **An experiment registry**: every run appends its config hash, git SHA, data fingerprint, and results to an append-only log (`pkmn runs list` / `pkmn runs show`), so any number in this README is reproducible.
 
@@ -77,7 +77,7 @@ This is the question the project exists to answer, and a stitched 28-month retur
 
 ```mermaid
 flowchart TD
-    A["tcgcsv.com daily archives"] -->|"pkmn ingest: quality gates,<br/>quarantine, never silent drops"| B["Parquet warehouse, DuckDB-queryable<br/><code>src/pkmn_quant/data/</code>"]
+    A["tcgcsv.com live per-group prices<br/>(archive offline since 2026-09-14)"] -->|"pkmn daily / pkmn live-ingest: quality gates,<br/>quarantine, never silent drops"| B["Parquet warehouse, DuckDB-queryable<br/><code>src/pkmn_quant/data/</code>"]
     B --> C["Event-driven engine: daily bars → Context →<br/>Strategy.on_bar → orders → T+1 fills → portfolio → metrics<br/><code>src/pkmn_quant/engine/</code> (Python) + <code>cpp/</code> (C++20, bit-identical)"]
     C --> D["<code>strategies/</code><br/>buy_and_hold, sealed_accumulation, dip_buyer,<br/>momentum, cost_aware_reversion, ml_ranker<br/>(gradient-boosted ranking, trained in-loop<br/>behind the anti-look-ahead wall)"]
     C --> E["<code>research/</code><br/>folds → seeded optuna → walk-forward runner/stitcher<br/>→ experiment registry → reports + artifacts"]
@@ -151,10 +151,14 @@ uv run --group dashboard streamlit run app/dashboard.py   # results explorer
         > ~/Library/LaunchAgents/com.pkmn-quant.daily.plist
     launchctl load ~/Library/LaunchAgents/com.pkmn-quant.daily.plist
 
-Runs `pkmn daily` at 09:00 (or on next wake, if the Mac was asleep at 09:00):
-ingests new prices, runs signals against your ledger (`pkmn portfolio ...`),
-and sends a macOS notification when there is something to act on, or when the
-run fails.
+Runs `pkmn daily` at 09:00, 13:00, 17:00 and 21:00 (or on next wake, if the
+Mac was asleep): captures tcgcsv's live update if it is not stored yet, runs
+signals against your ledger (`pkmn portfolio ...`) when a new day landed, and
+notifies when there is something to act on or a problem worth acting on.
+Notifications are a macOS banner, plus a phone push through ntfy if
+`data/config/notify.toml` holds an `[ntfy]` topic (`pkmn notify-test` checks
+it). After editing the plist, unload and reload the job for the change to
+take effect.
 
 Troubleshooting:
 
