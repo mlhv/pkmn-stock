@@ -651,6 +651,32 @@ tcgcsv.com). Design spec: `docs/superpowers/specs/2026-06-09-pkmn-quant-design.m
   horizon stdout, the dashboard caption and the web explorer now state the
   mode, book with the synthetic label. Book evaluates write
   `data/results/evaluate-<date>-book/`; formula keeps `evaluate-<date>/`.
+- **Formula baseline re-run done (2026-10-24/25), on code `3617c61` and
+  catalog sha256 `4cf6c3a6...` (32,887 rows).** This is the re-run the
+  final-review fix wave left pending; it supersedes every benchmark and
+  horizon figure in the instrument-repair bullets. All `--execution formula`,
+  impact on, 2024-03-01..2026-06-30. Bar: **+126.84%** (run
+  `20261024T170908Z-99ee95`, 60 fills, Sharpe 3.50, max drawdown -14.27%,
+  86.1% notional / 99.95% all-in, largest position 2.23%), bit-identical to
+  August's `7c776b`. `pkmn evaluate` (`20261025T195117Z-04d2b6`,
+  `data/results/evaluate-2026-10-25/`): Reality Check **p = 1.0000**, every
+  DSR at or below 0.010; stitched OOS from -10.31% (sealed-accumulation) to
+  -99.94% (ml-ranker-v2). Horizon, 1-3m median edge per trade: none beats
+  holding sealed (sealed-accumulation -11.96% over 2 trips, cost-aware-
+  reversion -22.66% over 35, ml-ranker -44.62% over 104, xs-momentum
+  -49.00% over 159, dip-buyer -52.88% over 115). **ml-ranker-v2 has no
+  horizon result**: its backtest was killed after a 21-hour swap thrash.
+  **Catalog drift finding:** the native walk-forwards and three of five
+  default backtests match August bit for bit; sealed-accumulation's backtest,
+  ml-ranker's backtest and both ML walk-forwards do not. ML is deterministic
+  (a same-catalog re-run of `74aaba` is bit-identical). The cause is
+  `released_on` drifting upstream (104 values changed since 2026-08-03,
+  102 of them to null), which sealed-accumulation's age gate and the ML age
+  features read. Restoring those 104 dates in a scratch root reproduces
+  August's sealed-accumulation backtest bit for bit; the same A/B on
+  ml-ranker moves it (-99.813% to -99.780%) but does not reproduce August
+  (-99.820%), so the ML mechanism is not isolated. No conclusion changes.
+  Full write-up: findings doc, "Formula baseline" section.
 
 ## Commands
 
@@ -665,9 +691,9 @@ uv run pkmn refresh-products                             # repair the catalog fr
 uv run python scripts/rebuild_warehouse.py --root .      # rebuild the warehouse into data/warehouse-full/ from cached archives (~17 min, resumable; leave --start at its default)
 uv run python scripts/verify_rebuild.py --root .         # gate the swap: every pre-existing product must reproduce exactly, prices + quarantine + catalog (exit 0 = safe)
 uv run pkmn backtest --start 2024-03-01 --end 2026-06-30 # buy-and-hold benchmark (default strategy; default --execution book)
-# The pending instrument-repair baseline re-run is FORMULA: add --execution formula
-# to its backtest and walkforward commands, and run `pkmn evaluate --execution formula`.
-# Without the flag every one of them now defaults to book (see the Plan B bullet).
+# The formula baseline (done 2026-10-25) used --execution formula on backtest and
+# walkforward, then `pkmn evaluate --execution formula`. Any re-run of it must too:
+# without the flag every one of them defaults to book (see the Plan B bullet).
 uv run pkmn backtest --start 2024-03-01 --end 2026-06-30 --execution formula   # formula baseline benchmark
 uv run pkmn backtest --strategy sealed-accumulation --start 2024-03-01 \
     --end 2026-06-30 --param take_profit=2.0 --holdings holdings.csv   # any strategy + cash/holdings
@@ -901,6 +927,14 @@ scripts/bench_iex.sh [--profile] [--no-record]            # re-execs in the VM, 
   numbers — if a deliberate change shifts results, update the goldens in the
   same commit with a hand-derivation in the docstring.
 - tcgcsv.com 401s httpx's default User-Agent — always use `tcgcsv.make_client()`.
+- **The catalog is a mutable research input.** Every ingest merges a fresh
+  fetch into `products.parquet` and upstream rows win, so `released_on`,
+  `name` or `group_id` can change under a fixed price history (104 release
+  dates changed between 2026-08-03 and 2026-10-25, 102 of them to null).
+  sealed-accumulation and both ML strategies read `released_on`, so their
+  results move with it. Record the catalog sha256 with any run you intend to
+  reproduce (`feat/live-ingest` adds `catalog_sha256` to the registry's
+  `data_fingerprint`), and snapshot the file before a long batch.
 - `refresh_products` merges into `products.parquet` and never replaces it: it
   runs on every ingest, including the unattended `pkmn daily` job that
   swallows ingest errors, so a replace lets one transient connection reset
@@ -954,8 +988,12 @@ scripts/bench_iex.sh [--profile] [--no-record]            # re-execs in the VM, 
   check and would have produced a Reality Check over 61 days of 660-day
   curves). Until that fix, the 2026-08-08 run picked the correct benchmark
   only because those renames were in place, so nothing matched.
-- **Buy-and-hold benchmark reference figure — SUPERSEDED, awaiting the
-  post-fix re-run.** The run below allocated half the account to one
+- **Current bar (2026-10-24, formula): +126.84%, run
+  `20261024T170908Z-99ee95`**, 86.1% notional / 99.95% all-in deployed,
+  warmup 0; see the Formula baseline status bullet. The paragraph below is
+  the older, superseded figure, kept for provenance.
+- **Buy-and-hold benchmark reference figure (pre-fix-wave), SUPERSEDED by
+  the formula baseline above.** The run below allocated half the account to one
   non-printing product through the unbounded deficit sweep, and predates the
   screen and liquidity-tier fixes as well; do not quote it as the bar until
   the re-run lands. Kept here with its provenance so the replacement can be

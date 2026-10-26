@@ -1,8 +1,11 @@
 # Walk-forward findings — 2026-07-04
 
-> **SUPERSEDED TWICE. Read the last two sections of this file first, newest
-> last: "Full set coverage" (2026-08-04) and "Instrument repair and
-> horizon-matched evaluation" (2026-08-09).**
+> **SUPERSEDED THREE TIMES. Read the last three sections of this file
+> first, newest last: "Full set coverage" (2026-08-04), "Instrument repair
+> and horizon-matched evaluation" (2026-08-09) and "Formula baseline"
+> (2026-10-24/25). The last one carries the current bar (+126.84%, run
+> `20261024T170908Z-99ee95`) and supersedes every benchmark and horizon
+> figure in the one before it, including the +24.93% quoted just below.**
 >
 > *Universe (2026-08-04).* Every number in this document, including in the
 > catalog-completeness note immediately below and the section it points at,
@@ -2371,3 +2374,169 @@ recorded here rather than left to be discovered.
 - **Open questions 1 and 3 from the Full set coverage section remain open:**
   the two ML losses are still untraced, and no liquidity-floor experiment has
   been run. The screen shipped here is the machinery question 3 needs.
+
+## Formula baseline (2026-10-24/25): the post-fix-wave re-run, and catalog drift as a hidden input
+
+This is the re-run the instrument-repair final-review fix wave left pending.
+It supersedes every benchmark and horizon figure in the Instrument repair
+section above (those predate the fix wave's affordability filter, screen fix,
+floored-base tier and net-of-exit horizon scoring). Same window
+(2024-03-01..2026-06-30), impact on, `--execution formula` on every command,
+so none of it is comparable to a book run. Code `3617c61` on
+`feat/instrument-repair-horizon`. Every record reads `git_dirty: true`; the
+only differences from that commit were the untracked `.vscode/` and
+`docs/superpowers/handoffs/` directories, with no tracked file modified.
+Warehouse fingerprint 38,202,342 rows, 2024-02-08..2026-09-13. Catalog
+`products.parquet` sha256 `4cf6c3a62084071524ef0b0a506821fbe5ac520e829580320e019bc22deb1798`
+(32,887 rows), snapshotted at
+`data/results/ARCHIVE-b154d96-20260810/products-snapshot-20261025T1106.parquet`.
+These registry records predate `catalog_sha256` in `data_fingerprint`, so
+this paragraph is the only place the catalog hash is recorded for them.
+
+### The bar
+
+Buy-and-hold sealed, run `20261024T170908Z-99ee95`: **+126.84%**, CAGR
+42.09%, Sharpe 3.50, max drawdown -14.27%, 60 fills. It is bit-identical
+to the August post-fix run `20260809T235407Z-7c776b`.
+
+Deployment, from the run's own fills (all 60 buys land on 2024-03-02, one
+fill per asset across 60 assets): $8,614.21 notional + $60.00 fees +
+$1,321.21 impact = $9,995.42 of $10,000. **86.1% notional, 99.95% all-in.**
+The largest single position is 2.23% of the account notional (3.76%
+all-in), against 50.05% in one product before the affordability filter.
+
+The drawdown is entry friction again, not market risk: the trough is
+2024-03-28 against the all-cash starting peak, after which nothing deeper
+recurs. Day-one equity is already $8,618.79 (-13.8%), which is what it
+costs to convert the account into sealed inventory under the buy floor.
+
+The usual caveats apply unchanged: `warmup_days=0` (the walk-forward rows
+below use 120), the Sharpe is inflated by mark smoothing, and **+126.84% is
+not comparable to +24.93%, +10.53% or +183.67%**: each is a different
+allocation rule, and the affordability filter is what moved this one.
+
+### Walk-forward, stitched OOS, and `pkmn evaluate`
+
+`pkmn evaluate --execution formula`, run `20261025T195117Z-04d2b6`,
+artifact `data/results/evaluate-2026-10-25/`, 660 aligned days
+(2024-08-28..2026-06-18) against `99ee95`:
+
+| strategy | walk-forward run | stitched OOS | 95% CI | Sharpe | DSR |
+|---|---|---|---|---|---|
+| sealed-accumulation | `20261024T171900Z-638007` | -10.31% | [-24.22%, +4.57%] | -0.98 | 0.001 |
+| xs-momentum | `20261024T173024Z-899966` | -35.16% | [-64.80%, +3.85%] | -1.12 | 0.000 |
+| ml-ranker | `20261025T165638Z-74aaba` | -90.33% | [-99.37%, -20.30%] | -0.77 | 0.010 |
+| cost-aware-reversion | `20261024T173611Z-93cf6a` | -97.87% | [-99.93%, -73.01%] | -1.23 | 0.002 |
+| dip-buyer | `20261024T172414Z-e221d5` | -99.17% | [-99.93%, -93.45%] | -2.50 | 0.000 |
+| ml-ranker-v2 | `20261025T195113Z-5c1b81` | -99.94% | [-100.00%, -85.51%] | -1.82 | 0.000 |
+
+**Joint White's Reality Check p = 1.0000.** Every deflated Sharpe is far
+below the 0.5 coin-flip point. Nothing beats buy-and-hold sealed.
+
+The four native walk-forwards are bit-identical to August
+(`evaluate-2026-08-10`, run `20260810T182923Z-946543`). The two ML ones are
+not. ml-ranker moved from -92.88% to -90.33% (August CI [-99.80%, +0.91%],
+DSR 0.020), with different fold-1 parameters. ml-ranker-v2 moved from
+-99.9358% to -99.9434% (Sharpe -1.755 to -1.815), with different
+parameters in folds 4 and 9 and the same in the other nine. The native
+strategies' DSRs shift in the third decimal only because DSR is corrected
+across all six strategies' Sharpes.
+
+### `pkmn horizon`, default-parameter backtests
+
+Same method caveat as before: walk-forward artifacts carry no
+`fills.parquet`, so these are default-parameter backtests over the same
+window, scored per round trip against the sealed index over each trip's own
+dates, with still-open trips net of a modelled exit.
+
+| strategy | backtest run | total return | trips | 1-3m trips | 1-3m median edge | 1-3m trips beating the index |
+|---|---|---|---|---|---|---|
+| sealed-accumulation | `20261024T171049Z-e89484` | +6.22% | 32 | 2 | -11.96% | 1 of 2 |
+| cost-aware-reversion | `20261024T171319Z-316389` | -98.41% | 125 | 35 | -22.66% | 8 of 35 |
+| ml-ranker | `20261024T182706Z-43d70a` | -99.81% | 121 | 104 | -44.62% | 10 of 104 |
+| xs-momentum | `20261024T171230Z-d79ea2` | -98.69% | 170 | 159 | -49.00% | 2 of 159 |
+| dip-buyer | `20261024T171145Z-419922` | -99.71% | 164 | 115 | -52.88% | 1 of 115 |
+| ml-ranker-v2 | none | | | | | |
+
+**Over the owner's 1-3 month band, none of them beats holding sealed.** The
+only positive band figure anywhere is xs-momentum's 3-6m +45.63% over 8
+trips; quote it with the 8. The previous section's one positive 1-3m number
+(sealed-accumulation, one trip) is gone: with today's catalog it is
+-11.96% over two trips.
+
+**ml-ranker-v2 has no horizon result.** Its default-parameter backtest was
+killed after 21 hours of swapping (memory growth, most likely in a polars
+`group_by` inside the per-bar bridge; not profiled). That is an open gap,
+not a finding.
+
+### Catalog drift: a hidden, mutable input to every number in this file
+
+Three of the five default backtests (dip-buyer, xs-momentum,
+cost-aware-reversion) and the benchmark are bit-identical to August.
+Sealed-accumulation (+5.57% then, +6.22% now) and ml-ranker (-99.820%
+then, -99.813% now) are not, and neither are the two ML walk-forwards.
+
+**ML is deterministic.** A second ml-ranker walk-forward on the same
+catalog reproduced `74aaba` bit for bit (equity curve, summary, every fold's
+parameters, stitched -0.9033089469500113). So the August difference is an
+input, not noise.
+
+**The input is the product catalog, and specifically `released_on`.**
+Prices inside the window are immutable archive days. The catalog is not:
+`refresh_products` merges a fresh fetch into `products.parquet` on every
+ingest, and fresh rows win. Against the closest surviving older copy
+(`data/warehouse-full-failed-197groups/products.parquet`, 2026-08-03), the
+current catalog has 360 new rows and, on the 32,527 shared ones, 104
+changed `released_on` values (102 dates that became null, 2 that moved; 7
+sealed, 97 single), 73 changed names, 13 changed groups, 7 changed
+rarities and **0** changed kinds. Upstream TCGplayer data dropped release
+dates that it used to publish.
+
+That explains the pattern exactly. `released_on` is read by
+sealed-accumulation's age gate (`strategies/sealed_accumulation.py:54-55`;
+a null date fails both comparisons, so the product leaves the candidate set)
+and by the ML strategies' age features. The three strategies that never read
+it, and the benchmark, which screens on `kind` (unchanged) and prices, did not move.
+
+**Proven for sealed-accumulation by A/B.** In a scratch root (price
+partitions symlinked, today's catalog with only those 104 `released_on`
+values restored from the 2026-08-03 copy), the sealed-accumulation default
+backtest reproduces August's `20260810T182947Z-1544c1` bit for bit: total
+return 0.055682032500000034, the same 52 fills and the same equity curve.
+One of the swapped trades is product 624676 (Destined Rivals Elite Trainer
+Box), whose release date was 2025-05-30 in August and is null now.
+**Not proven for ml-ranker.** The same scratch-root A/B on the ml-ranker
+default backtest (run `20261026T163602Z-28a797` in the scratch registry)
+gives -99.780%, against August's -99.820% (`20260810T214552Z-d96e5f`) and
+today's -99.813%, with 182 fills against August's 191. Restoring release
+dates alone moves ml-ranker but does not reproduce August. That is expected
+if more than `released_on` matters to it: the ML features also read `kind`
+and catalog membership, and 360 rows were added and 73 names, 13 groups and
+7 rarities changed. It is also possible that the 2026-08-03 copy is simply
+not the catalog August's ML runs saw (they ran on 2026-08-10, after
+further daily merges). The August catalog itself was never saved, so the
+ML half of this finding stays "input-driven, catalog the only changed
+input, mechanism not isolated". The ML run took about 10 hours wall-clock
+through the bridge, against 51 minutes for the same backtest on
+2026-10-24; the cause was not investigated (the lid-closed overnight hours
+are the obvious suspect), so treat it as a warning, not a measurement.
+
+What this means:
+
+- **Every research number in this file is a function of the catalog's state
+  on the day it was run**, not only of the code and the price history. Until
+  now the registry did not record that state. `feat/live-ingest` adds
+  `catalog_sha256` to `data_fingerprint`; until it lands, pin the catalog by
+  hand (as above) for any run that matters.
+- **The size of the effect tracks fragility, again.** The hard-filtered
+  native strategies moved by zero, or by 0.65 points on one default
+  backtest. The ML walk-forwards moved by 2.55 points on a 104-row metadata
+  change out of 32,887. This is the same signal as the Catalog completeness
+  section: an edge that real would not sit on release-date metadata.
+- **No conclusion changes.** Reality Check p = 1.0000 in both August and
+  today, and nothing beats the bar on either catalog.
+- **Not fixed, and a choice is needed.** The options are: freeze
+  `released_on` once seen, so a later null cannot erase a known date;
+  snapshot the catalog per research run; or accept drift and record the
+  hash. The third is what `feat/live-ingest` ships. The first is a
+  one-line merge rule but changes what "upstream wins" means.
