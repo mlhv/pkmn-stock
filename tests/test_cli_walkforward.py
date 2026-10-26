@@ -1,3 +1,4 @@
+import re
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -293,8 +294,10 @@ def test_walkforward_python_engine_rejects_book(tmp_path: Path) -> None:
     )
     assert result.exit_code != 0
     assert "Traceback" not in result.output
-    # rich wraps the error in a box; flatten before matching.
-    flat = " ".join(result.output.replace("│", " ").split())
+    # rich wraps the error in a box and, under GITHUB_ACTIONS, colors option
+    # names with ANSI escapes; strip both before matching.
+    plain = re.sub(r"\x1b\[[0-9;]*m", "", result.output)
+    flat = " ".join(plain.replace("│", " ").split())
     assert (
         "--execution book needs the cpp engine; the Python engine is the frozen formula reference"
         in flat
