@@ -45,7 +45,10 @@
 //      restart packet gives request(e, 1, first held seq)). done() turns
 //      true when the final epoch is finalized.
 //   5. Failure. on_unserved counts `unrecoverable`; failed() is then true
-//      and nothing more is applied. There is no resync.
+//      and nothing more is applied. There is no resync. A retransmit that
+//      fails rule 1 or names an unannounced epoch is also unrecoverable (its
+//      range is never requested again), and so is an epoch whose expected
+//      sequence passes its announced end (it could never finalize).
 //
 // Known limitation (rule 2): a new-epoch datagram that arrives before its
 // EpochStart frame is only recognized when its first_seq is below the

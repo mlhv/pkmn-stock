@@ -401,3 +401,40 @@ TEST_CASE("recovery: rejected datagram is a gap") {
     REQUIRE(hs->sink.reqs.size() == 1);
     CHECK(hs->sink.reqs[0] == Req{0, segs[N].first_seq, segs[N + 1].first_seq});
 }
+
+TEST_CASE("recovery: rejected retransmit is fatal") {
+    const auto segs = feed_fixtures::synthetic_feed();
+    constexpr std::size_t N = 700;
+    std::vector<bool> drop(segs.size(), false);
+    drop[N] = true;
+    Harness hs;
+    fill_ring(hs, segs, N);
+    Bytes bad = segs[N].bytes;
+    bad.resize(bad.size() - 3);  // framing overruns
+    hs.ring.store(0, segs[N].first_seq, segs[N].count, bad);
+    hs.run(publisher_events(segs, drop));
+    CHECK(hs.h.failed());
+    CHECK_FALSE(hs.h.done());
+    CHECK(hs.h.stats().unrecoverable == 1);
+    CHECK(hs.h.stats().rejected == 1);
+
+    SECTION("an unannounced epoch is fatal too") {
+        Harness h2;
+        h2.h.on_datagram(segs[0].bytes);
+        h2.h.on_retransmit(5, segs[1].bytes);
+        CHECK(h2.h.failed());
+        CHECK(h2.h.stats().unrecoverable == 1);
+    }
+}
+
+TEST_CASE("recovery: overshooting the announced end is fatal") {
+    const auto segs = feed_fixtures::synthetic_feed();
+    auto evs = publisher_events(segs, std::vector<bool>(segs.size(), false));
+    REQUIRE(evs.back().kind == Ev::Kind::End);
+    evs.back().a -= 1;  // End announces one message fewer than was sent
+    const auto hs = run_events(segs, evs);
+    CHECK(hs->h.failed());
+    CHECK_FALSE(hs->h.done());
+    CHECK(hs->h.stats().unrecoverable == 1);
+    CHECK(hs->h.digests().size() == 1);  // epoch 0 finalized, epoch 1 never
+}

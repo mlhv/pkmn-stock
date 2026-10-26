@@ -62,7 +62,10 @@ void RecoveringHandler::on_retransmit(std::uint32_t epoch, std::span<const std::
     if (failed()) return;
     TpHeader hdr{};
     if (!validate(payload, hdr) || epoch >= epochs_.size()) {
+        // The range is already behind requested_upto and will never be asked
+        // for again: a bad reply is unrecoverable, not a gap.
         ++stats_.rejected;
+        ++stats_.unrecoverable;
         return;
     }
     ++stats_.retransmit_segments;
@@ -193,6 +196,10 @@ void RecoveringHandler::settle() {
     while (!failed() && !done_) {
         Epoch& ep = epochs_[current_];
         if (!ep.end) return;
+        if (ep.tracker.expected() > *ep.end) {
+            ++stats_.unrecoverable;  // applied past the announced end: the epoch can never finalize
+            return;
+        }
         const std::int64_t cursor = std::max(ep.tracker.expected(), ep.requested_upto);
         if (cursor < *ep.end) {
             request(current_, cursor, *ep.end);  // tail loss: no later packet reveals it
