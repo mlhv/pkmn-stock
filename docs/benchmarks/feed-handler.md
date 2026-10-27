@@ -118,6 +118,46 @@ Data provided for free by IEX. By accessing or using IEX Historical Data, you ag
 
 <!-- runs: newest first, inserted by scripts/bench_feed.sh -->
 
+## 2026-10-26, burst: 20241223_IEXTP1_DPLS1.0.pcap.gz (PASS)
+
+- Hardware: Apple M1 Pro, 7-vCPU OrbStack Ubuntu 24.04 arm64 VM, loopback multicast
+- Host: `ubuntu Linux 7.2.12-orbstack-00394-gbecdd6130068 aarch64`
+- git: `4c5a815fc384`
+- Compiler: `c++ (Ubuntu 13.3.0-6ubuntu2~24.04) 13.3.0`
+- Flags: `CMAKE_BUILD_TYPE=Release: -O3 -DNDEBUG -ffp-contract=off`
+- Scenario: `burst` = `--drop burst:0.0005:100 --seed 2`, stream mode (zlib while sending), `--rate 0` (unthrottled); ring 268,435,456 bytes; handler SO_RCVBUF requested 7,500,000, got 15,000,000
+- Reference: `data/feed/reference-20241223-ckpt100000.digests` (iex_digest direct file replay), sha256 `d9904b639023c929...`, 2 epoch(s)
+- Exit codes: handler 0 (status `done`), publisher 0
+- Checks: handler_exit_0 yes, publisher_exit_0 yes, no_tool_killed yes, unrecoverable_0 yes, gaps_positive yes, epochs_match yes, handler_digest_match yes, interval_agrees yes, checkpoints_match yes, handler_checkpoint_match yes, handler_counts_agree yes
+
+| segments sent | messages | injected drops | gaps detected | messages requested | retransmitted packets | natural drops | duplicates discarded | epochs | unrecoverable | held max | digest match per epoch | checkpoints matched | handler wall | msgs/s |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---:|---:|---:|
+| 40,473,651 | 50,959,176 | 2,018,900 | 20,175 | 2,389,439 | 2,017,913 | 0 (a) | 0 | 2 | 0 | 6,048 | 0: yes, 1: yes | 508 / 508 | 75.205 s | 677,599 |
+
+- Segments sent: datagrams the publisher put on the wire (accepted IEX-TP segments minus injected drops). Accepted segments 42,492,551 of 42,492,551 packets read (0 skipped by SegmentFilter); 48,569,737 messages went out by UDP.
+- Messages: messages the handler applied to its books, in sequence order (`messages_applied`).
+- Gaps detected: holes the handler found and requested (`gaps`, always equal to `requests`, here 20,175). The publisher answered 20,175 requests, 0 unserved, ring evicted 39,281,642 packets.
+- Messages requested = messages in injected-drop packets + messages in naturally dropped packets + any benign tail re-request (near End or the restart, a datagram still queued in the kernel can be requested as a missing tail and then arrive twice; the second copy is a counted duplicate, as are the file's own merge-seam duplicates). Here duplicates discarded = 0, so no tail re-request happened and every requested message was in a dropped packet.
+- (a) Natural drops = segments sent - datagrams the handler read (40,473,651 - 40,473,651). It is an upper bound on loss in the kernel: the handler stops once its books are complete, so a datagram still queued in its socket then (already recovered by retransmit) counts too. Cross-checks: the kernel's Udp RcvbufErrors delta over the run 0 (VM-wide counter, receive-buffer overflow); messages requested beyond the 2,389,439 messages in injected-drop packets 0 (the messages of the naturally dropped packets, nothing else, since duplicates are 0); retransmitted packets - injected drops - natural drops = -987 (a positive value counts packets re-requested as a tail; a negative one counts dropped zero-message packets, since a heartbeat opens no gap and is never retransmitted). Kernel Udp deltas: InDatagrams 40,473,651, InErrors 0, OutDatagrams 40,473,651. Publisher sendto retries (ENOBUFS/EAGAIN) 0.
+- Held max: the most packets the handler held behind a gap at one time. Parked: 0. Rejected datagrams: 0 (truncated 0).
+- Handler wall: first datagram received to books complete. msgs/s = messages / handler wall. Publisher send wall 75,205,027,520 ns.
+- Digest match per epoch: the handler's final book digest, order count and message count for each epoch, compared by this script with the reference file line by line (and by the handler's own `--expect`, which reported `digest_match: true`).
+- Checkpoints matched: book digest and order count after every message whose sequence number is a multiple of 100,000, compared index by index with the reference (a missing or extra checkpoint fails). Per epoch in the reference: 0: 508, 1: 0; 508 of 508 have resting orders (1,159 to 43,927).
+- **Empty final books (generated):** the reference has 0 resting orders at the end of epoch(s) 0, 1, so their digest is the FNV-1a offset basis of an empty book. The end-of-epoch comparison there shows only that both sides end empty after applying the same number of messages; the populated checkpoints are what compare mid-epoch books.
+- **Epoch(s) with no populated checkpoint (generated):** 1. Their books are compared only at the epoch end.
+
+Raw JSON: `docs/benchmarks/feed-handler-raw/2026-10-26-burst-4c5a815fc384.json`
+
+<details><summary>Per-epoch digests</summary>
+
+| epoch | handler digest | reference digest | orders (handler / reference) | messages (handler / reference) |
+|---:|---|---|---:|---:|
+| 0 | `cbf29ce484222325` | `cbf29ce484222325` | 0 / 0 | 50,878,184 / 50,878,184 |
+| 1 | `cbf29ce484222325` | `cbf29ce484222325` | 0 / 0 | 80,992 / 80,992 |
+
+</details>
+
+
 ## 2026-10-26, random: 20241223_IEXTP1_DPLS1.0.pcap.gz (PASS) (run 4, checkpoints every 100,000, clean commit)
 
 - Hardware: Apple M1 Pro, 7-vCPU OrbStack Ubuntu 24.04 arm64 VM, loopback multicast
@@ -262,6 +302,10 @@ Numbers are from run 4's table (2026-10-26, commit `2c5ef85`, Apple M1 Pro, 7-vC
   checkpoints, every resting order, price, quantity and queue position equal after loss recovery.
 - Sustained 657,789 messages/s end to end over loopback multicast under that loss, with all 508
   checkpoints matching and at most 5,079 packets held behind open gaps.
+- Also recovered a full day under seeded burst loss (100-packet bursts, 2,018,900 dropped packets,
+  20,175 gaps, 2,389,439 messages re-requested) with 0 unrecoverable requests, 508 of 508
+  checkpoints matching and both epoch digests equal to the direct replay, at 677,599 messages/s
+  (the 2026-10-26 burst run, commit `4c5a815`).
 
 Caveats to keep with these bullets: the reference shares the DEEP+ decoder and order book code with
 the handler, so "verified" means the transport and recovery reproduce the direct replay, not that
