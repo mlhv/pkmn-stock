@@ -130,12 +130,12 @@ Data provided for free by IEX. By accessing or using IEX Historical Data, you ag
 | 8,000,000 | 738,517 | 738,510 | 3,399 | 1 | 0 | yes | pass |
 | unthrottled (0) | 768,153 | 768,150 | 0 | 0 | 0 | yes | pass |
 
-Two figures, defined before the runs:
+Two figures. Their definitions come from the plan and the spec; the extra rule that a paced target counts only if the publisher reached 95% of it was added after the first results, because the unmodified definition would have called an unreached 4M target "sustained" (95% is a judgement call, not from the spec):
 
 - **Clean sustained:** the highest target rate with 0 gaps and a digest match. **No target rate was reached by the publisher** (achieved under 95% of target in every run: 650k against 1M, 645k against 2M, 752k against 4M, 739k against 8M), so there is no paced-target figure. The fastest run with 0 gaps and a digest match read 768,150 msgs/s at the handler (the rate-0 run); the publisher limited it, so it is a lower bound on what the handler can absorb, not a ceiling.
 - **Unthrottled with recovery:** the rate-0 run read 768,150 msgs/s at the handler with 0 gaps, 0 natural drops and a digest match, so it needed no recovery. The only run that did recover was the 8M-target one: 738,510 msgs/s, 1 gap recovered, 3,399 natural drops (segments sent minus datagrams read; an upper bound), 0 unrecoverable, digest match yes.
 
-What the table shows: in `--ram` mode this publisher tops out around 645k to 770k msgs/s on this VM, whatever target is set, so targets above that are the same run as unthrottled and the 650k/645k/752k/739k/768k spread is run-to-run noise (about 19% from lowest to highest, past the 10% VM noise floor, and n=1). The handler kept up with zero loss, bar one gap at 8M, everywhere the publisher could push it; the handler's own ceiling was not found.
+What the table shows: in `--ram` mode this publisher reached 645k to 768k msgs/s on this VM at every target, so none of the paced targets (1M and up) was reached. The two lowest results are the two lowest paced targets (1M and 2M, 650k and 645k, against 768k unthrottled), so the spread (about 19% from lowest to highest, past the 10% VM noise floor, n=1) may be pacer overhead as much as noise; the cause is not isolated. 768,150 is the best of five (median 738,510). The handler produced zero unrecoverable requests and a digest match in all five runs, but it was not loss-free at 8M: that run lost 3,399 datagrams to receive-buffer overflow (kernel `InErrors` 3,399, so the handler fell behind) and recovered them by retransmit. The handler's own ceiling was not found. "Five target rates" counts unthrottled (0) as a target. In these records `gaps_positive` means "gaps above 0 when loss was injected"; with `--drop none` it passes at any gap count.
 
 Caveats: n=1 per rate, no repeats. VM noise is 10% or more (`iex-book.md`), so differences inside that band are not differences. A target rate the publisher cannot reach shows as a lower publisher-achieved column; msgs/s at the handler is messages divided by the handler's own wall (first datagram to books complete). A rate whose run did not match the reference is marked FAILED and is never quoted. Natural drops are an upper bound (see the per-run notes).
 
@@ -530,9 +530,9 @@ Numbers are from run 4's table (2026-10-26, commit `2c5ef85`, Apple M1 Pro, 7-vC
   20,175 gaps, 2,389,439 messages re-requested) with 0 unrecoverable requests, 508 of 508
   checkpoints matching and both epoch digests equal to the direct replay, at 677,599 messages/s
   (the 2026-10-26 burst run, commit `4c5a815`).
-- Ran the same full day with the payloads preloaded in RAM and no packet loss injected, at five
-  target rates; the handler matched the reference at all 508 checkpoints and both epoch digests in
-  every run. The fastest, with the publisher unthrottled, read 768,150 messages/s at the handler
+- Ran the same full day with the payloads preloaded in RAM and no packet loss injected, at four
+  paced targets plus unthrottled; the handler matched the reference at all 508 checkpoints and both epoch digests in
+  every run. The best of five, the unthrottled run, read 768,150 messages/s at the handler
   with 0 gaps; at an 8M-target run it recovered 1 natural gap (738,510 messages/s). n=1 per rate
   (the 2026-10-26 sweep). The publisher, not the handler, was the limit, so this is a floor.
 

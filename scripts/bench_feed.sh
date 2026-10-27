@@ -97,7 +97,8 @@ if [[ "$SCENARIO" == sweep ]]; then
             echo "== sweep: target rate $r" >&2
             SWEEP_RATE="$r" bash "${BASH_SOURCE[0]}" sweep "${EXTRA[@]}" || echo "== rate $r run failed (recorded)" >&2
         done
-        SUMMARY_RECORD="$RECORD" python3 - "$SWEEP_LIST" "$ROOT/docs/benchmarks/feed-handler.md" <<'PYS'
+        set +e
+        SUMMARY_RECORD="$RECORD" SWEEP_REQ="$SWEEP_RATES" python3 - "$SWEEP_LIST" "$ROOT/docs/benchmarks/feed-handler.md" <<'PYS'
 import datetime, json, os, pathlib, sys
 
 runs = [json.loads(l) for l in pathlib.Path(sys.argv[1]).read_text().splitlines() if l.strip()]
@@ -110,6 +111,8 @@ def n(v):
 
 
 rows, clean, unthr, best_clean = [], None, None, None
+requested = [int(x) for x in os.environ.get("SWEEP_REQ", "").split()]
+missing = [x for x in requested if x not in {r["rate"] for r in runs}]
 for r in runs:
     h, p = r["handler"], r["publisher"]
     target = r["rate"]
@@ -136,8 +139,14 @@ for target, ok, h, nd, pub, r in rows:
     L.append(f"| {'unthrottled (0)' if target == 0 else n(target)} | {pub:,.0f} | {h.get('msgs_per_sec', 0):,.0f} "
              f"| {n(nd)} | {n(h.get('gaps'))} | {n(h.get('unrecoverable'))} | {'yes' if dm else 'NO'} "
              f"| {'pass' if ok else 'FAILED, not quotable'} |")
+for target in missing:  # a child that died before writing a record still gets a row
+    L.append(f"| {'unthrottled (0)' if target == 0 else n(target)} | n/a | n/a | n/a | n/a | n/a | NO "
+             "| FAILED, no record (run died before finishing), not quotable |")
 L.append("")
-L.append("Two figures, defined before the runs:")
+L.append("Two figures. Their definitions come from the plan and the spec; the extra rule that a paced target "
+         "counts only if the publisher reached 95% of it was added after the first results, because the "
+         "unmodified definition would have called an unreached 4M target \"sustained\" (95% is a judgement "
+         "call, not from the spec):")
 L.append("")
 if clean:
     L.append(f"- **Clean sustained:** the highest target rate with 0 gaps and a digest match: "
@@ -174,9 +183,13 @@ if os.environ.get("SUMMARY_RECORD") == "1":
     rest = body[i:].lstrip("\n")
     md.write_text(body[:i] + "\n\n" + sec + ("\n" + rest if rest else ""))
 print(sec)
+sys.exit(0 if all(r["pass"] for r in runs) and not missing else 1)
 PYS
+        SRC=$?
+        set -e
         rm -f "$SWEEP_LIST"
-        exit 0
+        [[ "$SRC" == 0 ]] || echo "== sweep: at least one rate failed or has no record" >&2
+        exit "$SRC"
     fi
     RAM=1
     RATE="$SWEEP_RATE"
@@ -358,6 +371,8 @@ checks = {
     "publisher_exit_0": prc == 0,
     "no_tool_killed": not killed,
     "unrecoverable_0": h.get("unrecoverable") == 0,
+    # Key name kept for stored records. Meaning: "gaps > 0 when loss was injected"; with --drop none
+    # (sweep) any gap count passes, because zero gaps is the clean outcome there.
     "gaps_positive": isinstance(h.get("gaps"), int) and (h["gaps"] > 0 or drop == "none"),
     "epochs_match": all_match,
     "handler_digest_match": h.get("digest_match") is True,
