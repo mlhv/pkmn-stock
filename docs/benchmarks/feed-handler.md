@@ -59,6 +59,16 @@ What a pass does not show:
 - **Correct against the direct replay, not against IEX.** The direct replay itself does not match
   IEX's DEEP and TOPS feeds at every point on this day (see `docs/iex-oracle.md`). The handler
   reproduces the direct replay; the oracle question is separate and still open.
+- **No real-day run exercised merge-seam duplicates.** The handler treats a copy of a packet it
+  already has (an old send time) as a duplicate, but the 2024-12-23 DPLS file contains none
+  (`docs/iex-oracle.md` records 0 duplicates on DEEP+), and every duplicate counted in these runs
+  is a tail re-request. That path is tested only on the synthetic Catch2 fixture.
+- **A mismatch names the entry, not the symbol.** The spec asks that a digest mismatch print the
+  first differing symbol. It does not: the reference stores one digest per epoch end and per
+  checkpoint over all symbols, so `feed_handler` and the script report the first differing epoch
+  or checkpoint index (with both sides' digest and order count), and finding the symbol means
+  re-running both sides with a per-symbol dump. Every run recorded here matched, so this never
+  came up.
 
 ## The capture: an incident day
 
@@ -99,6 +109,20 @@ counts on a normal full day may differ.
   **msgs/s** is messages applied divided by that. It is the rate of the whole pipeline at `--rate 0`
   (publisher inflating the gzip and sending, kernel, handler recovering), not a measured limit of the
   handler alone.
+
+**Ring, hold queue and seeds.** The publisher's retransmit ring holds 268,435,456 bytes of
+payload (`--ring-bytes`; IEX-TP payload bytes only, not the map nodes, key storage or vector
+headers around them, so the process uses more memory than that). It keeps only recent history:
+it evicted its oldest 39,281,642 packets over each run, yet left 0 requests unserved in every run
+here. The handler's hold queue (packets held behind open gaps) has
+no limit; the peaks it reached are the held max column: 5,079 in run 4 (1% random), 6,048 in the
+burst run and 4,879 in the 8M-target sweep run (0 in the other sweep runs; 6,970, 5,734 and 5,582
+in random runs 1 to 3). The drop injector draws from `std::mt19937_64`, which the C++ standard
+fixes, through `std::uniform_real_distribution`, whose mapping to a double is
+implementation-defined, so a seed reproduces the same drop pattern only on the same standard
+library (every run here: libstdc++ from g++ 13.3.0 in the VM). The code keeps that draw so these
+recorded seeds still reproduce there. *Added 2026-10-26, not re-run:* the per-run "ring ... bytes"
+lines below now say "payload bytes"; the figure is unchanged.
 
 **Provenance (git SHA).** The stamp is dirty-aware: `-dirty` means `git status --porcelain -- cpp
 scripts` was non-empty, and each section lists the dirty paths. Runs 1 and 2 are `e04ae67b2924-dirty`
@@ -149,7 +173,7 @@ Data provided for free by IEX. By accessing or using IEX Historical Data, you ag
 - git: `b991610242e4-dirty`, working-tree hash `f8cdedd2579c88ef8ecbe535399d31faedb03a6f8a7362c7a5547aee0ae17c85`; dirty paths: `M scripts/bench_feed.sh`
 - Compiler: `c++ (Ubuntu 13.3.0-6ubuntu2~24.04) 13.3.0`
 - Flags: `CMAKE_BUILD_TYPE=Release: -O3 -DNDEBUG -ffp-contract=off`
-- Scenario: `sweep-0` = `--drop none --seed 1`, ram mode (payloads preloaded), `--rate 0` (0 = unthrottled); ring 268,435,456 bytes; handler SO_RCVBUF requested 7,500,000, got 15,000,000
+- Scenario: `sweep-0` = `--drop none --seed 1`, ram mode (payloads preloaded), `--rate 0` (0 = unthrottled); ring 268,435,456 payload bytes; handler SO_RCVBUF requested 7,500,000, got 15,000,000
 - Reference: `data/feed/reference-20241223-ckpt100000.digests` (iex_digest direct file replay), sha256 `d9904b639023c929...`, 2 epoch(s)
 - Exit codes: handler 0 (status `done`), publisher 0
 - Checks: handler_exit_0 yes, publisher_exit_0 yes, no_tool_killed yes, unrecoverable_0 yes, gaps_positive yes, epochs_match yes, handler_digest_match yes, interval_agrees yes, checkpoints_match yes, handler_checkpoint_match yes, handler_counts_agree yes
@@ -161,7 +185,8 @@ Data provided for free by IEX. By accessing or using IEX Historical Data, you ag
 - Segments sent: datagrams the publisher put on the wire (accepted IEX-TP segments minus injected drops). Accepted segments 42,492,551 of 42,492,551 packets read (0 skipped by SegmentFilter); 50,959,176 messages went out by UDP.
 - Messages: messages the handler applied to its books, in sequence order (`messages_applied`).
 - Gaps detected: holes the handler found and requested (`gaps`, always equal to `requests`, here 0). The publisher answered 0 requests, 0 unserved, ring evicted 39,281,642 packets.
-- Messages requested = messages in injected-drop packets + messages in naturally dropped packets + any benign tail re-request (near End or the restart, a datagram still queued in the kernel can be requested as a missing tail and then arrive twice; the second copy is a counted duplicate, as are the file's own merge-seam duplicates). Here duplicates discarded = 0, so no tail re-request happened and every requested message was in a dropped packet.
+- Messages requested = messages in injected-drop packets + messages in naturally dropped packets + any benign tail re-request (near End or the restart, a datagram still queued in the kernel can be requested as a missing tail and then arrive twice; the second copy is a counted duplicate. A copy already present in the capture, a merge-seam duplicate, would count too, but the 2024-12-23 DPLS file has none: docs/iex-oracle.md records 0 duplicates). Here duplicates discarded = 0, so no tail re-request happened and every requested message was in a dropped packet.
+- *Corrected 2026-10-26, not re-run (numbers unchanged):* the line above originally said "as are the file's own merge-seam duplicates", which implied this run met duplicates in the capture. The 2024-12-23 DPLS file has none (`docs/iex-oracle.md`), so that clause described no event in this run; merge-seam handling is tested only on the synthetic Catch2 fixture.
 - (a) Natural drops = segments sent - datagrams the handler read (42,492,551 - 42,492,551). It is an upper bound on loss in the kernel: the handler stops once its books are complete, so a datagram still queued in its socket then (already recovered by retransmit) counts too. Cross-checks: the kernel's Udp RcvbufErrors delta over the run 0 (VM-wide counter, receive-buffer overflow); messages requested beyond the 0 messages in injected-drop packets 0 (the messages of the naturally dropped packets, nothing else, since duplicates are 0); retransmitted packets - injected drops - natural drops = 0 (a positive value counts packets re-requested as a tail; a negative one counts dropped zero-message packets, since a heartbeat opens no gap and is never retransmitted). Kernel Udp deltas: InDatagrams 42,492,551, InErrors 0, OutDatagrams 42,492,551. Publisher sendto retries (ENOBUFS/EAGAIN) 0.
 - Held max: the most packets the handler held behind a gap at one time. Parked: 0. Rejected datagrams: 0 (truncated 0).
 - Handler wall: first datagram received to books complete. msgs/s = messages / handler wall. Publisher send wall 66,339,859,049 ns.
@@ -189,7 +214,7 @@ Raw JSON: `docs/benchmarks/feed-handler-raw/2026-10-26-sweep-0-b991610242e4-dirt
 - git: `b991610242e4-dirty`, working-tree hash `f8cdedd2579c88ef8ecbe535399d31faedb03a6f8a7362c7a5547aee0ae17c85`; dirty paths: `M scripts/bench_feed.sh`
 - Compiler: `c++ (Ubuntu 13.3.0-6ubuntu2~24.04) 13.3.0`
 - Flags: `CMAKE_BUILD_TYPE=Release: -O3 -DNDEBUG -ffp-contract=off`
-- Scenario: `sweep-8000000` = `--drop none --seed 1`, ram mode (payloads preloaded), `--rate 8000000` (0 = unthrottled); ring 268,435,456 bytes; handler SO_RCVBUF requested 7,500,000, got 15,000,000
+- Scenario: `sweep-8000000` = `--drop none --seed 1`, ram mode (payloads preloaded), `--rate 8000000` (0 = unthrottled); ring 268,435,456 payload bytes; handler SO_RCVBUF requested 7,500,000, got 15,000,000
 - Reference: `data/feed/reference-20241223-ckpt100000.digests` (iex_digest direct file replay), sha256 `d9904b639023c929...`, 2 epoch(s)
 - Exit codes: handler 0 (status `done`), publisher 0
 - Checks: handler_exit_0 yes, publisher_exit_0 yes, no_tool_killed yes, unrecoverable_0 yes, gaps_positive yes, epochs_match yes, handler_digest_match yes, interval_agrees yes, checkpoints_match yes, handler_checkpoint_match yes, handler_counts_agree yes
@@ -201,7 +226,8 @@ Raw JSON: `docs/benchmarks/feed-handler-raw/2026-10-26-sweep-0-b991610242e4-dirt
 - Segments sent: datagrams the publisher put on the wire (accepted IEX-TP segments minus injected drops). Accepted segments 42,492,551 of 42,492,551 packets read (0 skipped by SegmentFilter); 50,959,176 messages went out by UDP.
 - Messages: messages the handler applied to its books, in sequence order (`messages_applied`).
 - Gaps detected: holes the handler found and requested (`gaps`, always equal to `requests`, here 1). The publisher answered 1 requests, 0 unserved, ring evicted 39,281,642 packets.
-- Messages requested = messages in injected-drop packets + messages in naturally dropped packets + any benign tail re-request (near End or the restart, a datagram still queued in the kernel can be requested as a missing tail and then arrive twice; the second copy is a counted duplicate, as are the file's own merge-seam duplicates). Here duplicates discarded = 0, so no tail re-request happened and every requested message was in a dropped packet.
+- Messages requested = messages in injected-drop packets + messages in naturally dropped packets + any benign tail re-request (near End or the restart, a datagram still queued in the kernel can be requested as a missing tail and then arrive twice; the second copy is a counted duplicate. A copy already present in the capture, a merge-seam duplicate, would count too, but the 2024-12-23 DPLS file has none: docs/iex-oracle.md records 0 duplicates). Here duplicates discarded = 0, so no tail re-request happened and every requested message was in a dropped packet.
+- *Corrected 2026-10-26, not re-run (numbers unchanged):* the line above originally said "as are the file's own merge-seam duplicates", which implied this run met duplicates in the capture. The 2024-12-23 DPLS file has none (`docs/iex-oracle.md`), so that clause described no event in this run; merge-seam handling is tested only on the synthetic Catch2 fixture.
 - (a) Natural drops = segments sent - datagrams the handler read (42,492,551 - 42,489,152). It is an upper bound on loss in the kernel: the handler stops once its books are complete, so a datagram still queued in its socket then (already recovered by retransmit) counts too. Cross-checks: the kernel's Udp RcvbufErrors delta over the run 3,399 (VM-wide counter, receive-buffer overflow); messages requested beyond the 0 messages in injected-drop packets 4,470 (the messages of the naturally dropped packets, nothing else, since duplicates are 0); retransmitted packets - injected drops - natural drops = 0 (a positive value counts packets re-requested as a tail; a negative one counts dropped zero-message packets, since a heartbeat opens no gap and is never retransmitted). Kernel Udp deltas: InDatagrams 42,489,152, InErrors 3,399, OutDatagrams 42,492,551. Publisher sendto retries (ENOBUFS/EAGAIN) 0.
 - Held max: the most packets the handler held behind a gap at one time. Parked: 0. Rejected datagrams: 0 (truncated 0).
 - Handler wall: first datagram received to books complete. msgs/s = messages / handler wall. Publisher send wall 69,001,997,224 ns.
@@ -229,7 +255,7 @@ Raw JSON: `docs/benchmarks/feed-handler-raw/2026-10-26-sweep-8000000-b991610242e
 - git: `b991610242e4-dirty`, working-tree hash `f8cdedd2579c88ef8ecbe535399d31faedb03a6f8a7362c7a5547aee0ae17c85`; dirty paths: `M scripts/bench_feed.sh`
 - Compiler: `c++ (Ubuntu 13.3.0-6ubuntu2~24.04) 13.3.0`
 - Flags: `CMAKE_BUILD_TYPE=Release: -O3 -DNDEBUG -ffp-contract=off`
-- Scenario: `sweep-4000000` = `--drop none --seed 1`, ram mode (payloads preloaded), `--rate 4000000` (0 = unthrottled); ring 268,435,456 bytes; handler SO_RCVBUF requested 7,500,000, got 15,000,000
+- Scenario: `sweep-4000000` = `--drop none --seed 1`, ram mode (payloads preloaded), `--rate 4000000` (0 = unthrottled); ring 268,435,456 payload bytes; handler SO_RCVBUF requested 7,500,000, got 15,000,000
 - Reference: `data/feed/reference-20241223-ckpt100000.digests` (iex_digest direct file replay), sha256 `d9904b639023c929...`, 2 epoch(s)
 - Exit codes: handler 0 (status `done`), publisher 0
 - Checks: handler_exit_0 yes, publisher_exit_0 yes, no_tool_killed yes, unrecoverable_0 yes, gaps_positive yes, epochs_match yes, handler_digest_match yes, interval_agrees yes, checkpoints_match yes, handler_checkpoint_match yes, handler_counts_agree yes
@@ -241,7 +267,8 @@ Raw JSON: `docs/benchmarks/feed-handler-raw/2026-10-26-sweep-8000000-b991610242e
 - Segments sent: datagrams the publisher put on the wire (accepted IEX-TP segments minus injected drops). Accepted segments 42,492,551 of 42,492,551 packets read (0 skipped by SegmentFilter); 50,959,176 messages went out by UDP.
 - Messages: messages the handler applied to its books, in sequence order (`messages_applied`).
 - Gaps detected: holes the handler found and requested (`gaps`, always equal to `requests`, here 0). The publisher answered 0 requests, 0 unserved, ring evicted 39,281,642 packets.
-- Messages requested = messages in injected-drop packets + messages in naturally dropped packets + any benign tail re-request (near End or the restart, a datagram still queued in the kernel can be requested as a missing tail and then arrive twice; the second copy is a counted duplicate, as are the file's own merge-seam duplicates). Here duplicates discarded = 0, so no tail re-request happened and every requested message was in a dropped packet.
+- Messages requested = messages in injected-drop packets + messages in naturally dropped packets + any benign tail re-request (near End or the restart, a datagram still queued in the kernel can be requested as a missing tail and then arrive twice; the second copy is a counted duplicate. A copy already present in the capture, a merge-seam duplicate, would count too, but the 2024-12-23 DPLS file has none: docs/iex-oracle.md records 0 duplicates). Here duplicates discarded = 0, so no tail re-request happened and every requested message was in a dropped packet.
+- *Corrected 2026-10-26, not re-run (numbers unchanged):* the line above originally said "as are the file's own merge-seam duplicates", which implied this run met duplicates in the capture. The 2024-12-23 DPLS file has none (`docs/iex-oracle.md`), so that clause described no event in this run; merge-seam handling is tested only on the synthetic Catch2 fixture.
 - (a) Natural drops = segments sent - datagrams the handler read (42,492,551 - 42,492,551). It is an upper bound on loss in the kernel: the handler stops once its books are complete, so a datagram still queued in its socket then (already recovered by retransmit) counts too. Cross-checks: the kernel's Udp RcvbufErrors delta over the run 0 (VM-wide counter, receive-buffer overflow); messages requested beyond the 0 messages in injected-drop packets 0 (the messages of the naturally dropped packets, nothing else, since duplicates are 0); retransmitted packets - injected drops - natural drops = 0 (a positive value counts packets re-requested as a tail; a negative one counts dropped zero-message packets, since a heartbeat opens no gap and is never retransmitted). Kernel Udp deltas: InDatagrams 42,492,551, InErrors 0, OutDatagrams 42,492,551. Publisher sendto retries (ENOBUFS/EAGAIN) 0.
 - Held max: the most packets the handler held behind a gap at one time. Parked: 0. Rejected datagrams: 0 (truncated 0).
 - Handler wall: first datagram received to books complete. msgs/s = messages / handler wall. Publisher send wall 67,733,267,425 ns.
@@ -269,7 +296,7 @@ Raw JSON: `docs/benchmarks/feed-handler-raw/2026-10-26-sweep-4000000-b991610242e
 - git: `b991610242e4-dirty`, working-tree hash `f8cdedd2579c88ef8ecbe535399d31faedb03a6f8a7362c7a5547aee0ae17c85`; dirty paths: `M scripts/bench_feed.sh`
 - Compiler: `c++ (Ubuntu 13.3.0-6ubuntu2~24.04) 13.3.0`
 - Flags: `CMAKE_BUILD_TYPE=Release: -O3 -DNDEBUG -ffp-contract=off`
-- Scenario: `sweep-2000000` = `--drop none --seed 1`, ram mode (payloads preloaded), `--rate 2000000` (0 = unthrottled); ring 268,435,456 bytes; handler SO_RCVBUF requested 7,500,000, got 15,000,000
+- Scenario: `sweep-2000000` = `--drop none --seed 1`, ram mode (payloads preloaded), `--rate 2000000` (0 = unthrottled); ring 268,435,456 payload bytes; handler SO_RCVBUF requested 7,500,000, got 15,000,000
 - Reference: `data/feed/reference-20241223-ckpt100000.digests` (iex_digest direct file replay), sha256 `d9904b639023c929...`, 2 epoch(s)
 - Exit codes: handler 0 (status `done`), publisher 0
 - Checks: handler_exit_0 yes, publisher_exit_0 yes, no_tool_killed yes, unrecoverable_0 yes, gaps_positive yes, epochs_match yes, handler_digest_match yes, interval_agrees yes, checkpoints_match yes, handler_checkpoint_match yes, handler_counts_agree yes
@@ -281,7 +308,8 @@ Raw JSON: `docs/benchmarks/feed-handler-raw/2026-10-26-sweep-4000000-b991610242e
 - Segments sent: datagrams the publisher put on the wire (accepted IEX-TP segments minus injected drops). Accepted segments 42,492,551 of 42,492,551 packets read (0 skipped by SegmentFilter); 50,959,176 messages went out by UDP.
 - Messages: messages the handler applied to its books, in sequence order (`messages_applied`).
 - Gaps detected: holes the handler found and requested (`gaps`, always equal to `requests`, here 0). The publisher answered 0 requests, 0 unserved, ring evicted 39,281,642 packets.
-- Messages requested = messages in injected-drop packets + messages in naturally dropped packets + any benign tail re-request (near End or the restart, a datagram still queued in the kernel can be requested as a missing tail and then arrive twice; the second copy is a counted duplicate, as are the file's own merge-seam duplicates). Here duplicates discarded = 0, so no tail re-request happened and every requested message was in a dropped packet.
+- Messages requested = messages in injected-drop packets + messages in naturally dropped packets + any benign tail re-request (near End or the restart, a datagram still queued in the kernel can be requested as a missing tail and then arrive twice; the second copy is a counted duplicate. A copy already present in the capture, a merge-seam duplicate, would count too, but the 2024-12-23 DPLS file has none: docs/iex-oracle.md records 0 duplicates). Here duplicates discarded = 0, so no tail re-request happened and every requested message was in a dropped packet.
+- *Corrected 2026-10-26, not re-run (numbers unchanged):* the line above originally said "as are the file's own merge-seam duplicates", which implied this run met duplicates in the capture. The 2024-12-23 DPLS file has none (`docs/iex-oracle.md`), so that clause described no event in this run; merge-seam handling is tested only on the synthetic Catch2 fixture.
 - (a) Natural drops = segments sent - datagrams the handler read (42,492,551 - 42,492,551). It is an upper bound on loss in the kernel: the handler stops once its books are complete, so a datagram still queued in its socket then (already recovered by retransmit) counts too. Cross-checks: the kernel's Udp RcvbufErrors delta over the run 0 (VM-wide counter, receive-buffer overflow); messages requested beyond the 0 messages in injected-drop packets 0 (the messages of the naturally dropped packets, nothing else, since duplicates are 0); retransmitted packets - injected drops - natural drops = 0 (a positive value counts packets re-requested as a tail; a negative one counts dropped zero-message packets, since a heartbeat opens no gap and is never retransmitted). Kernel Udp deltas: InDatagrams 42,492,551, InErrors 0, OutDatagrams 42,492,551. Publisher sendto retries (ENOBUFS/EAGAIN) 0.
 - Held max: the most packets the handler held behind a gap at one time. Parked: 0. Rejected datagrams: 0 (truncated 0).
 - Handler wall: first datagram received to books complete. msgs/s = messages / handler wall. Publisher send wall 79,062,932,130 ns.
@@ -309,7 +337,7 @@ Raw JSON: `docs/benchmarks/feed-handler-raw/2026-10-26-sweep-2000000-b991610242e
 - git: `b991610242e4-dirty`, working-tree hash `f8cdedd2579c88ef8ecbe535399d31faedb03a6f8a7362c7a5547aee0ae17c85`; dirty paths: `M scripts/bench_feed.sh`
 - Compiler: `c++ (Ubuntu 13.3.0-6ubuntu2~24.04) 13.3.0`
 - Flags: `CMAKE_BUILD_TYPE=Release: -O3 -DNDEBUG -ffp-contract=off`
-- Scenario: `sweep-1000000` = `--drop none --seed 1`, ram mode (payloads preloaded), `--rate 1000000` (0 = unthrottled); ring 268,435,456 bytes; handler SO_RCVBUF requested 7,500,000, got 15,000,000
+- Scenario: `sweep-1000000` = `--drop none --seed 1`, ram mode (payloads preloaded), `--rate 1000000` (0 = unthrottled); ring 268,435,456 payload bytes; handler SO_RCVBUF requested 7,500,000, got 15,000,000
 - Reference: `data/feed/reference-20241223-ckpt100000.digests` (iex_digest direct file replay), sha256 `d9904b639023c929...`, 2 epoch(s)
 - Exit codes: handler 0 (status `done`), publisher 0
 - Checks: handler_exit_0 yes, publisher_exit_0 yes, no_tool_killed yes, unrecoverable_0 yes, gaps_positive yes, epochs_match yes, handler_digest_match yes, interval_agrees yes, checkpoints_match yes, handler_checkpoint_match yes, handler_counts_agree yes
@@ -321,7 +349,8 @@ Raw JSON: `docs/benchmarks/feed-handler-raw/2026-10-26-sweep-2000000-b991610242e
 - Segments sent: datagrams the publisher put on the wire (accepted IEX-TP segments minus injected drops). Accepted segments 42,492,551 of 42,492,551 packets read (0 skipped by SegmentFilter); 50,959,176 messages went out by UDP.
 - Messages: messages the handler applied to its books, in sequence order (`messages_applied`).
 - Gaps detected: holes the handler found and requested (`gaps`, always equal to `requests`, here 0). The publisher answered 0 requests, 0 unserved, ring evicted 39,281,642 packets.
-- Messages requested = messages in injected-drop packets + messages in naturally dropped packets + any benign tail re-request (near End or the restart, a datagram still queued in the kernel can be requested as a missing tail and then arrive twice; the second copy is a counted duplicate, as are the file's own merge-seam duplicates). Here duplicates discarded = 0, so no tail re-request happened and every requested message was in a dropped packet.
+- Messages requested = messages in injected-drop packets + messages in naturally dropped packets + any benign tail re-request (near End or the restart, a datagram still queued in the kernel can be requested as a missing tail and then arrive twice; the second copy is a counted duplicate. A copy already present in the capture, a merge-seam duplicate, would count too, but the 2024-12-23 DPLS file has none: docs/iex-oracle.md records 0 duplicates). Here duplicates discarded = 0, so no tail re-request happened and every requested message was in a dropped packet.
+- *Corrected 2026-10-26, not re-run (numbers unchanged):* the line above originally said "as are the file's own merge-seam duplicates", which implied this run met duplicates in the capture. The 2024-12-23 DPLS file has none (`docs/iex-oracle.md`), so that clause described no event in this run; merge-seam handling is tested only on the synthetic Catch2 fixture.
 - (a) Natural drops = segments sent - datagrams the handler read (42,492,551 - 42,492,551). It is an upper bound on loss in the kernel: the handler stops once its books are complete, so a datagram still queued in its socket then (already recovered by retransmit) counts too. Cross-checks: the kernel's Udp RcvbufErrors delta over the run 0 (VM-wide counter, receive-buffer overflow); messages requested beyond the 0 messages in injected-drop packets 0 (the messages of the naturally dropped packets, nothing else, since duplicates are 0); retransmitted packets - injected drops - natural drops = 0 (a positive value counts packets re-requested as a tail; a negative one counts dropped zero-message packets, since a heartbeat opens no gap and is never retransmitted). Kernel Udp deltas: InDatagrams 42,492,551, InErrors 0, OutDatagrams 42,492,551. Publisher sendto retries (ENOBUFS/EAGAIN) 0.
 - Held max: the most packets the handler held behind a gap at one time. Parked: 0. Rejected datagrams: 0 (truncated 0).
 - Handler wall: first datagram received to books complete. msgs/s = messages / handler wall. Publisher send wall 78,396,200,812 ns.
@@ -349,7 +378,7 @@ Raw JSON: `docs/benchmarks/feed-handler-raw/2026-10-26-sweep-1000000-b991610242e
 - git: `4c5a815fc384`
 - Compiler: `c++ (Ubuntu 13.3.0-6ubuntu2~24.04) 13.3.0`
 - Flags: `CMAKE_BUILD_TYPE=Release: -O3 -DNDEBUG -ffp-contract=off`
-- Scenario: `burst` = `--drop burst:0.0005:100 --seed 2`, stream mode (zlib while sending), `--rate 0` (unthrottled); ring 268,435,456 bytes; handler SO_RCVBUF requested 7,500,000, got 15,000,000
+- Scenario: `burst` = `--drop burst:0.0005:100 --seed 2`, stream mode (zlib while sending), `--rate 0` (unthrottled); ring 268,435,456 payload bytes; handler SO_RCVBUF requested 7,500,000, got 15,000,000
 - Reference: `data/feed/reference-20241223-ckpt100000.digests` (iex_digest direct file replay), sha256 `d9904b639023c929...`, 2 epoch(s)
 - Exit codes: handler 0 (status `done`), publisher 0
 - Checks: handler_exit_0 yes, publisher_exit_0 yes, no_tool_killed yes, unrecoverable_0 yes, gaps_positive yes, epochs_match yes, handler_digest_match yes, interval_agrees yes, checkpoints_match yes, handler_checkpoint_match yes, handler_counts_agree yes
@@ -361,7 +390,8 @@ Raw JSON: `docs/benchmarks/feed-handler-raw/2026-10-26-sweep-1000000-b991610242e
 - Segments sent: datagrams the publisher put on the wire (accepted IEX-TP segments minus injected drops). Accepted segments 42,492,551 of 42,492,551 packets read (0 skipped by SegmentFilter); 48,569,737 messages went out by UDP.
 - Messages: messages the handler applied to its books, in sequence order (`messages_applied`).
 - Gaps detected: holes the handler found and requested (`gaps`, always equal to `requests`, here 20,175). The publisher answered 20,175 requests, 0 unserved, ring evicted 39,281,642 packets.
-- Messages requested = messages in injected-drop packets + messages in naturally dropped packets + any benign tail re-request (near End or the restart, a datagram still queued in the kernel can be requested as a missing tail and then arrive twice; the second copy is a counted duplicate, as are the file's own merge-seam duplicates). Here duplicates discarded = 0, so no tail re-request happened and every requested message was in a dropped packet.
+- Messages requested = messages in injected-drop packets + messages in naturally dropped packets + any benign tail re-request (near End or the restart, a datagram still queued in the kernel can be requested as a missing tail and then arrive twice; the second copy is a counted duplicate. A copy already present in the capture, a merge-seam duplicate, would count too, but the 2024-12-23 DPLS file has none: docs/iex-oracle.md records 0 duplicates). Here duplicates discarded = 0, so no tail re-request happened and every requested message was in a dropped packet.
+- *Corrected 2026-10-26, not re-run (numbers unchanged):* the line above originally said "as are the file's own merge-seam duplicates", which implied this run met duplicates in the capture. The 2024-12-23 DPLS file has none (`docs/iex-oracle.md`), so that clause described no event in this run; merge-seam handling is tested only on the synthetic Catch2 fixture.
 - (a) Natural drops = segments sent - datagrams the handler read (40,473,651 - 40,473,651). It is an upper bound on loss in the kernel: the handler stops once its books are complete, so a datagram still queued in its socket then (already recovered by retransmit) counts too. Cross-checks: the kernel's Udp RcvbufErrors delta over the run 0 (VM-wide counter, receive-buffer overflow); messages requested beyond the 2,389,439 messages in injected-drop packets 0 (the messages of the naturally dropped packets, nothing else, since duplicates are 0); retransmitted packets - injected drops - natural drops = -987 (a positive value counts packets re-requested as a tail; a negative one counts dropped zero-message packets, since a heartbeat opens no gap and is never retransmitted). Kernel Udp deltas: InDatagrams 40,473,651, InErrors 0, OutDatagrams 40,473,651. Publisher sendto retries (ENOBUFS/EAGAIN) 0.
 - Held max: the most packets the handler held behind a gap at one time. Parked: 0. Rejected datagrams: 0 (truncated 0).
 - Handler wall: first datagram received to books complete. msgs/s = messages / handler wall. Publisher send wall 75,205,027,520 ns.
@@ -389,7 +419,7 @@ Raw JSON: `docs/benchmarks/feed-handler-raw/2026-10-26-burst-4c5a815fc384.json`
 - git: `2c5ef85ee055`
 - Compiler: `c++ (Ubuntu 13.3.0-6ubuntu2~24.04) 13.3.0`
 - Flags: `CMAKE_BUILD_TYPE=Release: -O3 -DNDEBUG -ffp-contract=off`
-- Scenario: `random` = `--drop random:0.01 --seed 1`, stream mode (zlib while sending), `--rate 0` (unthrottled); ring 268,435,456 bytes; handler SO_RCVBUF requested 7,500,000, got 15,000,000
+- Scenario: `random` = `--drop random:0.01 --seed 1`, stream mode (zlib while sending), `--rate 0` (unthrottled); ring 268,435,456 payload bytes; handler SO_RCVBUF requested 7,500,000, got 15,000,000
 - Reference: `data/feed/reference-20241223-ckpt100000.digests` (iex_digest direct file replay), sha256 `d9904b639023c929...`, 2 epoch(s)
 - Exit codes: handler 0 (status `done`), publisher 0
 - Checks: handler_exit_0 yes, publisher_exit_0 yes, no_tool_killed yes, unrecoverable_0 yes, gaps_positive yes, epochs_match yes, handler_digest_match yes, interval_agrees yes, checkpoints_match yes, handler_checkpoint_match yes, handler_counts_agree yes
@@ -401,7 +431,8 @@ Raw JSON: `docs/benchmarks/feed-handler-raw/2026-10-26-burst-4c5a815fc384.json`
 - Segments sent: datagrams the publisher put on the wire (accepted IEX-TP segments minus injected drops). Accepted segments 42,492,551 of 42,492,551 packets read (0 skipped by SegmentFilter); 50,450,034 messages went out by UDP.
 - Messages: messages the handler applied to its books, in sequence order (`messages_applied`).
 - Gaps detected: holes the handler found and requested (`gaps`, always equal to `requests`, here 421,146). The publisher answered 421,146 requests, 0 unserved, ring evicted 39,281,642 packets.
-- Messages requested = messages in injected-drop packets + messages in naturally dropped packets + any benign tail re-request (near End or the restart, a datagram still queued in the kernel can be requested as a missing tail and then arrive twice; the second copy is a counted duplicate, as are the file's own merge-seam duplicates). Here duplicates discarded = 0, so no tail re-request happened and every requested message was in a dropped packet.
+- Messages requested = messages in injected-drop packets + messages in naturally dropped packets + any benign tail re-request (near End or the restart, a datagram still queued in the kernel can be requested as a missing tail and then arrive twice; the second copy is a counted duplicate. A copy already present in the capture, a merge-seam duplicate, would count too, but the 2024-12-23 DPLS file has none: docs/iex-oracle.md records 0 duplicates). Here duplicates discarded = 0, so no tail re-request happened and every requested message was in a dropped packet.
+- *Corrected 2026-10-26, not re-run (numbers unchanged):* the line above originally said "as are the file's own merge-seam duplicates", which implied this run met duplicates in the capture. The 2024-12-23 DPLS file has none (`docs/iex-oracle.md`), so that clause described no event in this run; merge-seam handling is tested only on the synthetic Catch2 fixture.
 - (a) Natural drops = segments sent - datagrams the handler read (42,066,928 - 42,066,928). It is an upper bound on loss in the kernel: the handler stops once its books are complete, so a datagram still queued in its socket then (already recovered by retransmit) counts too. Cross-checks: the kernel's Udp RcvbufErrors delta over the run 0 (VM-wide counter, receive-buffer overflow); messages requested beyond the 509,142 messages in injected-drop packets 0 (the messages of the naturally dropped packets, nothing else, since duplicates are 0); retransmitted packets - injected drops - natural drops = -259 (a positive value counts packets re-requested as a tail; a negative one counts dropped zero-message packets, since a heartbeat opens no gap and is never retransmitted). Kernel Udp deltas: InDatagrams 42,066,928, InErrors 0, OutDatagrams 42,066,928. Publisher sendto retries (ENOBUFS/EAGAIN) 0.
 - Held max: the most packets the handler held behind a gap at one time. Parked: 0. Rejected datagrams: 0 (truncated 0).
 - Handler wall: first datagram received to books complete. msgs/s = messages / handler wall. Publisher send wall 77,469,584,825 ns.
@@ -429,7 +460,7 @@ Raw JSON: `docs/benchmarks/feed-handler-raw/2026-10-26-random-2c5ef85ee055.json`
 - git: `754f455a51b2-dirty`, working-tree hash `7e976ca64ebfbbf8582245b8570bdfc96d38bb9ef01c67f2b7b119b028f24f26`; dirty paths: `M cpp/src/pkmn_md/book_digest.cpp`, `M cpp/src/pkmn_md/book_digest.hpp`, `M cpp/src/pkmn_md/gap_recovery.cpp`, `M cpp/src/pkmn_md/gap_recovery.hpp`, `M cpp/tests/feed_fixtures.hpp`, `M cpp/tests/test_book_digest.cpp`, `M cpp/tests/test_feed_tools.cpp`, `M cpp/tests/test_gap_recovery.cpp`, `M cpp/tools/feed_handler.cpp`, `M cpp/tools/iex_digest.cpp`, `M scripts/bench_feed.sh`
 - Compiler: `c++ (Ubuntu 13.3.0-6ubuntu2~24.04) 13.3.0`
 - Flags: `CMAKE_BUILD_TYPE=Release: -O3 -DNDEBUG -ffp-contract=off`
-- Scenario: `random` = `--drop random:0.01 --seed 1`, stream mode (zlib while sending), `--rate 0` (unthrottled); ring 268,435,456 bytes; handler SO_RCVBUF requested 7,500,000, got 15,000,000
+- Scenario: `random` = `--drop random:0.01 --seed 1`, stream mode (zlib while sending), `--rate 0` (unthrottled); ring 268,435,456 payload bytes; handler SO_RCVBUF requested 7,500,000, got 15,000,000
 - Reference: `data/feed/reference-20241223-ckpt100000.digests` (iex_digest direct file replay), sha256 `d9904b639023c929...`, 2 epoch(s)
 - Exit codes: handler 0 (status `done`), publisher 0
 - Checks: handler_exit_0 yes, publisher_exit_0 yes, no_tool_killed yes, unrecoverable_0 yes, gaps_positive yes, epochs_match yes, handler_digest_match yes, interval_agrees yes, checkpoints_match yes, handler_checkpoint_match yes, handler_counts_agree yes
@@ -441,7 +472,8 @@ Raw JSON: `docs/benchmarks/feed-handler-raw/2026-10-26-random-2c5ef85ee055.json`
 - Segments sent: datagrams the publisher put on the wire (accepted IEX-TP segments minus injected drops). Accepted segments 42,492,551 of 42,492,551 packets read (0 skipped by SegmentFilter); 50,450,034 messages went out by UDP.
 - Messages: messages the handler applied to its books, in sequence order (`messages_applied`).
 - Gaps detected: holes the handler found and requested (`gaps`, always equal to `requests`, here 421,147). The publisher answered 421,147 requests, 0 unserved, ring evicted 39,281,642 packets.
-- Messages requested = messages in injected-drop packets + messages in naturally dropped packets + any benign tail re-request (near End or the restart, a datagram still queued in the kernel can be requested as a missing tail and then arrive twice; the second copy is a counted duplicate, as are the file's own merge-seam duplicates). Here duplicates discarded = 1, so some requested messages may be tail re-requests.
+- Messages requested = messages in injected-drop packets + messages in naturally dropped packets + any benign tail re-request (near End or the restart, a datagram still queued in the kernel can be requested as a missing tail and then arrive twice; the second copy is a counted duplicate. A copy already present in the capture, a merge-seam duplicate, would count too, but the 2024-12-23 DPLS file has none: docs/iex-oracle.md records 0 duplicates). Here duplicates discarded = 1, so some requested messages may be tail re-requests.
+- *Corrected 2026-10-26, not re-run (numbers unchanged):* the line above originally said "as are the file's own merge-seam duplicates", which implied this run met duplicates in the capture. The 2024-12-23 DPLS file has none (`docs/iex-oracle.md`), so that clause described no event in this run; merge-seam handling is tested only on the synthetic Catch2 fixture.
 - (a) Natural drops = segments sent - datagrams the handler read (42,066,928 - 42,066,928). It is an upper bound on loss in the kernel: the handler stops once its books are complete, so a datagram still queued in its socket then (already recovered by retransmit) counts too. Cross-checks: the kernel's Udp RcvbufErrors delta over the run 0 (VM-wide counter, receive-buffer overflow); messages requested beyond the 509,142 messages in injected-drop packets 1 (the messages of the naturally dropped packets, plus any tail re-requests); retransmitted packets - injected drops - natural drops = -258 (a positive value counts packets re-requested as a tail; a negative one counts dropped zero-message packets, since a heartbeat opens no gap and is never retransmitted). Kernel Udp deltas: InDatagrams 42,066,928, InErrors 0, OutDatagrams 42,066,928. Publisher sendto retries (ENOBUFS/EAGAIN) 0.
 - Held max: the most packets the handler held behind a gap at one time. Parked: 0. Rejected datagrams: 0 (truncated 0).
 - Handler wall: first datagram received to books complete. msgs/s = messages / handler wall. Publisher send wall 78,549,190,550 ns.
@@ -469,7 +501,7 @@ Raw JSON: `docs/benchmarks/feed-handler-raw/2026-10-26-random-754f455a51b2-dirty
 - git: `e04ae67b2924-dirty`, working-tree hash `e5b92930f410e810119020ffb9387eced00003bd47d3185d4f896ce162bdb31d`; dirty paths: `?? scripts/bench_feed.sh`
 - Compiler: `c++ (Ubuntu 13.3.0-6ubuntu2~24.04) 13.3.0`
 - Flags: `CMAKE_BUILD_TYPE=Release: -O3 -DNDEBUG -ffp-contract=off`
-- Scenario: `random` = `--drop random:0.01 --seed 1`, stream mode (zlib while sending), `--rate 0` (unthrottled); ring 268,435,456 bytes; handler SO_RCVBUF requested 7,500,000, got 15,000,000
+- Scenario: `random` = `--drop random:0.01 --seed 1`, stream mode (zlib while sending), `--rate 0` (unthrottled); ring 268,435,456 payload bytes; handler SO_RCVBUF requested 7,500,000, got 15,000,000
 - Reference: `data/feed/reference-20241223.digests` (iex_digest direct file replay), sha256 `4151f8344771796d...`, 2 epoch(s)
 - Exit codes: handler 0 (status `done`), publisher 0
 
@@ -522,15 +554,16 @@ Numbers are from run 4's table (2026-10-26, commit `2c5ef85`, Apple M1 Pro, 7-vC
 - Built a C++20 UDP multicast feed handler with TCP retransmit gap recovery and replayed a full
   captured day of IEX DEEP+ (42,066,928 datagrams, 50,959,176 messages) through it under 1% seeded
   packet loss: 425,623 dropped packets, 421,146 gaps recovered, 0 unrecoverable requests.
-- Verified the recovered order books against a direct file replay at 508 of 508 mid-session
-  checkpoints, every resting order, price, quantity and queue position equal after loss recovery.
+- Verified the recovered order books against a direct file replay at 508 of 508 checkpoints
+  through the morning, every resting order, price, quantity and queue position equal after loss
+  recovery.
 - Sustained 657,789 messages/s end to end over loopback multicast under that loss, with all 508
   checkpoints matching and at most 5,079 packets held behind open gaps.
 - Also recovered a full day under seeded burst loss over unthrottled loopback multicast (the
   injector started 20,189 bursts of 100 packets, dropping 2,018,900 packets; the handler
   detected 20,175 gaps, fewer than the bursts because adjacent bursts merge into one hole and a
   burst of only zero-message packets opens no gap; 2,389,439 messages re-requested) with 0
-  unrecoverable requests. All 508 mid-session checkpoints matched the direct replay, and the epoch-end
+  unrecoverable requests. All 508 checkpoints through the morning matched the direct replay, and the epoch-end
   digests matched too, but both are digests of empty books (the stream deletes every order before each
   epoch ends), so they add little; epoch 1 (80,992 messages) has no checkpoint. 677,599 messages/s (the 2026-10-26
   burst run, commit `4c5a815`).
@@ -538,7 +571,9 @@ Numbers are from run 4's table (2026-10-26, commit `2c5ef85`, Apple M1 Pro, 7-vC
   paced targets plus unthrottled; the handler matched the reference at all 508 checkpoints and both epoch digests in
   every run. The best of five, the unthrottled run, read 768,150 messages/s at the handler
   with 0 gaps; at an 8M-target run it recovered 1 natural gap (738,510 messages/s). n=1 per rate
-  (the 2026-10-26 sweep). The publisher, not the handler, was the limit, so this is a floor.
+  (the 2026-10-26 sweep). The publisher, not the handler, was the limit, so 768,150 is a floor
+  for the pipeline with recovery, not a loss-free handler rate: the 8M-target run overflowed the
+  handler's receive buffer at 738,510 messages/s and needed retransmits.
 
 Caveats to keep with these bullets: the reference shares the DEEP+ decoder and order book code with
 the handler, so "verified" means the transport and recovery reproduce the direct replay, not that

@@ -472,7 +472,7 @@ L.append(f"- git: `{sha}`{dirty_note}")
 L.append(f"- Compiler: `{compiler}`")
 L.append(f"- Flags: `{flags}`")
 L.append(f"- Scenario: `{scenario}` = `--drop {drop} --seed {seed}`, {'ram mode (payloads preloaded)' if os.environ.get('RAM') == '1' else 'stream mode (zlib while sending)'}, "
-         f"`--rate {os.environ['RATE']}` (0 = unthrottled); ring {n(p.get('ring_bytes'))} bytes; handler SO_RCVBUF requested {n(h.get('rcvbuf_requested'))}, "
+         f"`--rate {os.environ['RATE']}` (0 = unthrottled); ring {n(p.get('ring_bytes'))} payload bytes; handler SO_RCVBUF requested {n(h.get('rcvbuf_requested'))}, "
          f"got {n(h.get('rcvbuf_actual'))}")
 L.append(f"- Reference: `{record_obj['reference']['path']}` (iex_digest direct file replay), sha256 "
          f"`{record_obj['reference']['sha256'][:16]}...`, {len(expected)} epoch(s)")
@@ -502,8 +502,9 @@ L.append(f"- Gaps detected: holes the handler found and requested (`gaps`, alway
 dups = h.get("duplicate_messages")
 L.append("- Messages requested = messages in injected-drop packets + messages in naturally dropped packets + any "
          "benign tail re-request (near End or the restart, a datagram still queued in the kernel can be requested "
-         "as a missing tail and then arrive twice; the second copy is a counted duplicate, as are the file's own "
-         f"merge-seam duplicates). Here duplicates discarded = {n(dups)}"
+         "as a missing tail and then arrive twice; the second copy is a counted duplicate. A copy already present "
+         "in the capture, a merge-seam duplicate, would count too, but the 2024-12-23 DPLS file has none: "
+         f"docs/iex-oracle.md records 0 duplicates). Here duplicates discarded = {n(dups)}"
          + (", so no tail re-request happened and every requested message was in a dropped packet."
             if dups == 0 else ", so some requested messages may be tail re-requests."))
 L.append(f"- (a) Natural drops = segments sent - datagrams the handler read ({n(sent)} - {n(recv)}). It is an upper "

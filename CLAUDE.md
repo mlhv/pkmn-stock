@@ -747,8 +747,8 @@ tcgcsv.com). Design spec: `docs/superpowers/specs/2026-06-09-pkmn-quant-design.m
   2026-10-26.
 
 - **Plan C (feed handler) complete on feat/feed-handler (753 passed pytest
-  via `uv sync --group api --group dashboard && uv run pytest`; 204 Catch2
-  tests via ctest in the OrbStack VM, all passing, and 204 on macOS with 5
+  via `uv sync --group api --group dashboard && uv run pytest`; 205 Catch2
+  tests via ctest in the OrbStack VM, all passing, and 205 on macOS with 5
   skipped because the loopback-multicast tool tests need the VM; ruff,
   format and mypy clean over 62 source files).** Plan C of 4 in the market-
   data / CLOB track (spec: `docs/superpowers/specs/2026-10-26-feed-handler-
@@ -772,7 +772,7 @@ tcgcsv.com). Design spec: `docs/superpowers/specs/2026-06-09-pkmn-quant-design.m
   M1 Pro, 7-vCPU OrbStack Ubuntu 24.04 arm64 VM, loopback multicast, one
   host:** 1% seeded random loss (commit 2c5ef85): 425,623 packets dropped,
   421,146 gaps recovered, 0 unrecoverable, 657,789 msgs/s end to end, held
-  max 5,079 packets, all 508 mid-session checkpoints and both epoch digests
+  max 5,079 packets, all 508 checkpoints through the morning and both epoch digests
   equal to the direct-replay reference. Burst loss (100-packet bursts;
   commit 4c5a815): 20,189 bursts started, 2,018,900 packets dropped, 20,175
   gaps detected (adjacent bursts merge, zero-message packets open no gap),
@@ -796,6 +796,15 @@ tcgcsv.com). Design spec: `docs/superpowers/specs/2026-06-09-pkmn-quant-design.m
   pass shows independence from transport and recovery, not from the book,
   and says nothing about matching IEX (the oracle question in
   `docs/iex-oracle.md` is still open). (6) Throughput is publisher-limited.
+  (7) A digest mismatch reports the first differing epoch or checkpoint
+  index, not the first differing symbol the spec asked for (the reference
+  stores one digest over all symbols per entry). (8) The handler's hold
+  queue has no limit (peaks 5,079 random, 6,048 burst, 4,879 at the 8M
+  sweep target); the ring is 268,435,456 payload bytes (container overhead
+  not counted). (9) Merge-seam duplicate handling is tested only on the
+  synthetic fixture: the 2024-12-23 capture has none. (10) Drop seeds
+  reproduce only on the same standard library (`uniform_real_distribution`
+  is implementation-defined; recorded runs used libstdc++).
   Full detail: `docs/benchmarks/feed-handler.md`. IEX data results carry the
   required citation: Data provided for free by IEX. By accessing or using
   IEX Historical Data, you agree to the IEX Historical Data Terms of Use
@@ -873,7 +882,7 @@ scripts/bench_iex.sh [--profile] [--no-record]            # re-execs in the VM, 
 # Plan C (feed handler); needs the VM (loopback multicast) and the 2024-12-23 DPLS capture in data/iex/
 scripts/bench_feed.sh random|burst|sweep [--no-record]    # full-day publisher + handler run vs the iex_digest reference; prepends a section to docs/benchmarks/feed-handler.md
 cpp/build-linux-release/iex_digest data/iex/20241223_IEXTP1_DPLS1.0.pcap.gz --checkpoint-every 100000 [--out FILE]   # (in the VM) reference digests by direct file replay
-cpp/build-linux-release/feed_publisher data/iex/20241223_IEXTP1_DPLS1.0.pcap.gz --drop random:0.01 --seed 1 --rate 0   # (in the VM) UDP multicast replay + TCP retransmit server; --drop defaults to none; run a tool with no args for usage
+cpp/build-linux-release/feed_publisher data/iex/20241223_IEXTP1_DPLS1.0.pcap.gz --drop random:0.01 --seed 1 --rate 0   # (in the VM) UDP multicast replay + TCP retransmit server; --drop defaults to none; `--help` prints usage (feed_handler with no args starts listening and waits up to 600 s)
 cpp/build-linux-release/feed_handler --expect <reference.digests> --checkpoint-every 100000 --timeout-s 300 --rcvbuf 7500000   # (in the VM) receiver; start it, then the publisher
 ```
 
