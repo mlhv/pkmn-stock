@@ -81,8 +81,10 @@ std::size_t find_datagram(const std::vector<Ev>& evs, const Bytes& b) {
 struct Harness {
     ScriptSink sink;
     RetransmitRing ring{std::size_t{1} << 26};
-    RecoveringHandler h{sink};
+    RecoveringHandler h;
     std::size_t served = 0;
+
+    explicit Harness(std::uint64_t checkpoint_every = 0) : h(sink, checkpoint_every) {}
 
     void deliver(const Ev& e) {
         switch (e.kind) {
@@ -121,21 +123,29 @@ void fill_ring(Harness& hs, const std::vector<FeedSegment>& segs, std::size_t sk
     }
 }
 
-std::unique_ptr<Harness> run_events(const std::vector<FeedSegment>& segs, const std::vector<Ev>& evs) {
-    auto hs = std::make_unique<Harness>();
+std::unique_ptr<Harness> run_events(const std::vector<FeedSegment>& segs, const std::vector<Ev>& evs,
+                                    std::uint64_t checkpoint_every = 0) {
+    auto hs = std::make_unique<Harness>(checkpoint_every);
     fill_ring(*hs, segs);
     hs->run(evs);
     return hs;
 }
 
-std::unique_ptr<Harness> run_with_loss(const std::vector<FeedSegment>& segs, const std::vector<bool>& drop) {
-    return run_events(segs, publisher_events(segs, drop));
+std::unique_ptr<Harness> run_with_loss(const std::vector<FeedSegment>& segs, const std::vector<bool>& drop,
+                                       std::uint64_t checkpoint_every = 0) {
+    return run_events(segs, publisher_events(segs, drop), checkpoint_every);
 }
 
 std::vector<EpochDigest> reference(const std::vector<FeedSegment>& segs) {
     md_fixtures::TempFile f(".pcap.gz");
     feed_fixtures::write_feed_capture(f.path, segs);
     return reference_digests(f.path);
+}
+
+DigestSet reference_set(const std::vector<FeedSegment>& segs, std::uint64_t checkpoint_every) {
+    md_fixtures::TempFile f(".pcap.gz");
+    feed_fixtures::write_feed_capture(f.path, segs);
+    return reference_digest_set(f.path, checkpoint_every);
 }
 
 std::uint64_t total_messages(const std::vector<EpochDigest>& d) {
@@ -437,4 +447,56 @@ TEST_CASE("recovery: overshooting the announced end is fatal") {
     CHECK_FALSE(hs->h.done());
     CHECK(hs->h.stats().unrecoverable == 1);
     CHECK(hs->h.digests().size() == 1);  // epoch 0 finalized, epoch 1 never
+}
+
+TEST_CASE("recovery: checkpoints under seeded loss equal the reference's") {
+    const auto segs = feed_fixtures::synthetic_feed();
+    const DigestSet ref = reference_set(segs, 7);
+    REQUIRE(ref.checkpoints.size() > 500);
+    std::size_t populated = 0, in_epoch1 = 0;
+    for (const Checkpoint& c : ref.checkpoints) {
+        populated += c.orders > 0;
+        in_epoch1 += c.epoch == 1;
+    }
+    CHECK(populated == ref.checkpoints.size());
+    CHECK(in_epoch1 > 0);
+    for (const char* spec : {"random:0.05", "burst:0.01:25"}) {
+        INFO(spec);
+        const auto ds = parse_drop_spec(spec, 11);
+        REQUIRE(ds.has_value());
+        DropInjector inj(*ds);
+        std::vector<bool> drop(segs.size());
+        for (std::size_t i = 0; i < segs.size(); ++i) drop[i] = inj.drop();
+        REQUIRE(inj.dropped() > 0);
+        const auto hs = run_with_loss(segs, drop, 7);
+        require_matches(hs->h, ref.epochs);
+        CHECK(hs->h.stats().gaps > 0);
+        CHECK(hs->h.checkpoints() == ref.checkpoints);
+    }
+    // Without an interval the handler takes none.
+    const auto hs = run_with_loss(segs, std::vector<bool>(segs.size(), false));
+    CHECK(hs->h.checkpoints().empty());
+}
+
+TEST_CASE("recovery: a checkpoint catches a divergence the end-of-epoch digest misses") {
+    // The reference and the handler's feed differ only in one order's price
+    // and both end with empty books after 4 messages.
+    const DigestSet ref = reference_set(feed_fixtures::empty_ending_feed(100'000), 1);
+    const auto other = feed_fixtures::empty_ending_feed(100'100);
+    const auto hs = run_with_loss(other, std::vector<bool>(other.size(), false), 1);
+    REQUIRE(hs->h.done());
+    REQUIRE(ref.epochs.size() == 1);
+    REQUIRE(hs->h.digests().size() == 1);
+    CHECK(ref.epochs[0].orders == 0);
+    CHECK(hs->h.digests()[0].digest == ref.epochs[0].digest);  // the epoch-end check passes
+    CHECK(hs->h.digests()[0].messages == ref.epochs[0].messages);
+    const auto& got = hs->h.checkpoints();
+    REQUIRE(got.size() == 4);
+    REQUIRE(ref.checkpoints.size() == 4);
+    CHECK(got[0].seq == 1);
+    CHECK(got[0].orders == ref.checkpoints[0].orders);
+    CHECK(got[0].digest != ref.checkpoints[0].digest);  // the checkpoint does not
+    CHECK(got[1].digest != ref.checkpoints[1].digest);
+    CHECK(got[2] == ref.checkpoints[2]);  // seq 3 deleted AAA: only BBB is left on both sides
+    CHECK(got[3] == ref.checkpoints[3]);  // both empty at seq 4
 }

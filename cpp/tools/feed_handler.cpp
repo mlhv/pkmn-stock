@@ -2,12 +2,14 @@
 // group, connects the control channel to feed_publisher, and feeds both into
 // RecoveringHandler (gap_recovery.hpp), which holds packets behind a gap,
 // requests missing ranges and applies messages to its books in sequence
-// order. Its per-epoch book digests are compared with iex_digest's direct
-// file replay when --expect is given.
+// order. Its per-epoch book digests, and with --checkpoint-every N its
+// mid-epoch checkpoints (book_digest.hpp), are compared with iex_digest's
+// direct file replay when --expect is given. The reference file must have
+// been written with the same --checkpoint-every (0 / absent = none).
 //
 //   feed_handler [--group 239.255.0.1] [--port 31001] [--ctrl-host 127.0.0.1]
 //       [--ctrl-port 31002] [--rcvbuf BYTES (default 7500000)]
-//       [--expect DIGESTS_FILE] [--timeout-s 600]
+//       [--expect DIGESTS_FILE] [--checkpoint-every N] [--timeout-s 600]
 //
 // Flow:
 //   1. Join the group first, then connect TCP (retrying until the publisher
@@ -44,8 +46,10 @@
 //      Close TCP (the publisher's server thread then exits), print one JSON
 //      object on stdout.
 //
-// Exit: 0 done and every digest matched (or no --expect); 1 done but a digest
-// differs (the first differing epoch is printed); 2 unrecoverable (failed()),
+// Exit: 0 done and every epoch digest and checkpoint matched (or no
+// --expect); 1 done but an epoch entry or a checkpoint differs, or one side
+// has a checkpoint the other lacks (the first difference is printed); 2
+// unrecoverable (failed()),
 // publisher closed early, timeout, or an error.
 
 #include <poll.h>
@@ -83,13 +87,13 @@ constexpr int kCtrlDeferMs = 20;
 struct Options {
     std::string group = "239.255.0.1", ctrl_host = "127.0.0.1", expect;
     int port = 31001, ctrl_port = 31002, rcvbuf = 7500000;
-    std::uint64_t timeout_s = 600;
+    std::uint64_t timeout_s = 600, checkpoint_every = 0;
 };
 
 int usage(const char* argv0) {
     std::fprintf(stderr,
                  "usage: %s [--group 239.255.0.1] [--port 31001] [--ctrl-host 127.0.0.1] [--ctrl-port 31002]\n"
-                 "       [--rcvbuf BYTES] [--expect DIGESTS_FILE] [--timeout-s 600]\n",
+                 "       [--rcvbuf BYTES] [--expect DIGESTS_FILE] [--checkpoint-every N] [--timeout-s 600]\n",
                  argv0);
     return 2;
 }
@@ -175,6 +179,8 @@ int main(int argc, char** argv) {
             o.rcvbuf = static_cast<int>(v);
         } else if (a == "--expect" && has) {
             o.expect = argv[++i];
+        } else if (a == "--checkpoint-every" && has) {
+            if (!parse_u64(argv[++i], o.checkpoint_every) || o.checkpoint_every == 0) return usage(argv[0]);
         } else if (a == "--timeout-s" && has) {
             if (!parse_u64(argv[++i], o.timeout_s) || o.timeout_s == 0) return usage(argv[0]);
         } else {
@@ -183,18 +189,24 @@ int main(int argc, char** argv) {
     }
     ::signal(SIGPIPE, SIG_IGN);
 
-    std::vector<EpochDigest> expected;
+    DigestSet ref;
     try {
-        if (!o.expect.empty()) expected = read_digests(o.expect);
+        if (!o.expect.empty()) ref = read_digest_set(o.expect);
     } catch (const std::exception& e) {
         std::fprintf(stderr, "error: %s\n", e.what());
         return 2;
     }
+    if (!o.expect.empty() && ref.checkpoint_every != o.checkpoint_every) {
+        std::fprintf(stderr, "error: %s has checkpoint-every %llu, handler has --checkpoint-every %llu\n",
+                     o.expect.c_str(), static_cast<u64>(ref.checkpoint_every), static_cast<u64>(o.checkpoint_every));
+        return 2;
+    }
+    const std::vector<EpochDigest>& expected = ref.epochs;
 
     const auto t_start = clk::now();
     const auto deadline = t_start + std::chrono::seconds(o.timeout_s);
     Outbox outbox;
-    RecoveringHandler core(outbox);
+    RecoveringHandler core(outbox, o.checkpoint_every);
     int rcvbuf_actual = 0;
     u64 udp_received = 0, truncated = 0;
     std::optional<clk::time_point> t_first, t_done;
@@ -361,6 +373,22 @@ int main(int argc, char** argv) {
         }
     }
     const bool match = !first_diff.has_value();
+    // Checkpoints, index by index; a missing or extra one is a mismatch.
+    const auto& got_ck = core.checkpoints();
+    std::optional<std::size_t> first_ck_diff;
+    std::size_t ck_matched = 0;
+    if (!o.expect.empty()) {
+        const auto& exp_ck = ref.checkpoints;
+        const std::size_t n = std::max(got_ck.size(), exp_ck.size());
+        for (std::size_t i = 0; i < n; ++i) {
+            if (i < got_ck.size() && i < exp_ck.size() && got_ck[i] == exp_ck[i]) {
+                ++ck_matched;
+            } else if (!first_ck_diff) {
+                first_ck_diff = i;
+            }
+        }
+    }
+    const bool ck_match = !first_ck_diff.has_value();
 
     const RecoveryStats& s = core.stats();
     const auto end_t = t_done ? *t_done : clk::now();
@@ -394,11 +422,37 @@ int main(int argc, char** argv) {
         std::printf("%s{\"epoch\": %zu, \"digest\": \"%016llx\", \"orders\": %llu, \"messages\": %llu}",
                     i == 0 ? "" : ", ", i, static_cast<u64>(got[i].digest), static_cast<u64>(got[i].orders),
                     static_cast<u64>(got[i].messages));
+    std::printf("],\n");
+    std::printf("  \"checkpoint_every\": %llu,\n", static_cast<u64>(o.checkpoint_every));
+    std::printf("  \"checkpoints\": %zu,\n", got_ck.size());
+    std::printf("  \"checkpoint_digests\": [");
+    for (std::size_t i = 0; i < got_ck.size(); ++i)
+        std::printf("%s{\"epoch\": %u, \"seq\": %lld, \"digest\": \"%016llx\", \"orders\": %llu}", i == 0 ? "" : ", ",
+                    static_cast<unsigned>(got_ck[i].epoch), static_cast<long long>(got_ck[i].seq),
+                    static_cast<u64>(got_ck[i].digest), static_cast<u64>(got_ck[i].orders));
     std::printf("]");
     if (!o.expect.empty()) {
         std::printf(",\n  \"expected_epochs\": %zu,\n", expected.size());
         std::printf("  \"digest_match\": %s", match ? "true" : "false");
         if (first_diff) std::printf(",\n  \"first_mismatch_epoch\": %zu", *first_diff);
+        std::printf(",\n  \"checkpoints_expected\": %zu,\n", ref.checkpoints.size());
+        std::printf("  \"checkpoints_matched\": %zu,\n", ck_matched);
+        std::printf("  \"checkpoint_match\": %s", ck_match ? "true" : "false");
+        if (first_ck_diff) {
+            // The first differing symbol is not reported: the reference
+            // stores one digest per checkpoint, not one per symbol.
+            const std::size_t i = *first_ck_diff;
+            auto side = [](const std::vector<Checkpoint>& v, std::size_t k) {
+                if (k >= v.size()) return std::string("null");
+                char b[160];
+                std::snprintf(b, sizeof b, "{\"epoch\": %u, \"seq\": %lld, \"digest\": \"%016llx\", \"orders\": %llu}",
+                              static_cast<unsigned>(v[k].epoch), static_cast<long long>(v[k].seq),
+                              static_cast<u64>(v[k].digest), static_cast<u64>(v[k].orders));
+                return std::string(b);
+            };
+            std::printf(",\n  \"first_checkpoint_mismatch\": {\"index\": %zu, \"got\": %s, \"expected\": %s}", i,
+                        side(got_ck, i).c_str(), side(ref.checkpoints, i).c_str());
+        }
     }
     std::printf("\n}\n");
     std::fflush(stdout);
@@ -410,6 +464,10 @@ int main(int argc, char** argv) {
     }
     if (!match) {
         std::fprintf(stderr, "digest mismatch at epoch %zu\n", *first_diff);
+        return 1;
+    }
+    if (!ck_match) {
+        std::fprintf(stderr, "checkpoint mismatch at index %zu\n", *first_ck_diff);
         return 1;
     }
     return 0;

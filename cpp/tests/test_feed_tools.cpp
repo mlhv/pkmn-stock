@@ -130,8 +130,8 @@ Pair run_pair(const std::string& cap, std::vector<std::string> hargs, std::vecto
 }
 
 // Reference digests of `cap` from the direct file replay (iex_digest).
-void write_reference(const std::string& cap, const std::string& ref) {
-    const std::string dig = std::string(IEX_DIGEST_BIN) + " " + cap + " --out " + ref;
+void write_reference(const std::string& cap, const std::string& ref, const std::string& extra = "") {
+    const std::string dig = std::string(IEX_DIGEST_BIN) + " " + cap + " --out " + ref + extra;
     REQUIRE(std::system(dig.c_str()) == 0);
 }
 
@@ -188,6 +188,41 @@ TEST_CASE("feed tools: an unserved request fails both tools") {
     CHECK(r.publisher_exit == 1);
 }
 
+TEST_CASE("feed tools: checkpoints under 10% random loss match iex_digest --checkpoint-every") {
+    md_fixtures::TempFile cap(".pcap.gz"), ref(".digests");
+    feed_fixtures::write_feed_capture(cap.path, feed_fixtures::synthetic_feed());
+    write_reference(cap.path, ref.path, " --checkpoint-every 50");
+    const Pair r = run_pair(cap.path, {"--expect", ref.path, "--checkpoint-every", "50"},
+                            {"--drop", "random:0.1", "--seed", "4", "--rate", "200000"});
+    INFO("handler stdout:\n" << r.hout);
+    INFO("publisher stdout:\n" << r.pout);
+    CHECK(r.handler_exit == 0);
+    CHECK(r.hout.find("\"digest_match\": true") != std::string::npos);
+    CHECK(r.hout.find("\"checkpoint_match\": true") != std::string::npos);
+    CHECK(json_int(r.hout, "checkpoints") == 99);  // 3,789 / 50 = 75 in epoch 0, 1,243 / 50 = 24 in epoch 1
+    CHECK(json_int(r.hout, "checkpoints_matched") == json_int(r.hout, "checkpoints_expected"));
+    CHECK(json_int(r.hout, "gaps") > 0);
+    CHECK(r.publisher_exit == 0);
+}
+
+// The publisher sends a feed whose books end exactly as the reference's
+// (empty, same message count) but differ mid-epoch: the handler must exit 1
+// on the checkpoints although every epoch digest matches.
+TEST_CASE("feed tools: a checkpoint mismatch fails the handler when the epoch digest matches") {
+    md_fixtures::TempFile ref_cap(".pcap.gz"), cap(".pcap.gz"), ref(".digests");
+    feed_fixtures::write_feed_capture(ref_cap.path, feed_fixtures::empty_ending_feed(100'000));
+    feed_fixtures::write_feed_capture(cap.path, feed_fixtures::empty_ending_feed(100'100));
+    write_reference(ref_cap.path, ref.path, " --checkpoint-every 1");
+    const Pair r = run_pair(cap.path, {"--expect", ref.path, "--checkpoint-every", "1"}, {});
+    INFO("handler stdout:\n" << r.hout);
+    CHECK(r.handler_exit == 1);
+    CHECK(r.hout.find("\"digest_match\": true") != std::string::npos);
+    CHECK(r.hout.find("\"checkpoint_match\": false") != std::string::npos);
+    CHECK(json_int(r.hout, "checkpoints_matched") == 2);  // seq 3 (only BBB left) and seq 4 (empty)
+    CHECK(r.hout.find("\"first_checkpoint_mismatch\": {\"index\": 0,") != std::string::npos);
+    CHECK(r.publisher_exit == 0);
+}
+
 #else
 
 TEST_CASE("feed tools: loopback multicast with 10% random loss matches iex_digest") {
@@ -199,6 +234,14 @@ TEST_CASE("feed tools: a short first epoch survives the restart unthrottled") {
 }
 
 TEST_CASE("feed tools: an unserved request fails both tools") {
+    SKIP("loopback multicast e2e runs in the Linux VM");
+}
+
+TEST_CASE("feed tools: checkpoints under 10% random loss match iex_digest --checkpoint-every") {
+    SKIP("loopback multicast e2e runs in the Linux VM");
+}
+
+TEST_CASE("feed tools: a checkpoint mismatch fails the handler when the epoch digest matches") {
     SKIP("loopback multicast e2e runs in the Linux VM");
 }
 

@@ -16,14 +16,19 @@
 # Steps:
 #   1. Configure + build iex_digest, feed_publisher and feed_handler as
 #      Release in cpp/build-linux-release.
-#   2. Reference digests: for the default capture, data/feed/reference-
-#      20241223.digests, written with iex_digest only when missing (it is
-#      never recomputed otherwise; its sha256 goes in the record). With
-#      IEX_FILE set to another capture, a temporary reference is computed for
-#      that file on every run (or pass REF_FILE).
-#   3. Start feed_handler --expect <reference>, then feed_publisher, on a
-#      random port pair in 20000-31999. /proc/net/snmp's Udp counters are
-#      read before and after (VM-wide kernel counters).
+#   2. Reference digests with mid-epoch checkpoints every CHECKPOINT_EVERY
+#      messages (book_digest.hpp): for the default capture, data/feed/
+#      reference-20241223-ckpt<N>.digests, written with iex_digest only when
+#      missing (never recomputed otherwise; its sha256 goes in the record).
+#      With IEX_FILE set to another capture, a temporary reference is
+#      computed for that file on every run (or pass REF_FILE).
+#   3. Start feed_handler --expect <reference> --checkpoint-every N, then
+#      feed_publisher, on a random port pair in 20000-31999. /proc/net/snmp's
+#      Udp counters are read before and after (VM-wide kernel counters).
+#      When either tool exits, the other gets GRACE_S (30) seconds to finish
+#      and is then killed (recorded), so an early death cannot leave the
+#      script waiting (the publisher blocks in accept() until a handler
+#      connects).
 #   4. Save one JSON (both tools' JSON, exit codes, commands, build, kernel
 #      counter deltas) as docs/benchmarks/feed-handler-raw/<date>-<scenario>-
 #      <sha>.json (a numeric suffix is added rather than overwrite a run).
@@ -31,14 +36,16 @@
 #      first, after the "runs" marker line.
 #   --no-record skips 4 and 5 (the section is still printed).
 #
-# A failing run (either tool nonzero, or a per-epoch digest differing) is
+# A run passes when both tools exit 0, unrecoverable is 0, gaps > 0, every
+# epoch entry and every checkpoint equals the reference (same count, same
+# order), and the handler's own --expect comparison agrees. A failing run is
 # still recorded, and the script then exits 1.
 #
 # Environment: IEX_FILE (default data/iex/20241223_IEXTP1_DPLS1.0.pcap.gz),
 # REF_FILE (reference digests to use instead of the default), HARDWARE,
 # RING_BYTES (publisher --ring-bytes; default the tool's 268435456),
 # RCVBUF (handler --rcvbuf; default the tool's 7500000), TIMEOUT_S (handler
-# --timeout-s, default 1800).
+# --timeout-s, default 1800), CHECKPOINT_EVERY (default 100000).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -48,6 +55,7 @@ if [[ "$(uname -s)" != "Linux" ]]; then
     exec orb -m ubuntu env \
         IEX_FILE="${IEX_FILE:-}" REF_FILE="${REF_FILE:-}" HARDWARE="${HARDWARE:-}" \
         RING_BYTES="${RING_BYTES:-}" RCVBUF="${RCVBUF:-}" TIMEOUT_S="${TIMEOUT_S:-}" \
+        CHECKPOINT_EVERY="${CHECKPOINT_EVERY:-}" \
         bash "$ROOT/scripts/bench_feed.sh" "$@"
 fi
 
@@ -72,6 +80,9 @@ DEFAULT_FILE="$ROOT/data/iex/20241223_IEXTP1_DPLS1.0.pcap.gz"
 FILE="${IEX_FILE:-$DEFAULT_FILE}"
 HARDWARE="${HARDWARE:-Apple M1 Pro, 7-vCPU OrbStack Ubuntu 24.04 arm64 VM, loopback multicast}"
 TIMEOUT_S="${TIMEOUT_S:-1800}"
+CHECKPOINT_EVERY="${CHECKPOINT_EVERY:-100000}"
+[[ "$CHECKPOINT_EVERY" =~ ^[1-9][0-9]*$ ]] || { echo "CHECKPOINT_EVERY must be a positive integer" >&2; exit 2; }
+GRACE_S=30
 RESULTS="$ROOT/docs/benchmarks/feed-handler.md"
 RAW_DIR="$ROOT/docs/benchmarks/feed-handler-raw"
 BUILD="$ROOT/cpp/build-linux-release"
@@ -112,14 +123,14 @@ FLAGS="CMAKE_BUILD_TYPE=Release: $(echo "$CXX_FLAGS $CXX_FLAGS_REL -ffp-contract
 if [[ -n "${REF_FILE:-}" ]]; then
     REF="$REF_FILE"
 elif [[ "$FILE" -ef "$DEFAULT_FILE" ]]; then
-    REF="$ROOT/data/feed/reference-20241223.digests"
+    REF="$ROOT/data/feed/reference-20241223-ckpt$CHECKPOINT_EVERY.digests"
 else
     REF="$OUT/reference.digests"
 fi
 if [[ ! -s "$REF" ]]; then
     echo "== reference digests (iex_digest) -> $REF" >&2
     mkdir -p "$(dirname "$REF")"
-    "$BUILD/iex_digest" "$FILE" --out "$REF.tmp"
+    "$BUILD/iex_digest" "$FILE" --checkpoint-every "$CHECKPOINT_EVERY" --out "$REF.tmp"
     mv "$REF.tmp" "$REF"
 else
     echo "== reference digests: reusing $REF" >&2
@@ -129,7 +140,8 @@ free -b | awk '/^Mem:/ {printf "== memory: %.1f GB total, %.1f GB available\n", 
 
 PORT=$((20000 + RANDOM % 11999))
 CPORT=$((PORT + 1))
-HCMD=("$BUILD/feed_handler" --port "$PORT" --ctrl-port "$CPORT" --timeout-s "$TIMEOUT_S" --expect "$REF")
+HCMD=("$BUILD/feed_handler" --port "$PORT" --ctrl-port "$CPORT" --timeout-s "$TIMEOUT_S" --expect "$REF"
+    --checkpoint-every "$CHECKPOINT_EVERY")
 [[ -n "${RCVBUF:-}" ]] && HCMD+=(--rcvbuf "$RCVBUF")
 PCMD=("$BUILD/feed_publisher" "$FILE" --port "$PORT" --ctrl-port "$CPORT" --rate 0 --drop "$DROP" --seed "$SEED")
 [[ -n "${RING_BYTES:-}" ]] && PCMD+=(--ring-bytes "$RING_BYTES")
@@ -142,10 +154,24 @@ echo "== $SCENARIO: handler on $PORT/$CPORT, then publisher ($DROP, seed $SEED, 
 HPID=$!
 "${PCMD[@]}" >"$OUT/publisher.json" 2>"$OUT/publisher.err" &
 PUB_PID=$!
+# Wait until one tool exits, then give the other GRACE_S seconds.
+alive() { kill -0 "$1" 2>/dev/null; }
+while alive "$HPID" && alive "$PUB_PID"; do sleep 0.2; done
+KILLED=""
+for pid_name in "$HPID:handler" "$PUB_PID:publisher"; do
+    pid="${pid_name%%:*}"
+    for ((i = 0; i < GRACE_S * 5; i++)); do alive "$pid" || break; sleep 0.2; done
+    if alive "$pid"; then
+        kill "$pid" 2>/dev/null || true
+        KILLED="$KILLED ${pid_name#*:}"
+        echo "== killed the ${pid_name#*:} after the other tool exited (${GRACE_S}s grace)" >&2
+    fi
+done
 set +e
-wait "$PUB_PID"; PRC=$?
 wait "$HPID"; HRC=$?
+wait "$PUB_PID"; PRC=$?
 set -e
+export KILLED CHECKPOINT_EVERY
 grep '^Udp:' /proc/net/snmp >"$OUT/snmp_after.txt"
 echo "== handler exit $HRC, publisher exit $PRC" >&2
 sed 's/^/   handler: /' "$OUT/handler.err" >&2
@@ -168,6 +194,8 @@ def rel_to_repo(x):
 
 
 hrc, prc = int(hrc), int(prc)
+killed = os.environ.get("KILLED", "").split()
+ckpt_every = int(os.environ["CHECKPOINT_EVERY"])
 
 
 def load_json(name):
@@ -191,10 +219,15 @@ before, after = snmp("snmp_before.txt"), snmp("snmp_after.txt")
 kernel = {k: after[k] - before[k] for k in after}
 
 ref_text = pathlib.Path(ref).read_text()
-expected = []
+expected, exp_ck, ref_every = [], [], 0
 for line in ref_text.splitlines():
     f = line.split()
-    expected.append({"epoch": int(f[1]), "digest": f[3], "orders": int(f[5]), "messages": int(f[7])})
+    if f[0] == "checkpoint-every":
+        ref_every = int(f[1])
+    elif f[0] == "checkpoint":
+        exp_ck.append({"epoch": int(f[1]), "seq": int(f[2]), "digest": f[4], "orders": int(f[6])})
+    else:
+        expected.append({"epoch": int(f[1]), "digest": f[3], "orders": int(f[5]), "messages": int(f[7])})
 got = h.get("digests", [])
 per_epoch = []
 for i in range(max(len(got), len(expected))):
@@ -204,7 +237,28 @@ for i in range(max(len(got), len(expected))):
           and g["messages"] == e["messages"])
     per_epoch.append({"epoch": i, "match": ok, "got": g, "expected": e})
 all_match = bool(per_epoch) and all(x["match"] for x in per_epoch)
-passed = hrc == 0 and prc == 0 and all_match and h.get("digest_match") is True
+got_ck = h.get("checkpoint_digests", [])
+ck_matched = sum(1 for g, e in zip(got_ck, exp_ck) if g == e)
+ck_all = len(got_ck) == len(exp_ck) and ck_matched == len(exp_ck)
+ck_mismatch = next((i for i in range(max(len(got_ck), len(exp_ck)))
+                    if i >= len(got_ck) or i >= len(exp_ck) or got_ck[i] != exp_ck[i]), None)
+ck_populated = sum(1 for e in exp_ck if e["orders"] > 0)
+ck_orders = [e["orders"] for e in exp_ck if e["orders"] > 0]
+ck_per_epoch = {i: sum(1 for e in exp_ck if e["epoch"] == i) for i in range(len(expected))}
+checks = {
+    "handler_exit_0": hrc == 0,
+    "publisher_exit_0": prc == 0,
+    "no_tool_killed": not killed,
+    "unrecoverable_0": h.get("unrecoverable") == 0,
+    "gaps_positive": isinstance(h.get("gaps"), int) and h["gaps"] > 0,
+    "epochs_match": all_match,
+    "handler_digest_match": h.get("digest_match") is True,
+    "interval_agrees": ref_every == ckpt_every == h.get("checkpoint_every"),
+    "checkpoints_match": ck_all,
+    "handler_checkpoint_match": h.get("checkpoint_match") is True,
+    "handler_counts_agree": h.get("checkpoints_matched") == ck_matched and h.get("checkpoints_expected") == len(exp_ck),
+}
+passed = all(checks.values())
 
 # Natural drops: datagrams the publisher put on the wire (sendto succeeded)
 # that the handler never read. Primary, per run: segments_sent - udp_received.
@@ -216,8 +270,11 @@ passed = hrc == 0 and prc == 0 and all_match and h.get("digest_match") is True
 #   VM-wide, so any other UDP traffic in the window counts too);
 # - messages requested beyond those injected: requested_messages minus the
 #   messages in injected-drop packets, the latter being the reference's total
-#   messages minus the publisher's messages_sent. Benign tail re-requests
-#   inflate it (each such message also shows as a duplicate).
+#   messages minus the publisher's messages_sent. This is the messages of the
+#   naturally dropped packets, plus any benign tail re-request (a message
+#   requested while its datagram was still queued, which then arrives twice
+#   and is counted as a duplicate). With 0 duplicates no tail re-request
+#   happened and the whole excess is natural-drop messages.
 # Retransmitted packets - injected drops is NOT used: a dropped zero-message
 # packet (heartbeat) opens no gap and is never retransmitted, so the
 # difference can go negative.
@@ -262,6 +319,12 @@ record_obj = {
     "natural_drops": {"sent_minus_received": natural_sent_recv, "kernel_rcvbuf_errors": kernel.get("RcvbufErrors"),
                       "injected_messages": injected_msgs, "requested_beyond_injected_messages": extra_requested},
     "per_epoch": per_epoch,
+    "checkpoint_every": ckpt_every,
+    "checkpoints": {"expected": len(exp_ck), "got": len(got_ck), "matched": ck_matched,
+                    "populated_expected": ck_populated, "per_epoch_expected": ck_per_epoch,
+                    "first_mismatch_index": ck_mismatch, "expected_list": exp_ck},
+    "killed": killed,
+    "checks": checks,
     "pass": passed,
 }
 
@@ -271,6 +334,7 @@ def n(v):
 
 
 wall = h.get("wall_ns")
+ck_cell = f"{n(ck_matched)} / {n(len(exp_ck))}" + ("" if len(got_ck) == len(exp_ck) else f" (handler took {n(len(got_ck))})")
 digest_cell = ", ".join(f"{x['epoch']}: {'yes' if x['match'] else 'NO'}" for x in per_epoch) or "none"
 L = []
 L.append(f"## {today}, {scenario}: {os.path.basename(cap)} ({'PASS' if passed else 'FAIL'})")
@@ -289,18 +353,21 @@ L.append(f"- Scenario: `{scenario}` = `--drop {drop} --seed {seed}`, stream mode
          f"got {n(h.get('rcvbuf_actual'))}")
 L.append(f"- Reference: `{record_obj['reference']['path']}` (iex_digest direct file replay), sha256 "
          f"`{record_obj['reference']['sha256'][:16]}...`, {len(expected)} epoch(s)")
-L.append(f"- Exit codes: handler {hrc} (status `{h.get('status', 'n/a')}`), publisher {prc}")
+L.append(f"- Exit codes: handler {hrc} (status `{h.get('status', 'n/a')}`), publisher {prc}"
+         + (f"; killed after the grace period: {', '.join(killed)}" if killed else ""))
+L.append(f"- Checks: " + ", ".join(f"{k} {'yes' if v else 'NO'}" for k, v in checks.items()))
 L.append("")
 L.append("| segments sent | messages | injected drops | gaps detected | messages requested | retransmitted packets "
          "| natural drops | duplicates discarded | epochs | unrecoverable | held max | digest match per epoch "
-         "| handler wall | msgs/s |")
-L.append("|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---:|---:|")
+         "| checkpoints matched | handler wall | msgs/s |")
+L.append("|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---:|---:|---:|")
 L.append(f"| {n(sent)} | {n(h.get('messages_applied'))} | {n(dropped)} | {n(h.get('gaps'))} "
          f"| {n(h.get('requested_messages'))} | {n(retx)} | {n(natural_sent_recv)} (a) "
          f"| {n(h.get('duplicate_messages'))} | {n(h.get('epochs'))} | {n(h.get('unrecoverable'))} "
-         f"| {n(h.get('held_max'))} | {digest_cell} "
+         f"| {n(h.get('held_max'))} | {digest_cell} | {ck_cell} "
          f"| {wall / 1e9:.3f} s | {h.get('msgs_per_sec', 0):,.0f} |" if isinstance(wall, int) else
-         f"| {n(sent)} | {n(h.get('messages_applied'))} | {n(dropped)} | {n(h.get('gaps'))} | | | | | | | | {digest_cell} | | |")
+         f"| {n(sent)} | {n(h.get('messages_applied'))} | {n(dropped)} | {n(h.get('gaps'))} | | | | | | | | {digest_cell} "
+         f"| {ck_cell} | | |")
 L.append("")
 L.append("- Segments sent: datagrams the publisher put on the wire (accepted IEX-TP segments minus injected drops). "
          f"Accepted segments {n(p.get('segments'))} of {n(p.get('packets_read'))} packets read "
@@ -309,16 +376,23 @@ L.append("- Messages: messages the handler applied to its books, in sequence ord
 L.append(f"- Gaps detected: holes the handler found and requested (`gaps`, always equal to `requests`, here "
          f"{n(h.get('requests'))}). The publisher answered {n(p.get('retransmit_requests'))} requests, "
          f"{n(p.get('unserved'))} unserved, ring evicted {n(p.get('ring_evicted'))} packets.")
-L.append("- Messages requested and duplicates discarded include benign tail re-requests: near End or a restart, a "
-         "datagram still queued in the kernel can be requested as a missing tail, and then arrives twice "
-         "(UDP and retransmit); the second copy is a counted duplicate. The file's own merge-seam duplicates are "
-         "counted there too.")
+dups = h.get("duplicate_messages")
+L.append("- Messages requested = messages in injected-drop packets + messages in naturally dropped packets + any "
+         "benign tail re-request (near End or the restart, a datagram still queued in the kernel can be requested "
+         "as a missing tail and then arrive twice; the second copy is a counted duplicate, as are the file's own "
+         f"merge-seam duplicates). Here duplicates discarded = {n(dups)}"
+         + (", so no tail re-request happened and every requested message was in a dropped packet."
+            if dups == 0 else ", so some requested messages may be tail re-requests."))
 L.append(f"- (a) Natural drops = segments sent - datagrams the handler read ({n(sent)} - {n(recv)}). It is an upper "
          "bound on loss in the kernel: the handler stops once its books are complete, so a datagram still queued "
          "in its socket then (already recovered by retransmit) counts too. Cross-checks: the kernel's Udp "
          f"RcvbufErrors delta over the run {n(kernel.get('RcvbufErrors'))} (VM-wide counter, receive-buffer "
          f"overflow); messages requested beyond the {n(injected_msgs)} messages in injected-drop packets "
-         f"{n(extra_requested)} (inflated by tail re-requests). "
+         f"{n(extra_requested)} (the messages of the naturally dropped packets"
+         + (", nothing else, since duplicates are 0" if dups == 0 else ", plus any tail re-requests") + "); "
+         f"retransmitted packets - injected drops - natural drops = "
+         f"{n(retx - dropped - natural_sent_recv) if isinstance(retx, int) and isinstance(dropped, int) and isinstance(natural_sent_recv, int) else 'n/a'} "
+         "(a positive value counts packets re-requested as a tail; a negative one counts dropped zero-message packets, since a heartbeat opens no gap and is never retransmitted). "
          f"Kernel Udp deltas: InDatagrams {n(kernel.get('InDatagrams'))}, InErrors {n(kernel.get('InErrors'))}, "
          f"OutDatagrams {n(kernel.get('OutDatagrams'))}. Publisher sendto retries (ENOBUFS/EAGAIN) "
          f"{n(p.get('send_retries'))}.")
@@ -329,11 +403,22 @@ L.append("- Handler wall: first datagram received to books complete. msgs/s = me
 L.append("- Digest match per epoch: the handler's final book digest, order count and message count for each "
          "epoch, compared by this script with the reference file line by line (and by the handler's own "
          f"`--expect`, which reported `digest_match: {str(h.get('digest_match')).lower()}`).")
+L.append(f"- Checkpoints matched: book digest and order count after every message whose sequence number is a "
+         f"multiple of {n(ckpt_every)}, compared index by index with the reference (a missing or extra checkpoint "
+         f"fails). Per epoch in the reference: "
+         + ", ".join(f"{e}: {n(c)}" for e, c in ck_per_epoch.items())
+         + f"; {n(ck_populated)} of {n(len(exp_ck))} have resting orders"
+         + (f" ({n(min(ck_orders))} to {n(max(ck_orders))})." if ck_orders else ".")
+         + (f" First mismatch at index {ck_mismatch}." if ck_mismatch is not None else ""))
 if empty_epochs:
     L.append(f"- **Empty final books (generated):** the reference has 0 resting orders at the end of epoch(s) "
              f"{', '.join(map(str, empty_epochs))}, so their digest is the FNV-1a offset basis of an empty book. "
-             "For those epochs the digest comparison shows only that both sides end with empty books after "
-             "applying the same number of messages; it does not by itself show the intermediate books agreed.")
+             "The end-of-epoch comparison there shows only that both sides end empty after applying the same "
+             "number of messages; the populated checkpoints are what compare mid-epoch books.")
+no_ck = [e for e, c in ck_per_epoch.items() if c == 0 or not any(x["orders"] for x in exp_ck if x["epoch"] == e)]
+if no_ck:
+    L.append(f"- **Epoch(s) with no populated checkpoint (generated):** {', '.join(map(str, no_ck))}. Their books "
+             "are compared only at the epoch end.")
 L.append("")
 L.append("<details><summary>Per-epoch digests</summary>")
 L.append("")

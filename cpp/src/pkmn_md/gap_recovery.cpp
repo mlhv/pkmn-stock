@@ -9,7 +9,8 @@
 
 namespace pkmn::md {
 
-RecoveringHandler::RecoveringHandler(RequestSink& sink) : sink_(sink) {
+RecoveringHandler::RecoveringHandler(RequestSink& sink, std::uint64_t checkpoint_every)
+    : sink_(sink), ckpt_(checkpoint_every) {
     epochs_.emplace_back();
     starts_.push_back(std::numeric_limits<std::int64_t>::min());
 }
@@ -138,7 +139,13 @@ void RecoveringHandler::apply_or_drop(Epoch& ep, const TpHeader& hdr, std::span<
     seg.restart = false;
     stats_.duplicate_messages += seg.skip;
     if (seg.skip >= hdr.msg_count) return;
-    apply_deep_plus_segment(seg, books_, ev_, decode_stats_);
+    // for_each_applied applies messages skip.. in order: the first applied one
+    // has sequence number first_seq + skip.
+    std::int64_t seq = hdr.first_seq + seg.skip;
+    apply_deep_plus_segment(seg, books_, ev_, decode_stats_, [&](auto&& step) {
+        step();
+        ckpt_.after(current_, seq++, books_);
+    });
     const std::uint64_t n = hdr.msg_count - seg.skip;
     ++stats_.segments_applied;
     stats_.messages_applied += n;

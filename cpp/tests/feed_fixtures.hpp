@@ -145,6 +145,21 @@ inline std::vector<FeedSegment> synthetic_feed(std::size_t n = 2000, std::size_t
     return out;
 }
 
+// Two segments, one epoch, whose books end empty: seq 1-2 add AAA id 1 at
+// `aaa_price` and BBB id 2, seq 3-4 delete both. Two such feeds with
+// different prices have equal end-of-epoch digests (empty books, 4 messages)
+// but different books after seq 1 and 2 (seq 3 deletes AAA, leaving BBB).
+inline std::vector<FeedSegment> empty_ending_feed(std::int64_t aaa_price) {
+    const std::int64_t t0 = kFeedBaseTime, t1 = kFeedBaseTime + 1000;
+    const Bytes s1 = md_fixtures::tp_segment(pkmn::md::kDeepPlus, 1,
+                                             {md_fixtures::dp_add("AAA", '8', 1, 100, aaa_price, t0),
+                                              md_fixtures::dp_add("BBB", '5', 2, 200, 150'000, t0)},
+                                             -1, -1, t0);
+    const Bytes s2 =
+        md_fixtures::tp_segment(pkmn::md::kDeepPlus, 3, {dp_delete("AAA", 1, t1), dp_delete("BBB", 2, t1)}, -1, -1, t1);
+    return {{s1, 0, 1, 2, t0}, {s2, 0, 3, 2, t1}};
+}
+
 // The segments as a gzipped pcapng capture, in order, one UDP packet each.
 inline void write_feed_capture(const std::string& path, const std::vector<FeedSegment>& segs) {
     std::vector<std::string> payloads;

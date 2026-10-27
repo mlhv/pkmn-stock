@@ -5,8 +5,9 @@
 // epoch frames from the TCP side channel (on_retransmit, on_epoch_start,
 // on_end, on_unserved), holds packets that arrive after a gap, asks the
 // RequestSink for every missing range, and applies messages to its BookSet
-// in strict sequence order. Its per-epoch digests must equal
-// reference_digests() of the same capture.
+// in strict sequence order. Its per-epoch digests (and, with a checkpoint
+// interval, its mid-epoch checkpoints, see book_digest.hpp) must equal
+// reference_digest_set() of the same capture.
 //
 // Rules:
 //   1. Stream filter. The first datagram (or retransmit) with a parseable
@@ -90,7 +91,8 @@ class RequestSink {
 
 class RecoveringHandler {
   public:
-    explicit RecoveringHandler(RequestSink& sink);
+    // checkpoint_every: the book_digest.hpp checkpoint interval (0 = none).
+    explicit RecoveringHandler(RequestSink& sink, std::uint64_t checkpoint_every = 0);
 
     void on_datagram(std::span<const std::uint8_t> udp_payload);  // multicast
     void on_retransmit(std::uint32_t epoch, std::span<const std::uint8_t> payload);
@@ -101,6 +103,7 @@ class RecoveringHandler {
     bool done() const { return done_ && !failed(); }  // End seen and every epoch finalized
     bool failed() const { return stats_.unrecoverable > 0; }
     const std::vector<EpochDigest>& digests() const { return digests_; }
+    const std::vector<Checkpoint>& checkpoints() const { return ckpt_.checkpoints(); }
     const RecoveryStats& stats() const { return stats_; }
 
   private:
@@ -142,6 +145,7 @@ class RecoveringHandler {
     std::uint32_t channel_ = 0, session_ = 0;
     std::int64_t max_send_time_ = std::numeric_limits<std::int64_t>::min();
     std::vector<EpochDigest> digests_;
+    CheckpointRecorder ckpt_;
     RecoveryStats stats_;
 };
 
