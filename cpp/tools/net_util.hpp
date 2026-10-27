@@ -18,6 +18,7 @@
 #include <cerrno>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <stdexcept>
 #include <string>
@@ -83,12 +84,18 @@ inline void setopt(int fd, int level, int name, const T& v, const char* what) {
 // Asks for `bytes` of receive buffer and returns what getsockopt reports
 // afterwards. The kernel caps the request (Linux: net.core.rmem_max) and Linux
 // reports twice the granted value (its bookkeeping overhead), so the return
-// is the kernel's own figure, not the request.
+// is the kernel's own figure, not the request. Warns on stderr when that
+// figure is below the request (the cap bit).
 inline int set_rcvbuf(int fd, int bytes) {
     setopt(fd, SOL_SOCKET, SO_RCVBUF, bytes, "setsockopt SO_RCVBUF");
     int got = 0;
     socklen_t len = sizeof got;
     if (::getsockopt(fd, SOL_SOCKET, SO_RCVBUF, &got, &len) != 0) fail("getsockopt SO_RCVBUF");
+    if (got < bytes)
+        std::fprintf(stderr,
+                     "warning: SO_RCVBUF %d requested, kernel reports %d (capped; on Linux raise "
+                     "net.core.rmem_max)\n",
+                     bytes, got);
     return got;
 }
 

@@ -31,9 +31,14 @@
 // server thread ends when the handler closes TCP; the main thread then joins
 // it and prints one JSON object on stdout.
 //
-// Exit: 0 when End was written and the handler then closed TCP; 1 if the
-// handler went away before End (the stream was cut short) or on an error;
-// 2 on bad usage.
+// Exit: 0 when End was written, every request was served, and the handler
+// then closed TCP; 1 if any request was Unserved (whenever it came, before or
+// after End), if the handler went away before End (the stream was cut short),
+// or on an error; 2 on bad usage. The server thread answers each request as
+// it reads it, so no request is ever left pending on this side: a handler
+// that leaves after End with its own recovery incomplete (timeout, digest
+// mismatch) is visible only in the handler's exit code, which is the
+// authority on whether recovery succeeded.
 
 #include <signal.h>
 #include <sys/socket.h>
@@ -363,6 +368,11 @@ int main(int argc, char** argv) {
         }
         if (cut_short) {
             std::fprintf(stderr, "error: handler closed the control channel before End\n");
+            return 1;
+        }
+        if (sh.unserved > 0) {
+            std::fprintf(stderr, "error: %llu retransmit request(s) could not be served from the ring\n",
+                         static_cast<u64>(sh.unserved));
             return 1;
         }
         return 0;

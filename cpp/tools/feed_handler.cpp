@@ -14,23 +14,33 @@
 //      listens), so no datagram can be sent before the handler is listening.
 //   2. A poll() loop over the TCP and UDP sockets, both non-blocking:
 //        a. TCP first: read everything available and parse frames.
-//           Retransmit and Unserved frames go to the core at once. EpochStart
-//           and End are deferred until the UDP socket has been drained to
-//           EAGAIN (or for at most kCtrlDeferMs): the publisher writes them
-//           right before or after the multicast packets they bound, so the
-//           datagrams already queued in the kernel would otherwise be
-//           requested as a missing epoch tail and then arrive as duplicates.
-//           Deferring only delays an announcement; the core accepts epoch
-//           frames in any order relative to datagrams.
+//           Retransmit, Unserved and EpochStart frames go to the core at once.
+//           EpochStart must never wait: a new-epoch datagram that reaches the
+//           core before its EpochStart, with a first_seq at or past the old
+//           epoch's highest sequence end, is held as a gap of the OLD epoch
+//           and requested there, which the ring cannot serve (the core's
+//           documented rule-2 limitation). Only End is deferred, until the
+//           UDP socket has been drained to EAGAIN (or for at most
+//           kCtrlDeferMs): the publisher writes it after the last datagram,
+//           so the datagrams still queued in the kernel would otherwise be
+//           requested as a missing tail and then arrive as duplicates.
 //        b. UDP: up to kUdpBatch datagrams per pass with recvmsg into a
-//           65,535-byte buffer. A datagram with MSG_TRUNC is treated as not
-//           received (counted in `truncated` and in `rejected`), never fed to
-//           the core, so its hole is requested like any loss.
+//           65,535-byte buffer, then a second TCP drain, then the batch goes
+//           to the core. The publisher writes EpochStart before it sends any
+//           datagram of the new epoch, so the second drain delivers it ahead
+//           of them. Residual window: if the publisher's TCP send buffer is
+//           backed up (a large retransmit backlog the handler has not read
+//           yet), EpochStart can still trail its datagrams; the rule-2 case
+//           then fails loudly (Unserved, exit 2), never silently. A datagram
+//           with MSG_TRUNC is treated as not received (counted in
+//           `truncated` and in `rejected`), never fed to the core, so its
+//           hole is requested like any loss.
 //        c. Request frames from the core's RequestSink are appended to an
 //           outbound buffer and flushed whenever the socket is writable
 //           (POLLOUT). The handler never blocks on a TCP write, so it always
 //           keeps reading what the publisher sends: no write-write deadlock.
-//   3. Stop on done(), failed(), the publisher closing TCP, or the timeout.
+//   3. Stop on done(), failed(), the publisher closing TCP (after any held
+//      End is delivered), or the timeout.
 //      Close TCP (the publisher's server thread then exits), print one JSON
 //      object on stdout.
 //
@@ -206,17 +216,61 @@ int main(int argc, char** argv) {
 
         FrameParser parser;
         std::vector<std::uint8_t> tcp_in(1 << 16), dgram(kUdpBuf);
-        std::vector<Ctrl> deferred;
-        clk::time_point deferred_since{};
+        std::vector<std::uint8_t> batch;  // this pass's datagrams, back to back
+        std::vector<std::size_t> batch_ends;
+        std::optional<Ctrl> pending_end;
+        clk::time_point end_since{};
         bool peer_closed = false;
 
-        auto deliver = [&](const Ctrl& c) {
-            if (c.type == FrameType::EpochStart)
-                core.on_epoch_start(c.epoch, c.a, c.b);
-            else
-                core.on_end(c.epoch, c.a);
-        };
         auto finished = [&] { return core.done() || core.failed(); };
+        auto deliver_end = [&] {
+            if (pending_end) core.on_end(pending_end->epoch, pending_end->a);
+            pending_end.reset();
+        };
+        // Reads whatever TCP has now (bounded) and hands every frame to the
+        // core, except End, which is held in pending_end.
+        auto drain_tcp = [&] {
+            for (int chunk = 0; chunk < 64 && !peer_closed; ++chunk) {
+                const ssize_t n = ::recv(tcp.get(), tcp_in.data(), tcp_in.size(), 0);
+                if (n == 0) {
+                    peer_closed = true;
+                    break;
+                }
+                if (n < 0) {
+                    if (errno == EINTR) continue;
+                    if (errno == EAGAIN || errno == EWOULDBLOCK) break;
+                    if (errno == ECONNRESET) {
+                        peer_closed = true;
+                        break;
+                    }
+                    netu::fail("recv(tcp)");
+                }
+                parser.feed({tcp_in.data(), static_cast<std::size_t>(n)});
+                Frame f{};
+                while (parser.next(f)) {
+                    switch (f.type) {
+                        case FrameType::Retransmit:
+                            core.on_retransmit(f.epoch, f.body);
+                            break;
+                        case FrameType::Unserved:
+                            if (f.body.size() != 16) throw std::runtime_error("bad Unserved frame");
+                            core.on_unserved(f.epoch, get_i64(f.body.data()), get_i64(f.body.data() + 8));
+                            break;
+                        case FrameType::EpochStart:
+                            if (f.body.size() != 16) throw std::runtime_error("bad EpochStart frame");
+                            core.on_epoch_start(f.epoch, get_i64(f.body.data()), get_i64(f.body.data() + 8));
+                            break;
+                        case FrameType::End:
+                            if (f.body.size() != 8) throw std::runtime_error("bad End frame");
+                            pending_end = Ctrl{f.type, f.epoch, get_i64(f.body.data()), 0};
+                            end_since = clk::now();
+                            break;
+                        case FrameType::Request:
+                            throw std::runtime_error("unexpected Request frame from the publisher");
+                    }
+                }
+            }
+        };
 
         while (!finished()) {
             const auto now = clk::now();
@@ -227,61 +281,23 @@ int main(int argc, char** argv) {
             pollfd fds[2] = {{tcp.get(), static_cast<short>(POLLIN | (outbox.pending() ? POLLOUT : 0)), 0},
                              {udp.get(), POLLIN, 0}};
             const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now).count();
-            int wait_ms = static_cast<int>(std::min<long long>(deferred.empty() ? 100 : kCtrlDeferMs, left + 1));
+            const int wait_ms = static_cast<int>(std::min<long long>(pending_end ? kCtrlDeferMs : 100, left + 1));
             if (::poll(fds, 2, wait_ms) < 0) {
                 if (errno == EINTR) continue;
                 netu::fail("poll");
             }
 
             // a. TCP first.
-            if (!peer_closed && (fds[0].revents & (POLLIN | POLLHUP | POLLERR)) != 0) {
-                for (int chunk = 0; chunk < 64; ++chunk) {
-                    const ssize_t n = ::recv(tcp.get(), tcp_in.data(), tcp_in.size(), 0);
-                    if (n == 0) {
-                        peer_closed = true;
-                        break;
-                    }
-                    if (n < 0) {
-                        if (errno == EINTR) continue;
-                        if (errno == EAGAIN || errno == EWOULDBLOCK) break;
-                        if (errno == ECONNRESET) {
-                            peer_closed = true;
-                            break;
-                        }
-                        netu::fail("recv(tcp)");
-                    }
-                    parser.feed({tcp_in.data(), static_cast<std::size_t>(n)});
-                    Frame f{};
-                    while (parser.next(f)) {
-                        switch (f.type) {
-                            case FrameType::Retransmit:
-                                core.on_retransmit(f.epoch, f.body);
-                                break;
-                            case FrameType::Unserved:
-                                if (f.body.size() != 16) throw std::runtime_error("bad Unserved frame");
-                                core.on_unserved(f.epoch, get_i64(f.body.data()), get_i64(f.body.data() + 8));
-                                break;
-                            case FrameType::EpochStart:
-                                if (f.body.size() != 16) throw std::runtime_error("bad EpochStart frame");
-                                if (deferred.empty()) deferred_since = clk::now();
-                                deferred.push_back(
-                                    {f.type, f.epoch, get_i64(f.body.data()), get_i64(f.body.data() + 8)});
-                                break;
-                            case FrameType::End:
-                                if (f.body.size() != 8) throw std::runtime_error("bad End frame");
-                                if (deferred.empty()) deferred_since = clk::now();
-                                deferred.push_back({f.type, f.epoch, get_i64(f.body.data()), 0});
-                                break;
-                            case FrameType::Request:
-                                throw std::runtime_error("unexpected Request frame from the publisher");
-                        }
-                    }
-                }
-            }
+            if ((fds[0].revents & (POLLIN | POLLHUP | POLLERR)) != 0) drain_tcp();
 
-            // b. UDP.
+            // b. UDP: read a batch, then drain TCP again, then feed the batch.
+            // The publisher writes an EpochStart before it sends any datagram
+            // of that epoch, so the second drain hands the core every
+            // EpochStart written before a datagram in this batch.
+            batch.clear();
+            batch_ends.clear();
             bool udp_empty = false;
-            for (int k = 0; k < kUdpBatch && !core.failed(); ++k) {
+            for (int k = 0; k < kUdpBatch; ++k) {
                 iovec iov{dgram.data(), dgram.size()};
                 msghdr mh{};
                 mh.msg_iov = &iov;
@@ -301,21 +317,27 @@ int main(int argc, char** argv) {
                     ++truncated;
                     continue;
                 }
-                core.on_datagram({dgram.data(), static_cast<std::size_t>(n)});
+                batch.insert(batch.end(), dgram.begin(), dgram.begin() + n);
+                batch_ends.push_back(batch.size());
             }
+            if (!batch_ends.empty()) drain_tcp();
+            for (std::size_t i = 0, b = 0; i < batch_ends.size() && !core.failed(); b = batch_ends[i++])
+                core.on_datagram({batch.data() + b, batch_ends[i] - b});
 
-            // Epoch frames once the queued datagrams are in (or after the cap).
-            if (!deferred.empty() &&
-                (udp_empty || clk::now() - deferred_since >= std::chrono::milliseconds(kCtrlDeferMs))) {
-                for (const Ctrl& c : deferred) deliver(c);
-                deferred.clear();
-            }
+            // End once the queued datagrams are in (or after the cap), and
+            // always before judging a closed control channel.
+            if (pending_end && (udp_empty || peer_closed ||
+                                clk::now() - end_since >= std::chrono::milliseconds(kCtrlDeferMs)))
+                deliver_end();
 
             // c. Requests out.
             if (!peer_closed && !outbox.flush(tcp.get())) peer_closed = true;
             if (peer_closed && !finished()) {
-                status = "publisher_closed";
-                break;
+                deliver_end();
+                if (!finished()) {
+                    status = "publisher_closed";
+                    break;
+                }
             }
         }
         if (core.done()) t_done = clk::now();

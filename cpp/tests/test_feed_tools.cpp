@@ -96,45 +96,109 @@ long long json_int(const std::string& s, const std::string& key) {
     return std::strtoll(s.c_str() + p + k.size(), nullptr, 10);
 }
 
+struct Pair {
+    int handler_exit, publisher_exit;
+    std::string hout, pout;
+};
+
+// Runs feed_handler (started first, as the brief orders) and feed_publisher on
+// `cap` with a fresh port pair outside Linux's ephemeral range (32768-60999).
+// A child that fails to spawn, or outlives the 90 s deadline, is reaped so no
+// process is orphaned; a failed spawn shows as exit -1.
+Pair run_pair(const std::string& cap, std::vector<std::string> hargs, std::vector<std::string> pargs) {
+    using md_fixtures::TempFile;
+    TempFile hout(".hout"), herr(".herr"), pout(".pout"), perr(".perr");
+    std::random_device rd;
+    const int port = 20000 + static_cast<int>(rd() % 11999);
+    const std::string p = std::to_string(port), cp = std::to_string(port + 1);
+    std::vector<std::string> h = {FEED_HANDLER_BIN, "--port", p, "--ctrl-port", cp, "--timeout-s", "60"};
+    h.insert(h.end(), hargs.begin(), hargs.end());
+    std::vector<std::string> pub = {FEED_PUBLISHER_BIN, cap, "--port", p, "--ctrl-port", cp};
+    pub.insert(pub.end(), pargs.begin(), pargs.end());
+    Child hc = spawn(h, hout.path, herr.path);
+    Child pc = hc.pid > 0 ? spawn(pub, pout.path, perr.path) : Child{};
+    if (pc.pid < 0 && hc.pid > 0) {
+        kill(hc.pid, SIGKILL);
+        waitpid(hc.pid, &hc.status, 0);
+        hc.exited = true;
+    }
+    wait_all({&hc, &pc}, clk::now() + std::chrono::seconds(90));
+    Pair r{pc.pid < 0 ? -1 : exit_code(hc), exit_code(pc), slurp(hout.path), slurp(pout.path)};
+    r.hout += "\nhandler stderr:\n" + slurp(herr.path);
+    r.pout += "\npublisher stderr:\n" + slurp(perr.path);
+    return r;
+}
+
+// Reference digests of `cap` from the direct file replay (iex_digest).
+void write_reference(const std::string& cap, const std::string& ref) {
+    const std::string dig = std::string(IEX_DIGEST_BIN) + " " + cap + " --out " + ref;
+    REQUIRE(std::system(dig.c_str()) == 0);
+}
+
 }  // namespace
 
 TEST_CASE("feed tools: loopback multicast with 10% random loss matches iex_digest") {
-    using md_fixtures::TempFile;
-    TempFile cap(".pcap.gz"), ref(".digests"), hout(".hout"), herr(".herr"), pout(".pout"), perr(".perr");
+    md_fixtures::TempFile cap(".pcap.gz"), ref(".digests");
     feed_fixtures::write_feed_capture(cap.path, feed_fixtures::synthetic_feed());
+    write_reference(cap.path, ref.path);
+    const Pair r = run_pair(cap.path, {"--expect", ref.path}, {"--drop", "random:0.1", "--seed", "3", "--rate", "200000"});
+    INFO("handler stdout:\n" << r.hout);
+    INFO("publisher stdout:\n" << r.pout);
+    CHECK(r.handler_exit == 0);
+    CHECK(r.hout.find("\"digest_match\": true") != std::string::npos);
+    CHECK(json_int(r.hout, "gaps") > 0);
+    CHECK(json_int(r.hout, "unrecoverable") == 0);
+    CHECK(r.publisher_exit == 0);
+    CHECK(json_int(r.pout, "dropped") > 0);
+    CHECK(json_int(r.pout, "unserved") == 0);
+    CHECK(json_int(r.pout, "retransmit_packets") > 0);
+}
 
-    const std::string dig = std::string(IEX_DIGEST_BIN) + " " + cap.path + " --out " + ref.path;
-    REQUIRE(std::system(dig.c_str()) == 0);
+// A first epoch far shorter than the second: every new-epoch datagram from
+// seq ~50 on is past the old epoch's highest sequence end, so if one reached
+// the core before its EpochStart it would be held as a gap of the old epoch
+// and requested there (unservable). Unthrottled, so the whole stream is in
+// flight at once.
+TEST_CASE("feed tools: a short first epoch survives the restart unthrottled") {
+    md_fixtures::TempFile cap(".pcap.gz"), ref(".digests");
+    feed_fixtures::write_feed_capture(cap.path, feed_fixtures::synthetic_feed(2000, 20));
+    write_reference(cap.path, ref.path);
+    for (const char* seed : {"1", "2", "3"}) {
+        const Pair r = run_pair(cap.path, {"--expect", ref.path}, {"--drop", "random:0.1", "--seed", seed});
+        INFO("seed " << seed << "\nhandler stdout:\n" << r.hout);
+        INFO("publisher stdout:\n" << r.pout);
+        CHECK(r.handler_exit == 0);
+        CHECK(r.hout.find("\"digest_match\": true") != std::string::npos);
+        CHECK(r.publisher_exit == 0);
+    }
+}
 
-    std::random_device rd;
-    const int port = 30000 + static_cast<int>(rd() % 30000);
-    const std::string p = std::to_string(port), cp = std::to_string(port + 1);
-
-    Child h = spawn({FEED_HANDLER_BIN, "--expect", ref.path, "--port", p, "--ctrl-port", cp, "--timeout-s", "60"},
-                    hout.path, herr.path);
-    REQUIRE(h.pid > 0);
-    Child pub = spawn({FEED_PUBLISHER_BIN, cap.path, "--port", p, "--ctrl-port", cp, "--drop", "random:0.1", "--seed",
-                       "3", "--rate", "200000"},
-                      pout.path, perr.path);
-    REQUIRE(pub.pid > 0);
-    wait_all({&h, &pub}, clk::now() + std::chrono::seconds(90));
-
-    const std::string ho = slurp(hout.path), po = slurp(pout.path);
-    INFO("handler stdout:\n" << ho << "\nhandler stderr:\n" << slurp(herr.path));
-    INFO("publisher stdout:\n" << po << "\npublisher stderr:\n" << slurp(perr.path));
-    CHECK(exit_code(h) == 0);
-    CHECK(ho.find("\"digest_match\": true") != std::string::npos);
-    CHECK(json_int(ho, "gaps") > 0);
-    CHECK(json_int(ho, "unrecoverable") == 0);
-    CHECK(exit_code(pub) == 0);
-    CHECK(json_int(po, "dropped") > 0);
-    CHECK(json_int(po, "unserved") == 0);
-    CHECK(json_int(po, "retransmit_packets") > 0);
+// The ring holds only the last few packets and the whole 50-segment stream is
+// sent before the first request arrives, so the Unserved reply comes after
+// End: the publisher must still exit nonzero, as must the handler.
+TEST_CASE("feed tools: an unserved request fails both tools") {
+    md_fixtures::TempFile cap(".pcap.gz");
+    feed_fixtures::write_feed_capture(cap.path, feed_fixtures::synthetic_feed(50, 0));
+    const Pair r = run_pair(cap.path, {}, {"--drop", "random:0.1", "--seed", "3", "--ring-bytes", "1000"});
+    INFO("handler stdout:\n" << r.hout);
+    INFO("publisher stdout:\n" << r.pout);
+    CHECK(r.handler_exit == 2);
+    CHECK(json_int(r.hout, "unrecoverable") > 0);
+    CHECK(json_int(r.pout, "unserved") > 0);
+    CHECK(r.publisher_exit == 1);
 }
 
 #else
 
 TEST_CASE("feed tools: loopback multicast with 10% random loss matches iex_digest") {
+    SKIP("loopback multicast e2e runs in the Linux VM");
+}
+
+TEST_CASE("feed tools: a short first epoch survives the restart unthrottled") {
+    SKIP("loopback multicast e2e runs in the Linux VM");
+}
+
+TEST_CASE("feed tools: an unserved request fails both tools") {
     SKIP("loopback multicast e2e runs in the Linux VM");
 }
 
