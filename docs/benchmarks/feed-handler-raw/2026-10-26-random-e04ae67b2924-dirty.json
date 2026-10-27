@@ -1,0 +1,151 @@
+{
+  "date": "2026-10-26",
+  "scenario": "random",
+  "file": "data/iex/20241223_IEXTP1_DPLS1.0.pcap.gz",
+  "drop": "random:0.01",
+  "seed": 1,
+  "mode": "stream",
+  "rate": 0,
+  "hardware": "Apple M1 Pro, 7-vCPU OrbStack Ubuntu 24.04 arm64 VM, loopback multicast",
+  "host": "ubuntu Linux 7.2.12-orbstack-00394-gbecdd6130068 aarch64",
+  "git_sha": "e04ae67b2924-dirty",
+  "tree_hash": "94a352c454c53ed604d4f38d4b20d782e323a886c67f77216c8e9fe67a8efd63",
+  "dirty_paths": [
+    "?? scripts/bench_feed.sh"
+  ],
+  "compiler": "c++ (Ubuntu 13.3.0-6ubuntu2~24.04) 13.3.0",
+  "flags": "CMAKE_BUILD_TYPE=Release: -O3 -DNDEBUG -ffp-contract=off",
+  "reference": {
+    "path": "data/feed/reference-20241223.digests",
+    "sha256": "4151f8344771796da4bbb93793bce853e560a5a802c3845b12edc233587177cd",
+    "epochs": [
+      {
+        "epoch": 0,
+        "digest": "cbf29ce484222325",
+        "orders": 0,
+        "messages": 50878184
+      },
+      {
+        "epoch": 1,
+        "digest": "cbf29ce484222325",
+        "orders": 0,
+        "messages": 80992
+      }
+    ]
+  },
+  "handler_cmd": "/Users/ml3787/pkmn-stock/cpp/build-linux-release/feed_handler --port 23399 --ctrl-port 23400 --timeout-s 1800 --expect /Users/ml3787/pkmn-stock/data/feed/reference-20241223.digests",
+  "publisher_cmd": "/Users/ml3787/pkmn-stock/cpp/build-linux-release/feed_publisher /Users/ml3787/pkmn-stock/data/iex/20241223_IEXTP1_DPLS1.0.pcap.gz --port 23399 --ctrl-port 23400 --rate 0 --drop random:0.01 --seed 1",
+  "handler_exit": 0,
+  "publisher_exit": 0,
+  "handler": {
+    "status": "done",
+    "udp_received": 42066928,
+    "truncated": 0,
+    "datagrams": 42066928,
+    "rejected": 0,
+    "segments_applied": 42464683,
+    "messages_applied": 50959176,
+    "gaps": 421146,
+    "requests": 421146,
+    "requested_messages": 509142,
+    "retransmit_segments": 425364,
+    "duplicate_messages": 0,
+    "epochs": 2,
+    "parked": 0,
+    "unrecoverable": 0,
+    "held_max": 6970,
+    "rcvbuf_requested": 7500000,
+    "rcvbuf_actual": 15000000,
+    "wall_ns": 77770096413,
+    "msgs_per_sec": 655254,
+    "digests": [
+      {
+        "epoch": 0,
+        "digest": "cbf29ce484222325",
+        "orders": 0,
+        "messages": 50878184
+      },
+      {
+        "epoch": 1,
+        "digest": "cbf29ce484222325",
+        "orders": 0,
+        "messages": 80992
+      }
+    ],
+    "expected_epochs": 2,
+    "digest_match": true
+  },
+  "publisher": {
+    "packets_read": 42492551,
+    "skipped": 0,
+    "segments": 42492551,
+    "segments_sent": 42066928,
+    "messages_sent": 50450034,
+    "dropped": 425623,
+    "bursts": 0,
+    "epochs": 2,
+    "retransmit_requests": 421146,
+    "retransmit_packets": 425364,
+    "unserved": 0,
+    "ring_evicted": 39281642,
+    "ring_bytes": 268435456,
+    "send_retries": 0,
+    "send_wall_ns": 77769138782,
+    "rate_target": 0,
+    "ram": false,
+    "end_sent": true
+  },
+  "handler_stderr": "",
+  "publisher_stderr": "listening on 127.0.0.1:23400\nhandler connected\n",
+  "kernel_udp_delta": {
+    "InDatagrams": 42066928,
+    "NoPorts": 0,
+    "InErrors": 0,
+    "OutDatagrams": 42066928,
+    "RcvbufErrors": 0,
+    "SndbufErrors": 0,
+    "InCsumErrors": 0,
+    "IgnoredMulti": 2,
+    "MemErrors": 0
+  },
+  "natural_drops": {
+    "sent_minus_received": 0,
+    "kernel_rcvbuf_errors": 0,
+    "retransmitted_minus_injected": -259
+  },
+  "per_epoch": [
+    {
+      "epoch": 0,
+      "match": true,
+      "got": {
+        "epoch": 0,
+        "digest": "cbf29ce484222325",
+        "orders": 0,
+        "messages": 50878184
+      },
+      "expected": {
+        "epoch": 0,
+        "digest": "cbf29ce484222325",
+        "orders": 0,
+        "messages": 50878184
+      }
+    },
+    {
+      "epoch": 1,
+      "match": true,
+      "got": {
+        "epoch": 1,
+        "digest": "cbf29ce484222325",
+        "orders": 0,
+        "messages": 80992
+      },
+      "expected": {
+        "epoch": 1,
+        "digest": "cbf29ce484222325",
+        "orders": 0,
+        "messages": 80992
+      }
+    }
+  ],
+  "pass": true
+}
