@@ -84,14 +84,21 @@ inline void setopt(int fd, int level, int name, const T& v, const char* what) {
 // Asks for `bytes` of receive buffer and returns what getsockopt reports
 // afterwards. The kernel caps the request (Linux: net.core.rmem_max) and Linux
 // reports twice the granted value (its bookkeeping overhead), so the return
-// is the kernel's own figure, not the request. Warns on stderr when that
-// figure is below the request (the cap bit).
+// is the kernel's own figure, not the request. Warns on stderr when the
+// granted size is below the request (the cap bit): on Linux that is got / 2,
+// since a request capped at rmem_max still reads back as up to twice the
+// request; elsewhere (macOS) the figure is the granted size itself.
 inline int set_rcvbuf(int fd, int bytes) {
     setopt(fd, SOL_SOCKET, SO_RCVBUF, bytes, "setsockopt SO_RCVBUF");
     int got = 0;
     socklen_t len = sizeof got;
     if (::getsockopt(fd, SOL_SOCKET, SO_RCVBUF, &got, &len) != 0) fail("getsockopt SO_RCVBUF");
-    if (got < bytes)
+#if defined(__linux__)
+    const int granted = got / 2;
+#else
+    const int granted = got;
+#endif
+    if (granted < bytes)
         std::fprintf(stderr,
                      "warning: SO_RCVBUF %d requested, kernel reports %d (capped; on Linux raise "
                      "net.core.rmem_max)\n",

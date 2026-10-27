@@ -24,7 +24,9 @@ void RetransmitRing::store(std::uint32_t epoch, std::int64_t first_seq, std::uin
         bytes_ += payload.size();
     }
     max_count_ = std::max<std::int64_t>(max_count_, count);
-    // payload <= cap_, so the entry just stored is only reached last.
+    // A new entry sits at the back of the FIFO and payload <= cap_, so it is
+    // reached last and survives. A replaced entry keeps its old slot, so if it
+    // is near the front it can itself be evicted here, like any old entry.
     while (bytes_ > cap_ && !fifo_.empty()) {
         auto it = index_.find(fifo_.front());
         bytes_ -= it->second.payload.size();

@@ -19,7 +19,6 @@
 #include <cstdlib>
 #include <fcntl.h>
 #include <fstream>
-#include <random>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -102,18 +101,26 @@ struct Pair {
 };
 
 // Runs feed_handler (started first, as the brief orders) and feed_publisher on
-// `cap` with a fresh port pair outside Linux's ephemeral range (32768-60999).
-// A child that fails to spawn, or outlives the 90 s deadline, is reaped so no
-// process is orphaned; a failed spawn shows as exit -1.
+// `cap` with a port pair and a multicast group of its own. Under ctest -j the
+// test cases run as concurrent processes, so both come from a slot derived
+// from this process's pid plus a per-process call counter: concurrent pids are
+// close together, so their slots differ (a random pick could collide). Ports
+// stay in 20000-32767, below Linux's ephemeral range (32768-60999); the group
+// is 239.255.(1 + slot / 256).(slot % 256), so even a port clash would not mix
+// two runs' datagrams. A child that fails to spawn, or outlives the 90 s
+// deadline, is reaped so no process is orphaned; a failed spawn shows as exit -1.
 Pair run_pair(const std::string& cap, std::vector<std::string> hargs, std::vector<std::string> pargs) {
     using md_fixtures::TempFile;
     TempFile hout(".hout"), herr(".herr"), pout(".pout"), perr(".perr");
-    std::random_device rd;
-    const int port = 20000 + static_cast<int>(rd() % 11999);
+    static unsigned calls = 0;
+    const unsigned slot = (static_cast<unsigned>(getpid()) * 8u + calls++) % 6383u;
+    const int port = 20000 + 2 * static_cast<int>(slot);
     const std::string p = std::to_string(port), cp = std::to_string(port + 1);
-    std::vector<std::string> h = {FEED_HANDLER_BIN, "--port", p, "--ctrl-port", cp, "--timeout-s", "60"};
+    const std::string group = "239.255." + std::to_string(1 + slot / 256) + "." + std::to_string(slot % 256);
+    std::vector<std::string> h = {FEED_HANDLER_BIN, "--group", group, "--port", p, "--ctrl-port", cp,
+                                  "--timeout-s", "60"};
     h.insert(h.end(), hargs.begin(), hargs.end());
-    std::vector<std::string> pub = {FEED_PUBLISHER_BIN, cap, "--port", p, "--ctrl-port", cp};
+    std::vector<std::string> pub = {FEED_PUBLISHER_BIN, cap, "--group", group, "--port", p, "--ctrl-port", cp};
     pub.insert(pub.end(), pargs.begin(), pargs.end());
     Child hc = spawn(h, hout.path, herr.path);
     Child pc = hc.pid > 0 ? spawn(pub, pout.path, perr.path) : Child{};

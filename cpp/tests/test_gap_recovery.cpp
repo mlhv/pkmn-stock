@@ -280,8 +280,11 @@ TEST_CASE("recovery: overlapping retransmit applies each message once") {
     drop[N] = true;
 
     SECTION("retransmit straddles already-applied messages") {
-        // The ring answers [N, N+1) with one packet spanning N-1 and N.
-        Harness hs;
+        // The ring answers [N, N+1) with one packet spanning N-1 and N. A
+        // checkpoint after every message pins the sequence numbering of the
+        // applied tail (seq = first_seq + skip): an off-by-skip there would
+        // label N's messages with N-1's sequence numbers.
+        Harness hs(1);
         fill_ring(hs, segs, N);
         hs.ring.store(0, segs[N - 1].first_seq, static_cast<std::uint16_t>(segs[N - 1].count + segs[N].count),
                       merged(segs[N - 1], segs[N]));
@@ -289,6 +292,9 @@ TEST_CASE("recovery: overlapping retransmit applies each message once") {
         require_matches(hs.h, ref);
         CHECK(hs.h.stats().retransmit_segments == 1);
         CHECK(hs.h.stats().duplicate_messages == segs[N - 1].count);
+        const DigestSet ref1 = reference_set(segs, 1);
+        REQUIRE(ref1.checkpoints.size() == total_messages(ref));
+        CHECK(hs.h.checkpoints() == ref1.checkpoints);
     }
     SECTION("retransmit makes a held packet redundant") {
         // The ring answers [N, N+1) with one packet spanning N and N+1, while
@@ -499,4 +505,47 @@ TEST_CASE("recovery: a checkpoint catches a divergence the end-of-epoch digest m
     CHECK(got[1].digest != ref.checkpoints[1].digest);
     CHECK(got[2] == ref.checkpoints[2]);  // seq 3 deleted AAA: only BBB is left on both sides
     CHECK(got[3] == ref.checkpoints[3]);  // both empty at seq 4
+}
+
+TEST_CASE("recovery: an out-of-order control frame is unrecoverable") {
+    // Each case would otherwise be ignored and leave the handler waiting for
+    // its timeout with the cause lost.
+    const auto segs = feed_fixtures::synthetic_feed();
+    REQUIRE(segs[kRestart].epoch == 1);
+    Harness hs;
+    hs.h.on_datagram(segs[0].bytes);
+    REQUIRE_FALSE(hs.h.failed());
+
+    SECTION("EpochStart skipping an epoch") {
+        hs.h.on_epoch_start(2, segs[kRestart - 1].first_seq + segs[kRestart - 1].count, segs[kRestart].send_time);
+    }
+    SECTION("EpochStart for epoch 0") {
+        hs.h.on_epoch_start(0, 1, segs[0].send_time);
+    }
+    SECTION("EpochStart repeated") {
+        hs.h.on_epoch_start(1, segs[kRestart - 1].first_seq + segs[kRestart - 1].count, segs[kRestart].send_time);
+        REQUIRE_FALSE(hs.h.failed());
+        hs.h.on_epoch_start(1, segs[kRestart - 1].first_seq + segs[kRestart - 1].count, segs[kRestart].send_time);
+    }
+    SECTION("EpochStart after End") {
+        hs.h.on_end(0, segs[kRestart - 1].first_seq + segs[kRestart - 1].count);
+        REQUIRE_FALSE(hs.h.failed());
+        hs.h.on_epoch_start(1, segs[kRestart - 1].first_seq + segs[kRestart - 1].count, segs[kRestart].send_time);
+    }
+    SECTION("End naming an unannounced epoch") {
+        hs.h.on_end(1, 10);
+    }
+    SECTION("End naming an earlier epoch") {
+        hs.h.on_epoch_start(1, segs[kRestart - 1].first_seq + segs[kRestart - 1].count, segs[kRestart].send_time);
+        REQUIRE_FALSE(hs.h.failed());
+        hs.h.on_end(0, segs[kRestart - 1].first_seq + segs[kRestart - 1].count);
+    }
+    SECTION("End repeated") {
+        hs.h.on_end(0, segs[kRestart - 1].first_seq + segs[kRestart - 1].count);
+        REQUIRE_FALSE(hs.h.failed());
+        hs.h.on_end(0, segs[kRestart - 1].first_seq + segs[kRestart - 1].count);
+    }
+    CHECK(hs.h.failed());
+    CHECK_FALSE(hs.h.done());
+    CHECK(hs.h.stats().unrecoverable == 1);
 }

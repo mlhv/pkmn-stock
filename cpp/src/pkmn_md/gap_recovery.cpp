@@ -1,7 +1,6 @@
 #include "pkmn_md/gap_recovery.hpp"
 
 #include <algorithm>
-#include <cassert>
 #include <utility>
 
 #include "pkmn_md/feed_reader.hpp"
@@ -82,9 +81,15 @@ void RecoveringHandler::on_retransmit(std::uint32_t epoch, std::span<const std::
 
 void RecoveringHandler::on_epoch_start(std::uint32_t epoch, std::int64_t prev_end_seq, std::int64_t first_send_time) {
     if (failed()) return;
-    // Epochs are announced once each, in order, over the reliable channel.
-    assert(epoch == starts_.size());
-    if (epoch != starts_.size() || epoch == 0) return;
+    // Epochs are announced once each, in order, before End, over the reliable
+    // channel. Anything else is a protocol violation the handler cannot
+    // recover from: it is counted as unrecoverable (failed() turns true) so
+    // the run stops at once with the cause in the stats, instead of timing
+    // out with the frame silently ignored.
+    if (epoch != starts_.size() || final_epoch_) {
+        ++stats_.unrecoverable;
+        return;
+    }
     starts_.push_back(first_send_time);
     epochs_.emplace_back();
     epochs_[epoch - 1].end = prev_end_seq;
@@ -106,8 +111,12 @@ void RecoveringHandler::on_epoch_start(std::uint32_t epoch, std::int64_t prev_en
 
 void RecoveringHandler::on_end(std::uint32_t epoch, std::int64_t end_seq) {
     if (failed()) return;
-    assert(epoch + 1 == starts_.size());
-    if (epoch + 1 != starts_.size()) return;
+    // End names the last announced epoch, once. Out of order or repeated:
+    // unrecoverable, as in on_epoch_start.
+    if (epoch + 1 != starts_.size() || final_epoch_) {
+        ++stats_.unrecoverable;
+        return;
+    }
     epochs_[epoch].end = end_seq;
     final_epoch_ = epoch;
     for (const Packet& p : parked_) duplicate(p.hdr);

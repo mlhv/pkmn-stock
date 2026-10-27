@@ -49,7 +49,10 @@
 //      and nothing more is applied. There is no resync. A retransmit that
 //      fails rule 1 or names an unannounced epoch is also unrecoverable (its
 //      range is never requested again), and so is an epoch whose expected
-//      sequence passes its announced end (it could never finalize).
+//      sequence passes its announced end (it could never finalize), and so
+//      is an out-of-order control frame: an EpochStart that is not the next
+//      epoch or comes after End, or an End that does not name the last
+//      announced epoch or repeats.
 //
 // Known limitation (rule 2): a new-epoch datagram that arrives before its
 // EpochStart frame is only recognized when its first_seq is below the

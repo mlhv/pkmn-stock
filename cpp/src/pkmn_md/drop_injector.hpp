@@ -93,6 +93,11 @@ public:
     std::uint64_t bursts() const { return bursts_; }
 
 private:
+    // std::mt19937_64 is fully specified, but how uniform_real_distribution
+    // turns its output into a double is implementation-defined, so a seed
+    // reproduces the same drop pattern only within one standard library
+    // (the recorded real-day runs used libstdc++ in the VM). Kept as is so
+    // those recorded runs stay reproducible with their seeds there.
     double draw() { return std::uniform_real_distribution<double>(0, 1)(rng_); }
     DropSpec spec_;
     std::mt19937_64 rng_;

@@ -50,7 +50,8 @@
 // --expect); 1 done but an epoch entry or a checkpoint differs, or one side
 // has a checkpoint the other lacks (the first difference is printed); 2
 // unrecoverable (failed()),
-// publisher closed early, timeout, or an error.
+// publisher closed early, timeout, or an error (an error is reported in the
+// JSON as "error" and exits 2 even when the books finished in the same pass).
 
 #include <poll.h>
 #include <signal.h>
@@ -151,6 +152,24 @@ class Outbox : public RequestSink {
     std::vector<std::uint8_t> buf_;
     std::size_t off_ = 0;
 };
+
+// A JSON string body: quotes, backslashes and control bytes escaped.
+std::string json_escape(const std::string& in) {
+    std::string out;
+    for (const unsigned char c : in) {
+        if (c == '"' || c == '\\') {
+            out += '\\';
+            out += static_cast<char>(c);
+        } else if (c < 0x20) {
+            char b[8];
+            std::snprintf(b, sizeof b, "\\u%04x", c);
+            out += b;
+        } else {
+            out += static_cast<char>(c);
+        }
+    }
+    return out;
+}
 
 struct Ctrl {
     FrameType type;
@@ -358,8 +377,10 @@ int main(int argc, char** argv) {
         error = e.what();
         if (status == "running") status = "error";
     }
-    if (core.done()) status = "done";
-    else if (core.failed()) status = "failed";
+    // An exception wins over done: books that finished in the same pass as
+    // an error are still reported (digests below), but the run is not a pass.
+    if (core.failed()) status = "failed";
+    else if (core.done() && error.empty()) status = "done";
 
     // Digest comparison.
     const auto& got = core.digests();
@@ -398,6 +419,7 @@ int main(int argc, char** argv) {
 
     std::printf("{\n");
     std::printf("  \"status\": \"%s\",\n", status.c_str());
+    if (!error.empty()) std::printf("  \"error\": \"%s\",\n", json_escape(error).c_str());
     std::printf("  \"udp_received\": %llu,\n", udp_received);
     std::printf("  \"truncated\": %llu,\n", truncated);
     std::printf("  \"datagrams\": %llu,\n", static_cast<u64>(s.datagrams));
