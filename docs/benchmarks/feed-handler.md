@@ -118,6 +118,230 @@ Data provided for free by IEX. By accessing or using IEX Historical Data, you ag
 
 <!-- runs: newest first, inserted by scripts/bench_feed.sh -->
 
+## 2026-10-26, throughput sweep (n=1 per rate)
+
+`--ram --drop none`, handler checked against the reference at every rate (epoch and checkpoint digests). Each row is one run; the per-run sections below carry the full detail.
+
+| target msgs/s | publisher achieved msgs/s | handler msgs/s | natural drops | gaps recovered | unrecoverable | digest match | result |
+|---:|---:|---:|---:|---:|---:|---|---|
+| 1,000,000 | 650,021 | 650,015 | 0 | 0 | 0 | yes | pass |
+| 2,000,000 | 644,539 | 644,540 | 0 | 0 | 0 | yes | pass |
+| 4,000,000 | 752,351 | 752,354 | 0 | 0 | 0 | yes | pass |
+| 8,000,000 | 738,517 | 738,510 | 3,399 | 1 | 0 | yes | pass |
+| unthrottled (0) | 768,153 | 768,150 | 0 | 0 | 0 | yes | pass |
+
+Two figures, defined before the runs:
+
+- **Clean sustained:** the highest target rate with 0 gaps and a digest match. **No target rate was reached by the publisher** (achieved under 95% of target in every run: 650k against 1M, 645k against 2M, 752k against 4M, 739k against 8M), so there is no paced-target figure. The fastest run with 0 gaps and a digest match read 768,150 msgs/s at the handler (the rate-0 run); the publisher limited it, so it is a lower bound on what the handler can absorb, not a ceiling.
+- **Unthrottled with recovery:** the rate-0 run read 768,150 msgs/s at the handler with 0 gaps, 0 natural drops and a digest match, so it needed no recovery. The only run that did recover was the 8M-target one: 738,510 msgs/s, 1 gap recovered, 3,399 natural drops (segments sent minus datagrams read; an upper bound), 0 unrecoverable, digest match yes.
+
+What the table shows: in `--ram` mode this publisher tops out around 645k to 770k msgs/s on this VM, whatever target is set, so targets above that are the same run as unthrottled and the 650k/645k/752k/739k/768k spread is run-to-run noise (about 19% from lowest to highest, past the 10% VM noise floor, and n=1). The handler kept up with zero loss, bar one gap at 8M, everywhere the publisher could push it; the handler's own ceiling was not found.
+
+Caveats: n=1 per rate, no repeats. VM noise is 10% or more (`iex-book.md`), so differences inside that band are not differences. A target rate the publisher cannot reach shows as a lower publisher-achieved column; msgs/s at the handler is messages divided by the handler's own wall (first datagram to books complete). A rate whose run did not match the reference is marked FAILED and is never quoted. Natural drops are an upper bound (see the per-run notes).
+
+Data provided for free by IEX. By accessing or using IEX Historical Data, you agree to the IEX Historical Data Terms of Use (`docs/iex-hist-terms.md`).
+
+
+## 2026-10-26, sweep-0: 20241223_IEXTP1_DPLS1.0.pcap.gz (PASS)
+
+- Hardware: Apple M1 Pro, 7-vCPU OrbStack Ubuntu 24.04 arm64 VM, loopback multicast
+- Host: `ubuntu Linux 7.2.12-orbstack-00394-gbecdd6130068 aarch64`
+- git: `b991610242e4-dirty`, working-tree hash `f8cdedd2579c88ef8ecbe535399d31faedb03a6f8a7362c7a5547aee0ae17c85`; dirty paths: `M scripts/bench_feed.sh`
+- Compiler: `c++ (Ubuntu 13.3.0-6ubuntu2~24.04) 13.3.0`
+- Flags: `CMAKE_BUILD_TYPE=Release: -O3 -DNDEBUG -ffp-contract=off`
+- Scenario: `sweep-0` = `--drop none --seed 1`, ram mode (payloads preloaded), `--rate 0` (0 = unthrottled); ring 268,435,456 bytes; handler SO_RCVBUF requested 7,500,000, got 15,000,000
+- Reference: `data/feed/reference-20241223-ckpt100000.digests` (iex_digest direct file replay), sha256 `d9904b639023c929...`, 2 epoch(s)
+- Exit codes: handler 0 (status `done`), publisher 0
+- Checks: handler_exit_0 yes, publisher_exit_0 yes, no_tool_killed yes, unrecoverable_0 yes, gaps_positive yes, epochs_match yes, handler_digest_match yes, interval_agrees yes, checkpoints_match yes, handler_checkpoint_match yes, handler_counts_agree yes
+
+| segments sent | messages | injected drops | gaps detected | messages requested | retransmitted packets | natural drops | duplicates discarded | epochs | unrecoverable | held max | digest match per epoch | checkpoints matched | handler wall | msgs/s |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---:|---:|---:|
+| 42,492,551 | 50,959,176 | 0 | 0 | 0 | 0 | 0 (a) | 0 | 2 | 0 | 0 | 0: yes, 1: yes | 508 / 508 | 66.340 s | 768,150 |
+
+- Segments sent: datagrams the publisher put on the wire (accepted IEX-TP segments minus injected drops). Accepted segments 42,492,551 of 42,492,551 packets read (0 skipped by SegmentFilter); 50,959,176 messages went out by UDP.
+- Messages: messages the handler applied to its books, in sequence order (`messages_applied`).
+- Gaps detected: holes the handler found and requested (`gaps`, always equal to `requests`, here 0). The publisher answered 0 requests, 0 unserved, ring evicted 39,281,642 packets.
+- Messages requested = messages in injected-drop packets + messages in naturally dropped packets + any benign tail re-request (near End or the restart, a datagram still queued in the kernel can be requested as a missing tail and then arrive twice; the second copy is a counted duplicate, as are the file's own merge-seam duplicates). Here duplicates discarded = 0, so no tail re-request happened and every requested message was in a dropped packet.
+- (a) Natural drops = segments sent - datagrams the handler read (42,492,551 - 42,492,551). It is an upper bound on loss in the kernel: the handler stops once its books are complete, so a datagram still queued in its socket then (already recovered by retransmit) counts too. Cross-checks: the kernel's Udp RcvbufErrors delta over the run 0 (VM-wide counter, receive-buffer overflow); messages requested beyond the 0 messages in injected-drop packets 0 (the messages of the naturally dropped packets, nothing else, since duplicates are 0); retransmitted packets - injected drops - natural drops = 0 (a positive value counts packets re-requested as a tail; a negative one counts dropped zero-message packets, since a heartbeat opens no gap and is never retransmitted). Kernel Udp deltas: InDatagrams 42,492,551, InErrors 0, OutDatagrams 42,492,551. Publisher sendto retries (ENOBUFS/EAGAIN) 0.
+- Held max: the most packets the handler held behind a gap at one time. Parked: 0. Rejected datagrams: 0 (truncated 0).
+- Handler wall: first datagram received to books complete. msgs/s = messages / handler wall. Publisher send wall 66,339,859,049 ns.
+- Digest match per epoch: the handler's final book digest, order count and message count for each epoch, compared by this script with the reference file line by line (and by the handler's own `--expect`, which reported `digest_match: true`).
+- Checkpoints matched: book digest and order count after every message whose sequence number is a multiple of 100,000, compared index by index with the reference (a missing or extra checkpoint fails). Per epoch in the reference: 0: 508, 1: 0; 508 of 508 have resting orders (1,159 to 43,927).
+- **Empty final books (generated):** the reference has 0 resting orders at the end of epoch(s) 0, 1, so their digest is the FNV-1a offset basis of an empty book. The end-of-epoch comparison there shows only that both sides end empty after applying the same number of messages; the populated checkpoints are what compare mid-epoch books.
+- **Epoch(s) with no populated checkpoint (generated):** 1. Their books are compared only at the epoch end.
+
+Raw JSON: `docs/benchmarks/feed-handler-raw/2026-10-26-sweep-0-b991610242e4-dirty.json`
+
+<details><summary>Per-epoch digests</summary>
+
+| epoch | handler digest | reference digest | orders (handler / reference) | messages (handler / reference) |
+|---:|---|---|---:|---:|
+| 0 | `cbf29ce484222325` | `cbf29ce484222325` | 0 / 0 | 50,878,184 / 50,878,184 |
+| 1 | `cbf29ce484222325` | `cbf29ce484222325` | 0 / 0 | 80,992 / 80,992 |
+
+</details>
+
+
+## 2026-10-26, sweep-8000000: 20241223_IEXTP1_DPLS1.0.pcap.gz (PASS)
+
+- Hardware: Apple M1 Pro, 7-vCPU OrbStack Ubuntu 24.04 arm64 VM, loopback multicast
+- Host: `ubuntu Linux 7.2.12-orbstack-00394-gbecdd6130068 aarch64`
+- git: `b991610242e4-dirty`, working-tree hash `f8cdedd2579c88ef8ecbe535399d31faedb03a6f8a7362c7a5547aee0ae17c85`; dirty paths: `M scripts/bench_feed.sh`
+- Compiler: `c++ (Ubuntu 13.3.0-6ubuntu2~24.04) 13.3.0`
+- Flags: `CMAKE_BUILD_TYPE=Release: -O3 -DNDEBUG -ffp-contract=off`
+- Scenario: `sweep-8000000` = `--drop none --seed 1`, ram mode (payloads preloaded), `--rate 8000000` (0 = unthrottled); ring 268,435,456 bytes; handler SO_RCVBUF requested 7,500,000, got 15,000,000
+- Reference: `data/feed/reference-20241223-ckpt100000.digests` (iex_digest direct file replay), sha256 `d9904b639023c929...`, 2 epoch(s)
+- Exit codes: handler 0 (status `done`), publisher 0
+- Checks: handler_exit_0 yes, publisher_exit_0 yes, no_tool_killed yes, unrecoverable_0 yes, gaps_positive yes, epochs_match yes, handler_digest_match yes, interval_agrees yes, checkpoints_match yes, handler_checkpoint_match yes, handler_counts_agree yes
+
+| segments sent | messages | injected drops | gaps detected | messages requested | retransmitted packets | natural drops | duplicates discarded | epochs | unrecoverable | held max | digest match per epoch | checkpoints matched | handler wall | msgs/s |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---:|---:|---:|
+| 42,492,551 | 50,959,176 | 0 | 1 | 4,470 | 3,399 | 3,399 (a) | 0 | 2 | 0 | 4,879 | 0: yes, 1: yes | 508 / 508 | 69.003 s | 738,510 |
+
+- Segments sent: datagrams the publisher put on the wire (accepted IEX-TP segments minus injected drops). Accepted segments 42,492,551 of 42,492,551 packets read (0 skipped by SegmentFilter); 50,959,176 messages went out by UDP.
+- Messages: messages the handler applied to its books, in sequence order (`messages_applied`).
+- Gaps detected: holes the handler found and requested (`gaps`, always equal to `requests`, here 1). The publisher answered 1 requests, 0 unserved, ring evicted 39,281,642 packets.
+- Messages requested = messages in injected-drop packets + messages in naturally dropped packets + any benign tail re-request (near End or the restart, a datagram still queued in the kernel can be requested as a missing tail and then arrive twice; the second copy is a counted duplicate, as are the file's own merge-seam duplicates). Here duplicates discarded = 0, so no tail re-request happened and every requested message was in a dropped packet.
+- (a) Natural drops = segments sent - datagrams the handler read (42,492,551 - 42,489,152). It is an upper bound on loss in the kernel: the handler stops once its books are complete, so a datagram still queued in its socket then (already recovered by retransmit) counts too. Cross-checks: the kernel's Udp RcvbufErrors delta over the run 3,399 (VM-wide counter, receive-buffer overflow); messages requested beyond the 0 messages in injected-drop packets 4,470 (the messages of the naturally dropped packets, nothing else, since duplicates are 0); retransmitted packets - injected drops - natural drops = 0 (a positive value counts packets re-requested as a tail; a negative one counts dropped zero-message packets, since a heartbeat opens no gap and is never retransmitted). Kernel Udp deltas: InDatagrams 42,489,152, InErrors 3,399, OutDatagrams 42,492,551. Publisher sendto retries (ENOBUFS/EAGAIN) 0.
+- Held max: the most packets the handler held behind a gap at one time. Parked: 0. Rejected datagrams: 0 (truncated 0).
+- Handler wall: first datagram received to books complete. msgs/s = messages / handler wall. Publisher send wall 69,001,997,224 ns.
+- Digest match per epoch: the handler's final book digest, order count and message count for each epoch, compared by this script with the reference file line by line (and by the handler's own `--expect`, which reported `digest_match: true`).
+- Checkpoints matched: book digest and order count after every message whose sequence number is a multiple of 100,000, compared index by index with the reference (a missing or extra checkpoint fails). Per epoch in the reference: 0: 508, 1: 0; 508 of 508 have resting orders (1,159 to 43,927).
+- **Empty final books (generated):** the reference has 0 resting orders at the end of epoch(s) 0, 1, so their digest is the FNV-1a offset basis of an empty book. The end-of-epoch comparison there shows only that both sides end empty after applying the same number of messages; the populated checkpoints are what compare mid-epoch books.
+- **Epoch(s) with no populated checkpoint (generated):** 1. Their books are compared only at the epoch end.
+
+Raw JSON: `docs/benchmarks/feed-handler-raw/2026-10-26-sweep-8000000-b991610242e4-dirty.json`
+
+<details><summary>Per-epoch digests</summary>
+
+| epoch | handler digest | reference digest | orders (handler / reference) | messages (handler / reference) |
+|---:|---|---|---:|---:|
+| 0 | `cbf29ce484222325` | `cbf29ce484222325` | 0 / 0 | 50,878,184 / 50,878,184 |
+| 1 | `cbf29ce484222325` | `cbf29ce484222325` | 0 / 0 | 80,992 / 80,992 |
+
+</details>
+
+
+## 2026-10-26, sweep-4000000: 20241223_IEXTP1_DPLS1.0.pcap.gz (PASS)
+
+- Hardware: Apple M1 Pro, 7-vCPU OrbStack Ubuntu 24.04 arm64 VM, loopback multicast
+- Host: `ubuntu Linux 7.2.12-orbstack-00394-gbecdd6130068 aarch64`
+- git: `b991610242e4-dirty`, working-tree hash `f8cdedd2579c88ef8ecbe535399d31faedb03a6f8a7362c7a5547aee0ae17c85`; dirty paths: `M scripts/bench_feed.sh`
+- Compiler: `c++ (Ubuntu 13.3.0-6ubuntu2~24.04) 13.3.0`
+- Flags: `CMAKE_BUILD_TYPE=Release: -O3 -DNDEBUG -ffp-contract=off`
+- Scenario: `sweep-4000000` = `--drop none --seed 1`, ram mode (payloads preloaded), `--rate 4000000` (0 = unthrottled); ring 268,435,456 bytes; handler SO_RCVBUF requested 7,500,000, got 15,000,000
+- Reference: `data/feed/reference-20241223-ckpt100000.digests` (iex_digest direct file replay), sha256 `d9904b639023c929...`, 2 epoch(s)
+- Exit codes: handler 0 (status `done`), publisher 0
+- Checks: handler_exit_0 yes, publisher_exit_0 yes, no_tool_killed yes, unrecoverable_0 yes, gaps_positive yes, epochs_match yes, handler_digest_match yes, interval_agrees yes, checkpoints_match yes, handler_checkpoint_match yes, handler_counts_agree yes
+
+| segments sent | messages | injected drops | gaps detected | messages requested | retransmitted packets | natural drops | duplicates discarded | epochs | unrecoverable | held max | digest match per epoch | checkpoints matched | handler wall | msgs/s |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---:|---:|---:|
+| 42,492,551 | 50,959,176 | 0 | 0 | 0 | 0 | 0 (a) | 0 | 2 | 0 | 0 | 0: yes, 1: yes | 508 / 508 | 67.733 s | 752,354 |
+
+- Segments sent: datagrams the publisher put on the wire (accepted IEX-TP segments minus injected drops). Accepted segments 42,492,551 of 42,492,551 packets read (0 skipped by SegmentFilter); 50,959,176 messages went out by UDP.
+- Messages: messages the handler applied to its books, in sequence order (`messages_applied`).
+- Gaps detected: holes the handler found and requested (`gaps`, always equal to `requests`, here 0). The publisher answered 0 requests, 0 unserved, ring evicted 39,281,642 packets.
+- Messages requested = messages in injected-drop packets + messages in naturally dropped packets + any benign tail re-request (near End or the restart, a datagram still queued in the kernel can be requested as a missing tail and then arrive twice; the second copy is a counted duplicate, as are the file's own merge-seam duplicates). Here duplicates discarded = 0, so no tail re-request happened and every requested message was in a dropped packet.
+- (a) Natural drops = segments sent - datagrams the handler read (42,492,551 - 42,492,551). It is an upper bound on loss in the kernel: the handler stops once its books are complete, so a datagram still queued in its socket then (already recovered by retransmit) counts too. Cross-checks: the kernel's Udp RcvbufErrors delta over the run 0 (VM-wide counter, receive-buffer overflow); messages requested beyond the 0 messages in injected-drop packets 0 (the messages of the naturally dropped packets, nothing else, since duplicates are 0); retransmitted packets - injected drops - natural drops = 0 (a positive value counts packets re-requested as a tail; a negative one counts dropped zero-message packets, since a heartbeat opens no gap and is never retransmitted). Kernel Udp deltas: InDatagrams 42,492,551, InErrors 0, OutDatagrams 42,492,551. Publisher sendto retries (ENOBUFS/EAGAIN) 0.
+- Held max: the most packets the handler held behind a gap at one time. Parked: 0. Rejected datagrams: 0 (truncated 0).
+- Handler wall: first datagram received to books complete. msgs/s = messages / handler wall. Publisher send wall 67,733,267,425 ns.
+- Digest match per epoch: the handler's final book digest, order count and message count for each epoch, compared by this script with the reference file line by line (and by the handler's own `--expect`, which reported `digest_match: true`).
+- Checkpoints matched: book digest and order count after every message whose sequence number is a multiple of 100,000, compared index by index with the reference (a missing or extra checkpoint fails). Per epoch in the reference: 0: 508, 1: 0; 508 of 508 have resting orders (1,159 to 43,927).
+- **Empty final books (generated):** the reference has 0 resting orders at the end of epoch(s) 0, 1, so their digest is the FNV-1a offset basis of an empty book. The end-of-epoch comparison there shows only that both sides end empty after applying the same number of messages; the populated checkpoints are what compare mid-epoch books.
+- **Epoch(s) with no populated checkpoint (generated):** 1. Their books are compared only at the epoch end.
+
+Raw JSON: `docs/benchmarks/feed-handler-raw/2026-10-26-sweep-4000000-b991610242e4-dirty.json`
+
+<details><summary>Per-epoch digests</summary>
+
+| epoch | handler digest | reference digest | orders (handler / reference) | messages (handler / reference) |
+|---:|---|---|---:|---:|
+| 0 | `cbf29ce484222325` | `cbf29ce484222325` | 0 / 0 | 50,878,184 / 50,878,184 |
+| 1 | `cbf29ce484222325` | `cbf29ce484222325` | 0 / 0 | 80,992 / 80,992 |
+
+</details>
+
+
+## 2026-10-26, sweep-2000000: 20241223_IEXTP1_DPLS1.0.pcap.gz (PASS)
+
+- Hardware: Apple M1 Pro, 7-vCPU OrbStack Ubuntu 24.04 arm64 VM, loopback multicast
+- Host: `ubuntu Linux 7.2.12-orbstack-00394-gbecdd6130068 aarch64`
+- git: `b991610242e4-dirty`, working-tree hash `f8cdedd2579c88ef8ecbe535399d31faedb03a6f8a7362c7a5547aee0ae17c85`; dirty paths: `M scripts/bench_feed.sh`
+- Compiler: `c++ (Ubuntu 13.3.0-6ubuntu2~24.04) 13.3.0`
+- Flags: `CMAKE_BUILD_TYPE=Release: -O3 -DNDEBUG -ffp-contract=off`
+- Scenario: `sweep-2000000` = `--drop none --seed 1`, ram mode (payloads preloaded), `--rate 2000000` (0 = unthrottled); ring 268,435,456 bytes; handler SO_RCVBUF requested 7,500,000, got 15,000,000
+- Reference: `data/feed/reference-20241223-ckpt100000.digests` (iex_digest direct file replay), sha256 `d9904b639023c929...`, 2 epoch(s)
+- Exit codes: handler 0 (status `done`), publisher 0
+- Checks: handler_exit_0 yes, publisher_exit_0 yes, no_tool_killed yes, unrecoverable_0 yes, gaps_positive yes, epochs_match yes, handler_digest_match yes, interval_agrees yes, checkpoints_match yes, handler_checkpoint_match yes, handler_counts_agree yes
+
+| segments sent | messages | injected drops | gaps detected | messages requested | retransmitted packets | natural drops | duplicates discarded | epochs | unrecoverable | held max | digest match per epoch | checkpoints matched | handler wall | msgs/s |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---:|---:|---:|
+| 42,492,551 | 50,959,176 | 0 | 0 | 0 | 0 | 0 (a) | 0 | 2 | 0 | 0 | 0: yes, 1: yes | 508 / 508 | 79.063 s | 644,540 |
+
+- Segments sent: datagrams the publisher put on the wire (accepted IEX-TP segments minus injected drops). Accepted segments 42,492,551 of 42,492,551 packets read (0 skipped by SegmentFilter); 50,959,176 messages went out by UDP.
+- Messages: messages the handler applied to its books, in sequence order (`messages_applied`).
+- Gaps detected: holes the handler found and requested (`gaps`, always equal to `requests`, here 0). The publisher answered 0 requests, 0 unserved, ring evicted 39,281,642 packets.
+- Messages requested = messages in injected-drop packets + messages in naturally dropped packets + any benign tail re-request (near End or the restart, a datagram still queued in the kernel can be requested as a missing tail and then arrive twice; the second copy is a counted duplicate, as are the file's own merge-seam duplicates). Here duplicates discarded = 0, so no tail re-request happened and every requested message was in a dropped packet.
+- (a) Natural drops = segments sent - datagrams the handler read (42,492,551 - 42,492,551). It is an upper bound on loss in the kernel: the handler stops once its books are complete, so a datagram still queued in its socket then (already recovered by retransmit) counts too. Cross-checks: the kernel's Udp RcvbufErrors delta over the run 0 (VM-wide counter, receive-buffer overflow); messages requested beyond the 0 messages in injected-drop packets 0 (the messages of the naturally dropped packets, nothing else, since duplicates are 0); retransmitted packets - injected drops - natural drops = 0 (a positive value counts packets re-requested as a tail; a negative one counts dropped zero-message packets, since a heartbeat opens no gap and is never retransmitted). Kernel Udp deltas: InDatagrams 42,492,551, InErrors 0, OutDatagrams 42,492,551. Publisher sendto retries (ENOBUFS/EAGAIN) 0.
+- Held max: the most packets the handler held behind a gap at one time. Parked: 0. Rejected datagrams: 0 (truncated 0).
+- Handler wall: first datagram received to books complete. msgs/s = messages / handler wall. Publisher send wall 79,062,932,130 ns.
+- Digest match per epoch: the handler's final book digest, order count and message count for each epoch, compared by this script with the reference file line by line (and by the handler's own `--expect`, which reported `digest_match: true`).
+- Checkpoints matched: book digest and order count after every message whose sequence number is a multiple of 100,000, compared index by index with the reference (a missing or extra checkpoint fails). Per epoch in the reference: 0: 508, 1: 0; 508 of 508 have resting orders (1,159 to 43,927).
+- **Empty final books (generated):** the reference has 0 resting orders at the end of epoch(s) 0, 1, so their digest is the FNV-1a offset basis of an empty book. The end-of-epoch comparison there shows only that both sides end empty after applying the same number of messages; the populated checkpoints are what compare mid-epoch books.
+- **Epoch(s) with no populated checkpoint (generated):** 1. Their books are compared only at the epoch end.
+
+Raw JSON: `docs/benchmarks/feed-handler-raw/2026-10-26-sweep-2000000-b991610242e4-dirty.json`
+
+<details><summary>Per-epoch digests</summary>
+
+| epoch | handler digest | reference digest | orders (handler / reference) | messages (handler / reference) |
+|---:|---|---|---:|---:|
+| 0 | `cbf29ce484222325` | `cbf29ce484222325` | 0 / 0 | 50,878,184 / 50,878,184 |
+| 1 | `cbf29ce484222325` | `cbf29ce484222325` | 0 / 0 | 80,992 / 80,992 |
+
+</details>
+
+
+## 2026-10-26, sweep-1000000: 20241223_IEXTP1_DPLS1.0.pcap.gz (PASS)
+
+- Hardware: Apple M1 Pro, 7-vCPU OrbStack Ubuntu 24.04 arm64 VM, loopback multicast
+- Host: `ubuntu Linux 7.2.12-orbstack-00394-gbecdd6130068 aarch64`
+- git: `b991610242e4-dirty`, working-tree hash `f8cdedd2579c88ef8ecbe535399d31faedb03a6f8a7362c7a5547aee0ae17c85`; dirty paths: `M scripts/bench_feed.sh`
+- Compiler: `c++ (Ubuntu 13.3.0-6ubuntu2~24.04) 13.3.0`
+- Flags: `CMAKE_BUILD_TYPE=Release: -O3 -DNDEBUG -ffp-contract=off`
+- Scenario: `sweep-1000000` = `--drop none --seed 1`, ram mode (payloads preloaded), `--rate 1000000` (0 = unthrottled); ring 268,435,456 bytes; handler SO_RCVBUF requested 7,500,000, got 15,000,000
+- Reference: `data/feed/reference-20241223-ckpt100000.digests` (iex_digest direct file replay), sha256 `d9904b639023c929...`, 2 epoch(s)
+- Exit codes: handler 0 (status `done`), publisher 0
+- Checks: handler_exit_0 yes, publisher_exit_0 yes, no_tool_killed yes, unrecoverable_0 yes, gaps_positive yes, epochs_match yes, handler_digest_match yes, interval_agrees yes, checkpoints_match yes, handler_checkpoint_match yes, handler_counts_agree yes
+
+| segments sent | messages | injected drops | gaps detected | messages requested | retransmitted packets | natural drops | duplicates discarded | epochs | unrecoverable | held max | digest match per epoch | checkpoints matched | handler wall | msgs/s |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---:|---:|---:|
+| 42,492,551 | 50,959,176 | 0 | 0 | 0 | 0 | 0 (a) | 0 | 2 | 0 | 0 | 0: yes, 1: yes | 508 / 508 | 78.397 s | 650,015 |
+
+- Segments sent: datagrams the publisher put on the wire (accepted IEX-TP segments minus injected drops). Accepted segments 42,492,551 of 42,492,551 packets read (0 skipped by SegmentFilter); 50,959,176 messages went out by UDP.
+- Messages: messages the handler applied to its books, in sequence order (`messages_applied`).
+- Gaps detected: holes the handler found and requested (`gaps`, always equal to `requests`, here 0). The publisher answered 0 requests, 0 unserved, ring evicted 39,281,642 packets.
+- Messages requested = messages in injected-drop packets + messages in naturally dropped packets + any benign tail re-request (near End or the restart, a datagram still queued in the kernel can be requested as a missing tail and then arrive twice; the second copy is a counted duplicate, as are the file's own merge-seam duplicates). Here duplicates discarded = 0, so no tail re-request happened and every requested message was in a dropped packet.
+- (a) Natural drops = segments sent - datagrams the handler read (42,492,551 - 42,492,551). It is an upper bound on loss in the kernel: the handler stops once its books are complete, so a datagram still queued in its socket then (already recovered by retransmit) counts too. Cross-checks: the kernel's Udp RcvbufErrors delta over the run 0 (VM-wide counter, receive-buffer overflow); messages requested beyond the 0 messages in injected-drop packets 0 (the messages of the naturally dropped packets, nothing else, since duplicates are 0); retransmitted packets - injected drops - natural drops = 0 (a positive value counts packets re-requested as a tail; a negative one counts dropped zero-message packets, since a heartbeat opens no gap and is never retransmitted). Kernel Udp deltas: InDatagrams 42,492,551, InErrors 0, OutDatagrams 42,492,551. Publisher sendto retries (ENOBUFS/EAGAIN) 0.
+- Held max: the most packets the handler held behind a gap at one time. Parked: 0. Rejected datagrams: 0 (truncated 0).
+- Handler wall: first datagram received to books complete. msgs/s = messages / handler wall. Publisher send wall 78,396,200,812 ns.
+- Digest match per epoch: the handler's final book digest, order count and message count for each epoch, compared by this script with the reference file line by line (and by the handler's own `--expect`, which reported `digest_match: true`).
+- Checkpoints matched: book digest and order count after every message whose sequence number is a multiple of 100,000, compared index by index with the reference (a missing or extra checkpoint fails). Per epoch in the reference: 0: 508, 1: 0; 508 of 508 have resting orders (1,159 to 43,927).
+- **Empty final books (generated):** the reference has 0 resting orders at the end of epoch(s) 0, 1, so their digest is the FNV-1a offset basis of an empty book. The end-of-epoch comparison there shows only that both sides end empty after applying the same number of messages; the populated checkpoints are what compare mid-epoch books.
+- **Epoch(s) with no populated checkpoint (generated):** 1. Their books are compared only at the epoch end.
+
+Raw JSON: `docs/benchmarks/feed-handler-raw/2026-10-26-sweep-1000000-b991610242e4-dirty.json`
+
+<details><summary>Per-epoch digests</summary>
+
+| epoch | handler digest | reference digest | orders (handler / reference) | messages (handler / reference) |
+|---:|---|---|---:|---:|
+| 0 | `cbf29ce484222325` | `cbf29ce484222325` | 0 / 0 | 50,878,184 / 50,878,184 |
+| 1 | `cbf29ce484222325` | `cbf29ce484222325` | 0 / 0 | 80,992 / 80,992 |
+
+</details>
+
+
 ## 2026-10-26, burst: 20241223_IEXTP1_DPLS1.0.pcap.gz (PASS)
 
 - Hardware: Apple M1 Pro, 7-vCPU OrbStack Ubuntu 24.04 arm64 VM, loopback multicast
@@ -306,6 +530,11 @@ Numbers are from run 4's table (2026-10-26, commit `2c5ef85`, Apple M1 Pro, 7-vC
   20,175 gaps, 2,389,439 messages re-requested) with 0 unrecoverable requests, 508 of 508
   checkpoints matching and both epoch digests equal to the direct replay, at 677,599 messages/s
   (the 2026-10-26 burst run, commit `4c5a815`).
+- Ran the same full day with the payloads preloaded in RAM and no packet loss injected, at five
+  target rates; the handler matched the reference at all 508 checkpoints and both epoch digests in
+  every run. The fastest, with the publisher unthrottled, read 768,150 messages/s at the handler
+  with 0 gaps; at an 8M-target run it recovered 1 natural gap (738,510 messages/s). n=1 per rate
+  (the 2026-10-26 sweep). The publisher, not the handler, was the limit, so this is a floor.
 
 Caveats to keep with these bullets: the reference shares the DEEP+ decoder and order book code with
 the handler, so "verified" means the transport and recovery reproduce the direct replay, not that
@@ -314,3 +543,8 @@ short post-restart epoch has none; 657,789 msgs/s is the whole pipeline's rate u
 (publisher inflating gzip, kernel, handler), not the handler's limit; "a full captured day" is the whole 2024-12-23 file, an incident day
 with a halt and a mid-session restart, not a normal session; and this is loopback in one VM, not a
 network.
+
+Sweep bullet caveat: the publisher never reached any target above 770k msgs/s, so no paced "sustained
+at N msgs/s" claim exists, only "at least 768,150 msgs/s with a matching digest, publisher-limited";
+n=1 per rate and the VM's run-to-run noise is 10% or more, so 645k to 768k across the five runs is
+one rate with noise, not five rates.

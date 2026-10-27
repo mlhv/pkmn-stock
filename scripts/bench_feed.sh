@@ -8,7 +8,12 @@
 #
 #   random  --drop random:0.01 --seed 1, stream mode, --rate 0
 #   burst   --drop burst:0.0005:100 --seed 2, stream mode, --rate 0
-#   sweep   not implemented here (Plan C Task 7)
+#   sweep   --ram --drop none, one run per target rate in SWEEP_RATES (default
+#           1000000 2000000 4000000 8000000 0 msgs/s; 0 = unthrottled), each
+#           checked against the reference; every run is recorded as its own
+#           section/raw JSON (scenario sweep-<rate>), then a summary section
+#           with the table and the two defined figures is prepended last.
+#           A failed rate is recorded as failed and never quoted.
 #
 # Runs inside the Linux VM. Started on macOS, it re-executes itself in the
 # OrbStack `ubuntu` VM (the Mac filesystem is mounted at the same path there).
@@ -53,6 +58,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 if [[ "$(uname -s)" != "Linux" ]]; then
     command -v orb >/dev/null || { echo "not Linux and no orb on PATH" >&2; exit 1; }
     exec orb -m ubuntu env \
+        SWEEP_RATES="${SWEEP_RATES:-}" SWEEP_RATE="${SWEEP_RATE:-}" SWEEP_LIST="${SWEEP_LIST:-}" \
         IEX_FILE="${IEX_FILE:-}" REF_FILE="${REF_FILE:-}" HARDWARE="${HARDWARE:-}" \
         RING_BYTES="${RING_BYTES:-}" RCVBUF="${RCVBUF:-}" TIMEOUT_S="${TIMEOUT_S:-}" \
         CHECKPOINT_EVERY="${CHECKPOINT_EVERY:-}" \
@@ -72,9 +78,110 @@ done
 case "$SCENARIO" in
     random) DROP="random:0.01"; SEED=1 ;;
     burst) DROP="burst:0.0005:100"; SEED=2 ;;
-    sweep) echo "sweep is not implemented yet (Plan C Task 7)" >&2; exit 2 ;;
+    sweep) DROP="none"; SEED=1 ;;
     *) usage ;;
 esac
+
+RAM=0
+RATE=0
+if [[ "$SCENARIO" == sweep ]]; then
+    if [[ -z "${SWEEP_RATE:-}" ]]; then
+        # Driver: one child run per rate (each builds, runs, records), then the summary.
+        SWEEP_RATES="${SWEEP_RATES:-1000000 2000000 4000000 8000000 0}"
+        SWEEP_LIST="$(mktemp)"
+        export SWEEP_LIST
+        EXTRA=()
+        [[ "$RECORD" == 1 ]] || EXTRA+=(--no-record)
+        for r in $SWEEP_RATES; do
+            [[ "$r" =~ ^[0-9]+$ ]] || { echo "bad rate $r" >&2; exit 2; }
+            echo "== sweep: target rate $r" >&2
+            SWEEP_RATE="$r" bash "${BASH_SOURCE[0]}" sweep "${EXTRA[@]}" || echo "== rate $r run failed (recorded)" >&2
+        done
+        SUMMARY_RECORD="$RECORD" python3 - "$SWEEP_LIST" "$ROOT/docs/benchmarks/feed-handler.md" <<'PYS'
+import datetime, json, os, pathlib, sys
+
+runs = [json.loads(l) for l in pathlib.Path(sys.argv[1]).read_text().splitlines() if l.strip()]
+md = pathlib.Path(sys.argv[2])
+today = datetime.date.today().isoformat()
+
+
+def n(v):
+    return f"{v:,}" if isinstance(v, int) else "n/a"
+
+
+rows, clean, unthr, best_clean = [], None, None, None
+for r in runs:
+    h, p = r["handler"], r["publisher"]
+    target = r["rate"]
+    ok = r["pass"]
+    nd = r["natural_drops"]["sent_minus_received"]
+    pub = p.get("messages_sent", 0) / (p["send_wall_ns"] / 1e9) if p.get("send_wall_ns") else 0
+    rows.append((target, ok, h, nd, pub, r))
+    reached = target > 0 and pub >= 0.95 * target
+    if ok and h.get("gaps") == 0 and reached and (clean is None or target > clean[0]):
+        clean = (target, h)
+    if ok and h.get("gaps") == 0 and (best_clean is None or h.get("msgs_per_sec", 0) > best_clean.get("msgs_per_sec", 0)):
+        best_clean = h
+    if target == 0:
+        unthr = (ok, h, nd)
+L = [f"## {today}, throughput sweep (n=1 per rate)", ""]
+L.append("`--ram --drop none`, handler checked against the reference at every rate (epoch and checkpoint "
+         "digests). Each row is one run; the per-run sections below carry the full detail.")
+L.append("")
+L.append("| target msgs/s | publisher achieved msgs/s | handler msgs/s | natural drops | gaps recovered "
+         "| unrecoverable | digest match | result |")
+L.append("|---:|---:|---:|---:|---:|---:|---|---|")
+for target, ok, h, nd, pub, r in rows:
+    dm = r["checks"]["epochs_match"] and r["checks"]["checkpoints_match"] and r["checks"]["handler_digest_match"]
+    L.append(f"| {'unthrottled (0)' if target == 0 else n(target)} | {pub:,.0f} | {h.get('msgs_per_sec', 0):,.0f} "
+             f"| {n(nd)} | {n(h.get('gaps'))} | {n(h.get('unrecoverable'))} | {'yes' if dm else 'NO'} "
+             f"| {'pass' if ok else 'FAILED, not quotable'} |")
+L.append("")
+L.append("Two figures, defined before the runs:")
+L.append("")
+if clean:
+    L.append(f"- **Clean sustained:** the highest target rate with 0 gaps and a digest match: "
+             f"**{n(clean[0])} msgs/s target**, handler {clean[1].get('msgs_per_sec', 0):,.0f} msgs/s achieved.")
+elif best_clean:
+    L.append("- **Clean sustained:** no target rate was reached by the publisher (achieved under 95% of target "
+             "in every run), so there is no paced-target figure. The fastest run with 0 gaps and a digest match "
+             f"read {best_clean.get('msgs_per_sec', 0):,.0f} msgs/s at the handler; it was limited by the "
+             "publisher, so it is a lower bound on what the handler can absorb, not a ceiling.")
+else:
+    L.append("- **Clean sustained:** no rate in this sweep had 0 gaps and a digest match, so there is no figure.")
+if unthr and unthr[0]:
+    h = unthr[1]
+    L.append(f"- **Unthrottled with recovery:** {h.get('msgs_per_sec', 0):,.0f} msgs/s at the handler (the "
+             f"rate-0 run), {n(h.get('gaps'))} gaps recovered ({n(h.get('requested_messages'))} messages requested), "
+             f"{n(unthr[2])} natural drops, digest match yes.")
+else:
+    L.append("- **Unthrottled with recovery:** the unthrottled run failed or is missing, so there is no figure.")
+L.append("")
+L.append("Caveats: n=1 per rate, no repeats. VM noise is 10% or more (`iex-book.md`), so differences "
+         "inside that band are not differences. A target rate the publisher cannot reach shows as a lower "
+         "publisher-achieved column; msgs/s at the handler is messages divided by the handler's own wall "
+         "(first datagram to books complete). A rate whose run did not match the reference is marked FAILED "
+         "and is never quoted. Natural drops are an upper bound (see the per-run notes).")
+L.append("")
+L.append("Data provided for free by IEX. By accessing or using IEX Historical Data, you agree to the IEX "
+         "Historical Data Terms of Use (`docs/iex-hist-terms.md`).")
+L.append("")
+sec = "\n".join(L) + "\n"
+if os.environ.get("SUMMARY_RECORD") == "1":
+    marker = "<!-- runs: newest first, inserted by scripts/bench_feed.sh -->"
+    body = md.read_text()
+    i = body.index(marker) + len(marker)
+    rest = body[i:].lstrip("\n")
+    md.write_text(body[:i] + "\n\n" + sec + ("\n" + rest if rest else ""))
+print(sec)
+PYS
+        rm -f "$SWEEP_LIST"
+        exit 0
+    fi
+    RAM=1
+    RATE="$SWEEP_RATE"
+    SCENARIO="sweep-$RATE"
+fi
 
 DEFAULT_FILE="$ROOT/data/iex/20241223_IEXTP1_DPLS1.0.pcap.gz"
 FILE="${IEX_FILE:-$DEFAULT_FILE}"
@@ -143,13 +250,14 @@ CPORT=$((PORT + 1))
 HCMD=("$BUILD/feed_handler" --port "$PORT" --ctrl-port "$CPORT" --timeout-s "$TIMEOUT_S" --expect "$REF"
     --checkpoint-every "$CHECKPOINT_EVERY")
 [[ -n "${RCVBUF:-}" ]] && HCMD+=(--rcvbuf "$RCVBUF")
-PCMD=("$BUILD/feed_publisher" "$FILE" --port "$PORT" --ctrl-port "$CPORT" --rate 0 --drop "$DROP" --seed "$SEED")
+PCMD=("$BUILD/feed_publisher" "$FILE" --port "$PORT" --ctrl-port "$CPORT" --rate "$RATE" --drop "$DROP" --seed "$SEED")
+[[ "$RAM" == 1 ]] && PCMD+=(--ram)
 [[ -n "${RING_BYTES:-}" ]] && PCMD+=(--ring-bytes "$RING_BYTES")
 printf '%s\n' "${HCMD[*]}" >"$OUT/handler.cmd"
 printf '%s\n' "${PCMD[*]}" >"$OUT/publisher.cmd"
 
 grep '^Udp:' /proc/net/snmp >"$OUT/snmp_before.txt"
-echo "== $SCENARIO: handler on $PORT/$CPORT, then publisher ($DROP, seed $SEED, rate 0, stream)" >&2
+echo "== $SCENARIO: handler on $PORT/$CPORT, then publisher ($DROP, seed $SEED, rate $RATE, ram=$RAM)" >&2
 "${HCMD[@]}" >"$OUT/handler.json" 2>"$OUT/handler.err" &
 HPID=$!
 "${PCMD[@]}" >"$OUT/publisher.json" 2>"$OUT/publisher.err" &
@@ -171,7 +279,7 @@ set +e
 wait "$HPID"; HRC=$?
 wait "$PUB_PID"; PRC=$?
 set -e
-export KILLED CHECKPOINT_EVERY
+export KILLED CHECKPOINT_EVERY RATE RAM
 grep '^Udp:' /proc/net/snmp >"$OUT/snmp_after.txt"
 echo "== handler exit $HRC, publisher exit $PRC" >&2
 sed 's/^/   handler: /' "$OUT/handler.err" >&2
@@ -250,7 +358,7 @@ checks = {
     "publisher_exit_0": prc == 0,
     "no_tool_killed": not killed,
     "unrecoverable_0": h.get("unrecoverable") == 0,
-    "gaps_positive": isinstance(h.get("gaps"), int) and h["gaps"] > 0,
+    "gaps_positive": isinstance(h.get("gaps"), int) and (h["gaps"] > 0 or drop == "none"),
     "epochs_match": all_match,
     "handler_digest_match": h.get("digest_match") is True,
     "interval_agrees": ref_every == ckpt_every == h.get("checkpoint_every"),
@@ -295,8 +403,8 @@ record_obj = {
     "file": rel_to_repo(cap),
     "drop": drop,
     "seed": int(seed),
-    "mode": "stream",
-    "rate": 0,
+    "mode": "ram" if os.environ.get("RAM") == "1" else "stream",
+    "rate": int(os.environ["RATE"]),
     "hardware": hardware,
     "host": " ".join([platform.node(), platform.system(), platform.release(), platform.machine()]),
     "git_sha": sha,
@@ -348,8 +456,8 @@ if dirty_paths:
 L.append(f"- git: `{sha}`{dirty_note}")
 L.append(f"- Compiler: `{compiler}`")
 L.append(f"- Flags: `{flags}`")
-L.append(f"- Scenario: `{scenario}` = `--drop {drop} --seed {seed}`, stream mode (zlib while sending), `--rate 0` "
-         f"(unthrottled); ring {n(p.get('ring_bytes'))} bytes; handler SO_RCVBUF requested {n(h.get('rcvbuf_requested'))}, "
+L.append(f"- Scenario: `{scenario}` = `--drop {drop} --seed {seed}`, {'ram mode (payloads preloaded)' if os.environ.get('RAM') == '1' else 'stream mode (zlib while sending)'}, "
+         f"`--rate {os.environ['RATE']}` (0 = unthrottled); ring {n(p.get('ring_bytes'))} bytes; handler SO_RCVBUF requested {n(h.get('rcvbuf_requested'))}, "
          f"got {n(h.get('rcvbuf_actual'))}")
 L.append(f"- Reference: `{record_obj['reference']['path']}` (iex_digest direct file replay), sha256 "
          f"`{record_obj['reference']['sha256'][:16]}...`, {len(expected)} epoch(s)")
@@ -453,6 +561,10 @@ if record == "1":
     rest = body[i:].lstrip("\n")
     path.write_text(body[:i] + "\n\n" + section + ("\n" + rest if rest else ""))
     print(f"recorded in {path}", file=sys.stderr)
+if os.environ.get("SWEEP_LIST"):
+    with open(os.environ["SWEEP_LIST"], "a") as fh:
+        slim = {k: v for k, v in record_obj.items() if k not in ("reference", "per_epoch", "checkpoints")}
+        fh.write(json.dumps(slim) + "\n")
 print(section)
 sys.exit(0 if passed else 1)
 PY
