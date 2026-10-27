@@ -526,10 +526,14 @@ Numbers are from run 4's table (2026-10-26, commit `2c5ef85`, Apple M1 Pro, 7-vC
   checkpoints, every resting order, price, quantity and queue position equal after loss recovery.
 - Sustained 657,789 messages/s end to end over loopback multicast under that loss, with all 508
   checkpoints matching and at most 5,079 packets held behind open gaps.
-- Also recovered a full day under seeded burst loss (100-packet bursts, 2,018,900 dropped packets,
-  20,175 gaps, 2,389,439 messages re-requested) with 0 unrecoverable requests, 508 of 508
-  checkpoints matching and both epoch digests equal to the direct replay, at 677,599 messages/s
-  (the 2026-10-26 burst run, commit `4c5a815`).
+- Also recovered a full day under seeded burst loss over unthrottled loopback multicast (the
+  injector started 20,189 bursts of 100 packets, dropping 2,018,900 packets; the handler
+  detected 20,175 gaps, fewer than the bursts because adjacent bursts merge into one hole and a
+  burst of only zero-message packets opens no gap; 2,389,439 messages re-requested) with 0
+  unrecoverable requests. All 508 mid-session checkpoints matched the direct replay, and the epoch-end
+  digests matched too, though epoch 0 ends with empty books and epoch 1 (80,992 messages) has no
+  checkpoint, so its books are compared only at that empty end. 677,599 messages/s (the 2026-10-26
+  burst run, commit `4c5a815`).
 - Ran the same full day with the payloads preloaded in RAM and no packet loss injected, at four
   paced targets plus unthrottled; the handler matched the reference at all 508 checkpoints and both epoch digests in
   every run. The best of five, the unthrottled run, read 768,150 messages/s at the handler
