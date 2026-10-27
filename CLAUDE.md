@@ -872,8 +872,9 @@ scripts/bench_iex.sh [--profile] [--no-record]            # re-execs in the VM, 
 ```bash
 # Plan C (feed handler); needs the VM (loopback multicast) and the 2024-12-23 DPLS capture in data/iex/
 scripts/bench_feed.sh random|burst|sweep [--no-record]    # full-day publisher + handler run vs the iex_digest reference; prepends a section to docs/benchmarks/feed-handler.md
-cpp/build-linux-release/iex_digest --deep-plus data/iex/20241223_IEXTP1_DPLS1.0.pcap.gz --checkpoint-every 100000   # (in the VM) reference digests by direct file replay
-cpp/build-linux-release/feed_publisher --help            # (in the VM) UDP multicast replay + TCP retransmit server; feed_handler --help for the receiver
+cpp/build-linux-release/iex_digest data/iex/20241223_IEXTP1_DPLS1.0.pcap.gz --checkpoint-every 100000 [--out FILE]   # (in the VM) reference digests by direct file replay
+cpp/build-linux-release/feed_publisher data/iex/20241223_IEXTP1_DPLS1.0.pcap.gz --drop random:0.01 --seed 1 --rate 0   # (in the VM) UDP multicast replay + TCP retransmit server; --drop defaults to none; run a tool with no args for usage
+cpp/build-linux-release/feed_handler --expect <reference.digests> --checkpoint-every 100000 --timeout-s 300 --rcvbuf 7500000   # (in the VM) receiver; start it, then the publisher
 ```
 
 ## Layout

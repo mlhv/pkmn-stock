@@ -531,8 +531,8 @@ Numbers are from run 4's table (2026-10-26, commit `2c5ef85`, Apple M1 Pro, 7-vC
   detected 20,175 gaps, fewer than the bursts because adjacent bursts merge into one hole and a
   burst of only zero-message packets opens no gap; 2,389,439 messages re-requested) with 0
   unrecoverable requests. All 508 mid-session checkpoints matched the direct replay, and the epoch-end
-  digests matched too, though epoch 0 ends with empty books and epoch 1 (80,992 messages) has no
-  checkpoint, so its books are compared only at that empty end. 677,599 messages/s (the 2026-10-26
+  digests matched too, but both are digests of empty books (the stream deletes every order before each
+  epoch ends), so they add little; epoch 1 (80,992 messages) has no checkpoint. 677,599 messages/s (the 2026-10-26
   burst run, commit `4c5a815`).
 - Ran the same full day with the payloads preloaded in RAM and no packet loss injected, at four
   paced targets plus unthrottled; the handler matched the reference at all 508 checkpoints and both epoch digests in

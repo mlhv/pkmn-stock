@@ -4,7 +4,7 @@
 # over the TCP retransmit channel, and its per-epoch book digests are checked
 # against iex_digest's direct file replay.
 #
-#   scripts/bench_feed.sh <random|burst> [--no-record]
+#   scripts/bench_feed.sh <random|burst|sweep> [--no-record]
 #
 #   random  --drop random:0.01 --seed 1, stream mode, --rate 0
 #   burst   --drop burst:0.0005:100 --seed 2, stream mode, --rate 0
