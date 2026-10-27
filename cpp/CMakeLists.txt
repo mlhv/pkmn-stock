@@ -63,6 +63,10 @@ if(NOT SKBUILD)
     src/pkmn_md/deep.cpp
     src/pkmn_md/book_set.cpp
     src/pkmn_md/feed_reader.cpp
+    src/pkmn_md/book_digest.cpp
+    src/pkmn_md/recovery_proto.cpp
+    src/pkmn_md/retransmit_ring.cpp
+    src/pkmn_md/gap_recovery.cpp
   )
   target_include_directories(pkmn_md PUBLIC src)
   target_compile_options(pkmn_md PUBLIC -ffp-contract=off)
@@ -73,8 +77,17 @@ if(NOT SKBUILD)
   target_link_libraries(pcap_count PRIVATE pkmn_md)
   add_executable(iex_decode tools/iex_decode.cpp)
   target_link_libraries(iex_decode PRIVATE pkmn_md)
+  add_executable(iex_digest tools/iex_digest.cpp)
+  target_link_libraries(iex_digest PRIVATE pkmn_md)
   add_executable(iex_oracle tools/iex_oracle.cpp)
   target_link_libraries(iex_oracle PRIVATE pkmn_md)
+  # Plan C socket tools: loopback multicast publisher and gap-recovering
+  # handler, talking over a TCP retransmit channel (tools/net_util.hpp).
+  find_package(Threads REQUIRED)
+  add_executable(feed_publisher tools/feed_publisher.cpp)
+  target_link_libraries(feed_publisher PRIVATE pkmn_md Threads::Threads)
+  add_executable(feed_handler tools/feed_handler.cpp)
+  target_link_libraries(feed_handler PRIVATE pkmn_md Threads::Threads)
   # pkmn_md/timing.hpp is header-only (reached through pkmn_wire's src
   # include dir), so the replay tool needs no zlib or pkmn_md link.
   add_executable(pokemon_replay tools/pokemon_replay.cpp)
@@ -145,11 +158,19 @@ if(PKMN_BUILD_TESTS)
   # global operator new, used to count allocations, stays contained).
   if(NOT SKBUILD)
     add_executable(md_tests tests/test_pcapng.cpp tests/test_iextp.cpp tests/test_deep_plus.cpp
-      tests/test_book_set.cpp tests/test_deep.cpp tests/test_timing.cpp tests/test_iex_oracle.cpp)
+      tests/test_book_set.cpp tests/test_deep.cpp tests/test_timing.cpp tests/test_iex_oracle.cpp
+      tests/test_book_digest.cpp tests/test_recovery_parts.cpp tests/test_gap_recovery.cpp
+      tests/test_feed_tools.cpp)
     target_link_libraries(md_tests PRIVATE pkmn_md ZLIB::ZLIB Catch2::Catch2WithMain)
     # test_iex_oracle.cpp runs the built tool end to end (exit codes, counts).
     add_dependencies(md_tests iex_oracle)
+    # test_feed_tools.cpp runs iex_digest, feed_publisher and feed_handler.
+    add_dependencies(md_tests iex_digest feed_publisher feed_handler)
     target_compile_definitions(md_tests PRIVATE "IEX_ORACLE_BIN=\"$<TARGET_FILE:iex_oracle>\"")
+    target_compile_definitions(md_tests PRIVATE
+      "FEED_PUBLISHER_BIN=\"$<TARGET_FILE:feed_publisher>\""
+      "FEED_HANDLER_BIN=\"$<TARGET_FILE:feed_handler>\""
+      "IEX_DIGEST_BIN=\"$<TARGET_FILE:iex_digest>\"")
     catch_discover_tests(md_tests)
   endif()
 endif()

@@ -746,6 +746,70 @@ tcgcsv.com). Design spec: `docs/superpowers/specs/2026-06-09-pkmn-quant-design.m
   checkout when this branch merged into `feat/instrument-repair-horizon` on
   2026-10-26.
 
+- **Plan C (feed handler) complete on feat/feed-handler (753 passed pytest
+  via `uv sync --group api --group dashboard && uv run pytest`; 205 Catch2
+  tests via ctest in the OrbStack VM, all passing, and 205 on macOS with 5
+  skipped because the loopback-multicast tool tests need the VM; ruff,
+  format and mypy clean over 62 source files).** Plan C of 4 in the market-
+  data / CLOB track (spec: `docs/superpowers/specs/2026-10-26-feed-handler-
+  design.md`). **Cut from `main` (3ce6d42), unlike Plans A and B**; Plan D is
+  NOT STARTED. No Python files changed. Shipped, all C++20 under `cpp/`
+  outside the Python wheel: a canonical FNV-1a book digest
+  (`pkmn_md/book_digest.*`, `OrderBook::for_each_order`, `BookSet::
+  for_each_book`) and the reference tool `iex_digest`; a 12-byte LE framed
+  TCP retransmit protocol (`recovery_proto.*`), an epoch-keyed retransmit
+  ring (`retransmit_ring.*`) and a seeded random/burst drop injector
+  (`drop_injector.hpp`); `RecoveringHandler` (`gap_recovery.*`, socket-free:
+  epoch classification and parking, hold-and-request, tail requests, loud
+  failure on an unserved or rejected retransmit or an end overshoot); the
+  tools `feed_publisher` (replays the capture as UDP multicast, each IEX-TP
+  payload byte for byte unchanged) and `feed_handler`, with `net_util.hpp`;
+  mid-epoch checkpoint digests every 100,000 sequence numbers on both
+  sides; `scripts/bench_feed.sh`; `docs/benchmarks/feed-handler.md` (raw JSON
+  in `feed-handler-raw/`). Tasks 6 (burst run) and 7 (throughput sweep) both
+  shipped; nothing was cut. **Real-day results, 2024-12-23 DEEP+ (42,492,551
+  packets, 50,959,176 messages; an incident day, two sequence epochs), Apple
+  M1 Pro, 7-vCPU OrbStack Ubuntu 24.04 arm64 VM, loopback multicast, one
+  host:** 1% seeded random loss (commit 2c5ef85): 425,623 packets dropped,
+  421,146 gaps recovered, 0 unrecoverable, 657,789 msgs/s end to end, held
+  max 5,079 packets, all 508 checkpoints through the morning and both epoch digests
+  equal to the direct-replay reference. Burst loss (100-packet bursts;
+  commit 4c5a815): 20,189 bursts started, 2,018,900 packets dropped, 20,175
+  gaps detected (adjacent bursts merge, zero-message packets open no gap),
+  2,389,439 messages re-requested, 0 unrecoverable, 677,599 msgs/s, 508 of
+  508 checkpoints match. Throughput sweep (payloads preloaded in RAM, no
+  injected loss, n=1 per rate, five targets incl. unthrottled): digest match
+  in all five; best 768,150 msgs/s unthrottled; the 8M-target run lost 3,399
+  datagrams to receive-buffer overflow and recovered them with 1 gap. **The
+  publisher, not the handler, was the limit** (it never reached 95% of any
+  paced target), so 768,150 is a floor and the handler's ceiling was not
+  found; VM noise is 10% or more. **Known limitations, stated plainly:**
+  (1) tiny-epoch misclassification: rule 2 needs a new epoch's first seen seq
+  to sit below the old epoch's highest seq, and a backed-up publisher TCP
+  send buffer can delay EpochStart into that window; it fails loudly, never
+  silently. (2) Retransmit only, no snapshot recovery. (3) Loopback in one
+  VM, not a network: no NIC, no wire latency, loss injected by the
+  publisher. (4) Checkpoints are samples every 100,000 messages; the
+  80,992-message post-restart epoch has none and its books are compared only
+  at its empty end (both epochs end with empty books on this day). (5) The
+  reference shares the DEEP+ decoder and `OrderBook` with the handler, so a
+  pass shows independence from transport and recovery, not from the book,
+  and says nothing about matching IEX (the oracle question in
+  `docs/iex-oracle.md` is still open). (6) Throughput is publisher-limited.
+  (7) A digest mismatch reports the first differing epoch or checkpoint
+  index, not the first differing symbol the spec asked for (the reference
+  stores one digest over all symbols per entry). (8) The handler's hold
+  queue has no limit (peaks 5,079 random, 6,048 burst, 4,879 at the 8M
+  sweep target); the ring is 268,435,456 payload bytes (container overhead
+  not counted). (9) Merge-seam duplicate handling is tested only on the
+  synthetic fixture: the 2024-12-23 capture has none. (10) Drop seeds
+  reproduce only on the same standard library (`uniform_real_distribution`
+  is implementation-defined; recorded runs used libstdc++).
+  Full detail: `docs/benchmarks/feed-handler.md`. IEX data results carry the
+  required citation: Data provided for free by IEX. By accessing or using
+  IEX Historical Data, you agree to the IEX Historical Data Terms of Use
+  (`docs/iex-hist-terms.md`).
+
 ## Commands
 
 ```bash
@@ -812,6 +876,14 @@ orb -m ubuntu bash -lc 'cd /Users/ml3787/pkmn-stock && cmake -S cpp -B cpp/build
 cpp/build-linux-release/iex_oracle --deep-plus data/iex/20241223_IEXTP1_DPLS1.0.pcap.gz \
     --deep data/iex/20241223_IEXTP1_DEEP1.0.pcap.gz --tops data/iex/20241223_IEXTP1_TOPS1.6.pcap.gz  # exit 0 pass, 1 mismatch, 3 inconclusive (currently 1, see docs/iex-oracle.md)
 scripts/bench_iex.sh [--profile] [--no-record]            # re-execs in the VM, prepends a section to docs/benchmarks/iex-book.md
+```
+
+```bash
+# Plan C (feed handler); needs the VM (loopback multicast) and the 2024-12-23 DPLS capture in data/iex/
+scripts/bench_feed.sh random|burst|sweep [--no-record]    # full-day publisher + handler run vs the iex_digest reference; prepends a section to docs/benchmarks/feed-handler.md
+cpp/build-linux-release/iex_digest data/iex/20241223_IEXTP1_DPLS1.0.pcap.gz --checkpoint-every 100000 [--out FILE]   # (in the VM) reference digests by direct file replay
+cpp/build-linux-release/feed_publisher data/iex/20241223_IEXTP1_DPLS1.0.pcap.gz --drop random:0.01 --seed 1 --rate 0   # (in the VM) UDP multicast replay + TCP retransmit server; --drop defaults to none; `--help` prints usage (feed_handler with no args starts listening and waits up to 600 s)
+cpp/build-linux-release/feed_handler --expect <reference.digests> --checkpoint-every 100000 --timeout-s 300 --rcvbuf 7500000   # (in the VM) receiver; start it, then the publisher
 ```
 
 ## Layout
@@ -968,10 +1040,16 @@ scripts/bench_iex.sh [--profile] [--no-record]            # re-execs in the VM, 
   IEX-TP framing + sequence tracker (a seq-1 packet with a newer send time is
   a stream restart), DEEP+ and DEEP decoders, the TOPS Quote decoder,
   `BookSet` (one `OrderBook` per
-  symbol), `timing.hpp` (cntvct_el0 timer). Built into `md_tests`, separate
+  symbol), `timing.hpp` (cntvct_el0 timer). Plan C adds `book_digest.*`
+  (canonical FNV-1a book digest), `recovery_proto.*` (framed TCP retransmit
+  protocol), `retransmit_ring.*`, `drop_injector.hpp` and `gap_recovery.*`
+  (`RecoveringHandler`, socket-free). Built into `md_tests`, separate
   from `engine_tests`, and kept out of the Python wheel build.
 - `cpp/tools/` — `iex_decode`, `pcap_count`, `iex_oracle` (book vs DEEP/TOPS,
   see `docs/iex-oracle.md`), `iex_bench` (driven by `scripts/bench_iex.sh`).
+  Plan C adds `iex_digest` (reference digests by direct replay),
+  `feed_publisher`, `feed_handler` and `net_util.hpp`
+  (driven by `scripts/bench_feed.sh`; results in `docs/benchmarks/feed-handler.md`).
 - `cpp/src/pkmn_engine/ladder.*`, `execution_book.*` — Plan B: the daily
   ladder builder (modelled resting orders, synthetic, built from the day's
   tcgcsv quote) and book execution against it. `cpp/src/pkmn_wire/` — the

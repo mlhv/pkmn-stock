@@ -37,6 +37,12 @@ class BookSet {
     std::size_t symbols() const { return books_.size(); }
     // Resting orders across all books.
     std::size_t order_count() const;
+    // Calls f(std::uint64_t symbol, const book::OrderBook&) for every book
+    // (empty ones too), in unspecified order.
+    template <class F>
+    void for_each_book(F&& f) const {
+        for (const auto& [sym, b] : books_) f(sym, b);
+    }
 
   private:
     // Node-based: element addresses are stable across rehash, which the

@@ -25,23 +25,6 @@ namespace {
 
 constexpr std::int64_t kBase = 1'734'964'524'000'000'000LL;  // 2024-12-23, feed-time origin
 
-void put_sym(Bytes& b, const char* s) {
-    std::string v(s);
-    v.resize(8, ' ');
-    append(b, bytes_of(v));
-}
-
-// DEEP+ Add Order 'a' (38 B): side/1 ts/2 sym/10 id/18 size/26 price/30.
-Bytes dp_add(const char* sym, char side, std::uint64_t id, std::uint32_t size, std::int64_t price, std::int64_t ts) {
-    Bytes m = {'a', static_cast<std::uint8_t>(side)};
-    put_le64(m, static_cast<std::uint64_t>(ts));
-    put_sym(m, sym);
-    put_le64(m, id);
-    put_le32(m, size);
-    put_le64(m, static_cast<std::uint64_t>(price));
-    return m;
-}
-
 // DEEP Price Level Update (30 B), Event Flags ON: type/0 flags/1 ts/2 sym/10 size/18 price/22.
 Bytes deep_level(const char* sym, char side, std::uint32_t size, std::int64_t price, std::int64_t ts) {
     Bytes m = {static_cast<std::uint8_t>(side == 'B' ? '8' : '5'), 0x01};
